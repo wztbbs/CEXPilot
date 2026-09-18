@@ -1,0 +1,30 @@
+name: get_klines
+enabled: true
+description: >
+  获取指定交易所某币种的K线数据，并返回已计算好的窗口涨跌幅、最高价、最低价
+  （涨跌幅单位是百分比，可直接引用，不要自己重新计算）
+capabilities:
+  - 获取最近 1h / 4h / 24h 窗口的K线序列（开高低收量）
+  - 直接给出窗口内已计算的涨跌幅、最高价、最低价
+  - 提供数据新鲜度判断（最后一根K线距当前的时长）
+limitations:
+  - 只支持 1h / 4h / 24h 三档相对窗口，永远从当前时刻往前取
+  - 无法查询指定的历史起止时间（如昨天下午 3 点到 5 点）
+scope:
+  exchanges: [binance, okx]
+  market_type: perpetual
+input_schema:
+  type: object
+  required: [exchange, symbol]
+  properties:
+    exchange:
+      type: string
+      enum: [binance, okx]
+      description: 交易所
+    symbol:
+      type: string
+      description: 币种基础代码，如 BTC / ETH
+    window:
+      type: string
+      enum: [1h, 4h, 24h]
+      description: 时间窗口，默认 1h

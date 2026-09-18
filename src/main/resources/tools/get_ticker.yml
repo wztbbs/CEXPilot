@@ -1,0 +1,25 @@
+name: get_ticker
+enabled: true
+description: >
+  获取最新成交价、24小时涨跌幅（百分比）与24小时成交量，
+  用于回答「现在价格多少 / 今天涨了多少」这类问题
+capabilities:
+  - 查询永续合约最新成交价
+  - 查询交易所官方滚动 24 小时涨跌幅与成交量（含 USDT 计价成交额）
+limitations:
+  - 涨跌幅是交易所官方滚动 24 小时口径，与 get_klines 的窗口涨跌幅可能略有差异
+  - 只反映当前时刻与近 24 小时，无法回答更长时间范围的问题
+scope:
+  exchanges: [binance, okx]
+  market_type: perpetual
+input_schema:
+  type: object
+  required: [exchange, symbol]
+  properties:
+    exchange:
+      type: string
+      enum: [binance, okx]
+      description: 交易所
+    symbol:
+      type: string
+      description: 币种基础代码，如 BTC / ETH

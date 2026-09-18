@@ -1,0 +1,28 @@
+name: get_orderbook
+enabled: true
+description: >
+  获取当前盘口快照：买卖各档位价格与挂单量、已计算的买卖盘不平衡度
+  （>1买盘厚，<1卖盘厚）与买卖价差。只能反映当前状态，不能解释过去的价格变化
+capabilities:
+  - 获取当前盘口买卖各档位价格与挂单量（输出前 10 档）
+  - 给出已计算的前 10 档买卖盘不平衡度与买一卖一价差
+limitations:
+  - 只是当前时刻快照，不能解释过去的价格变化
+  - 无论请求多深，输出最多买卖各 10 档
+scope:
+  exchanges: [binance, okx]
+  market_type: perpetual
+input_schema:
+  type: object
+  required: [exchange, symbol]
+  properties:
+    exchange:
+      type: string
+      enum: [binance, okx]
+      description: 交易所
+    symbol:
+      type: string
+      description: 币种基础代码，如 BTC / ETH
+    depth:
+      type: integer
+      description: 档位数，默认 20，最大 50

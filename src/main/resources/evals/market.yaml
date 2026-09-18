@@ -1,0 +1,87 @@
+cases:
+  # ---- price-change ----
+  - id: market-price-001
+    question: "BTC 最近 1 小时价格变化多少？"
+    expected_tools: [get_klines]
+    forbidden_tools: [get_transaction]
+    required_evidence_keys: [price_change]
+  - id: market-price-002
+    question: "ETH 最近 4 小时走势怎么样？"
+    expected_tools: [get_klines]
+    forbidden_tools: [get_transaction]
+    required_evidence_keys: [price_change]
+  - id: market-price-003
+    question: "BTC 最近为什么下跌？"
+    expected_tools: [get_klines]
+    forbidden_tools: [get_transaction]
+    required_evidence_keys: [price_change]
+  - id: market-price-004
+    question: "帮我看看 OKX 上 ETH 最近一小时的表现"
+    expected_tools: [get_klines]
+    forbidden_tools: [get_transaction]
+    required_evidence_keys: [price_change]
+
+  # ---- ticker ----
+  - id: market-ticker-001
+    question: "BTC 现在多少钱？"
+    expected_tools: [get_ticker]
+    forbidden_tools: [get_transaction]
+    required_evidence_keys: [last_price]
+  - id: market-ticker-002
+    question: "币安上 ETH 今天涨了多少？24小时成交量多大？"
+    expected_tools: [get_ticker]
+    forbidden_tools: [get_transaction]
+    required_evidence_keys: [change_pct_24h]
+
+  # ---- funding ----
+  - id: market-funding-001
+    question: "BTC 的 Funding 最近有什么变化？"
+    expected_tools: [get_funding_rate]
+    forbidden_tools: [get_transaction]
+    required_evidence_keys: [current_funding_rate, trend]
+  - id: market-funding-002
+    question: "OKX 的 BTC 资金费率现在是多少？是多头付费还是空头付费？"
+    expected_tools: [get_funding_rate]
+    forbidden_tools: [get_transaction]
+    required_evidence_keys: [current_funding_rate]
+
+  # ---- oi ----
+  - id: market-oi-001
+    question: "BTC 持仓量最近 24 小时有什么变化？"
+    expected_tools: [get_open_interest]
+    forbidden_tools: [get_transaction]
+    required_evidence_keys: [open_interest]
+  - id: market-oi-002
+    question: "币安 BTC 现在是 OI 上升但价格下跌的状态吗？这意味着什么？"
+    expected_tools: [get_open_interest, get_klines]
+    forbidden_tools: [get_transaction]
+    required_evidence_keys: [open_interest, price_change]
+
+  # ---- orderbook / trades / mark ----
+  - id: market-orderbook-001
+    question: "现在 BTC 盘口买盘厚还是卖盘厚？"
+    expected_tools: [get_orderbook]
+    forbidden_tools: [get_transaction]
+    required_evidence_keys: [imbalance_top10]
+  - id: market-trades-001
+    question: "OKX 上 BTC 最近的成交里买方主动还是卖方主动？"
+    expected_tools: [get_recent_trades]
+    forbidden_tools: [get_transaction]
+    required_evidence_keys: [buy_volume_ratio]
+  - id: market-mark-001
+    question: "BTC 永续的标记价格和指数价格现在差多少？"
+    expected_tools: [get_mark_price]
+    forbidden_tools: [get_transaction]
+    required_evidence_keys: [mark_price, index_price]
+
+  # ---- exchange-divergence ----
+  - id: market-divergence-001
+    question: "Binance 和 OKX 的 BTC 最近 1 小时走势有没有明显差异？"
+    expected_tools: [compare_exchanges]
+    forbidden_tools: [get_transaction]
+    required_evidence_keys: [divergence]
+  - id: market-divergence-002
+    question: "两个交易所的 ETH 最近 4 小时谁涨得更多？"
+    expected_tools: [compare_exchanges]
+    forbidden_tools: [get_transaction]
+    required_evidence_keys: [divergence]

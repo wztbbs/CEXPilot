@@ -1,0 +1,57 @@
+spring:
+  application:
+    name: cexpilot
+  datasource:
+    # 本地开发：与 linkedin_scrm 本地一致（localhost / admin），仅库名换成 cexpilot
+    url: jdbc:mysql://localhost:3306/cexpilot?useUnicode=true&characterEncoding=utf-8&serverTimezone=UTC&useSSL=false
+    username: admin
+    password: ${MYSQL_PASSWORD:w123456}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:db/schema.sql
+
+server:
+  port: ${SERVER_PORT:8082}
+
+llm:
+  normal:
+    base-url: ${LLM_NORMAL_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+    api-key: ${LLM_NORMAL_API_KEY:}
+    model: ${LLM_NORMAL_MODEL:qwen-plus}
+    price-input-per-1k: ${LLM_NORMAL_PRICE_INPUT_PER_1K:0}
+    price-output-per-1k: ${LLM_NORMAL_PRICE_OUTPUT_PER_1K:0}
+  flagship:
+    base-url: ${LLM_FLAGSHIP_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+    api-key: ${LLM_FLAGSHIP_API_KEY:}
+    model: ${LLM_FLAGSHIP_MODEL:qwen-max}
+    price-input-per-1k: ${LLM_FLAGSHIP_PRICE_INPUT_PER_1K:0}
+    price-output-per-1k: ${LLM_FLAGSHIP_PRICE_OUTPUT_PER_1K:0}
+  temperature: 0.1
+  max-steps: 4
+  max-tool-calls: 8
+
+dag:
+  max-nodes: ${DAG_MAX_NODES:8}
+  max-depth: ${DAG_MAX_DEPTH:3}
+  node-timeout-ms: ${DAG_NODE_TIMEOUT_MS:30000}
+  planner-max-retries: ${DAG_PLANNER_MAX_RETRIES:2}
+  executor-threads: ${DAG_EXECUTOR_THREADS:4}
+
+exchange:
+  binance:
+    base-url: ${BINANCE_BASE_URL:https://fapi.binance.com}
+    api-key: ${BINANCE_API_KEY:}
+    secret-key: ${BINANCE_SECRET_KEY:}
+  okx:
+    base-url: ${OKX_BASE_URL:https://www.okx.com}
+    api-key: ${OKX_API_KEY:}
+    secret-key: ${OKX_SECRET_KEY:}
+    passphrase: ${OKX_PASSPHRASE:}
+  ethereum:
+    rpc-url: ${ETH_RPC_URL:https://ethereum-rpc.publicnode.com}
+
+logging:
+  level:
+    com.cexpilot: info

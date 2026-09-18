@@ -1,0 +1,24 @@
+name: get_mark_price
+enabled: true
+description: >
+  获取永续合约标记价格与现货指数价格，以及已计算的基差（标记价-指数价）。
+  用于判断合约相对现货的溢价程度
+capabilities:
+  - 查询永续合约标记价格与现货指数价格
+  - 给出已计算的基差（标记价 - 指数价），判断合约溢价程度
+limitations:
+  - 资金费率字段仅 Binance 返回（OKX 的 mark-price 接口不含费率），查资金费率请用 get_funding_rate
+scope:
+  exchanges: [binance, okx]
+  market_type: perpetual
+input_schema:
+  type: object
+  required: [exchange, symbol]
+  properties:
+    exchange:
+      type: string
+      enum: [binance, okx]
+      description: 交易所
+    symbol:
+      type: string
+      description: 币种基础代码，如 BTC / ETH

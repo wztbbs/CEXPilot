@@ -1,0 +1,194 @@
+package com.cexpilot.market;
+
+import com.cexpilot.config.ExchangeConfig;
+import com.cexpilot.exception.ExchangeException;
+import com.cexpilot.market.model.Candle;
+import com.cexpilot.market.model.MarkPrice;
+import com.cexpilot.market.model.OpenInterestInfo.OiPoint;
+import com.cexpilot.market.model.OrderBook;
+import com.cexpilot.market.model.Ticker;
+import com.cexpilot.market.model.Trade;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestClient;
+
+import java.math.BigDecimal;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * OKX v5 公共行情，统一使用 USDT 永续合约（instId 形如 BTC-USDT-SWAP）。
+ * OKX 的 candles / trades 接口返回是倒序（最新在前），这里统一翻转为时间升序。
+ */
+@Component
+public class OkxClient {
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final String NAME = "okx";
+
+    private final RestClient rest;
+
+    public OkxClient(ExchangeConfig config) {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(Duration.ofSeconds(5));
+        factory.setReadTimeout(Duration.ofSeconds(10));
+        String baseUrl = config.getOkx().getBaseUrl();
+        if (baseUrl.endsWith("/")) {
+            baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
+        }
+        this.rest = RestClient.builder().baseUrl(baseUrl).requestFactory(factory).build();
+    }
+
+    public List<Candle> candles(String instId, String bar, int limit) {
+        JsonNode data = get("/api/v5/market/candles?instId={i}&bar={b}&limit={l}", instId, bar, limit);
+        return parseCandles(data);
+    }
+
+    public Ticker ticker(String instId) {
+        JsonNode data = get("/api/v5/market/ticker?instId={i}", instId);
+        JsonNode item = first(data, "ticker");
+        BigDecimal last = decimal(item, "last");
+        BigDecimal open24h = decimal(item, "open24h");
+        BigDecimal changePct = BigDecimal.ZERO;
+        if (open24h.signum() > 0) {
+            changePct = last.subtract(open24h)
+                    .divide(open24h, 6, java.math.RoundingMode.HALF_UP)
+                    .multiply(new BigDecimal("100"));
+        }
+        return new Ticker(last, changePct, decimal(item, "vol24h"), decimal(item, "volCcy24h"));
+    }
+
+    /** 资金费率 + 下次结算时间。 */
+    public MarkPrice fundingRate(String instId) {
+        JsonNode data = get("/api/v5/public/funding-rate?instId={i}", instId);
+        JsonNode item = first(data, "funding-rate");
+        return new MarkPrice(null, null, decimal(item, "fundingRate"),
+                item.path("nextFundingTime").asLong(0));
+    }
+
+    public List<BigDecimal> fundingRateHistory(String instId, int limit) {
+        JsonNode data = get("/api/v5/public/funding-rate-history?instId={i}&limit={l}", instId, limit);
+        List<BigDecimal> rates = new ArrayList<>();
+        for (JsonNode item : data) {
+            // 接口倒序返回，翻转为升序
+            rates.add(0, decimal(item, "fundingRate"));
+        }
+        return rates;
+    }
+
+    /** 当前持仓量，oiCcy 以基础币计（BTC）。 */
+    public BigDecimal openInterest(String instId) {
+        JsonNode data = get("/api/v5/public/open-interest?instType=SWAP&instId={i}", instId);
+        JsonNode item = first(data, "open-interest");
+        String oiCcy = item.path("oiCcy").asText(null);
+        if (oiCcy != null && !oiCcy.isBlank()) {
+            return new BigDecimal(oiCcy);
+        }
+        return decimal(item, "oi");
+    }
+
+    /**
+     * 持仓量历史（rubik 统计接口，按币种汇总全市场 SWAP）。
+     * 返回行格式 [ts, oi, oiCcy, ...]，取基础币计量的 oiCcy。
+     */
+    public List<OiPoint> openInterestHistory(String ccy, String period, int limit) {
+        JsonNode data = get("/api/v5/rubik/stat/contracts/open-interest-volume?ccy={c}&period={p}",
+                ccy, period);
+        List<OiPoint> points = new ArrayList<>();
+        int from = Math.max(0, data.size() - limit);
+        for (int i = from; i < data.size(); i++) {
+            JsonNode row = data.get(i);
+            String oi = row.size() > 2 ? row.get(2).asText() : row.get(1).asText();
+            points.add(new OiPoint(row.get(0).asLong(), new BigDecimal(oi)));
+        }
+        return points;
+    }
+
+    public OrderBook orderBook(String instId, int depth) {
+        JsonNode data = get("/api/v5/market/books?instId={i}&sz={d}", instId, depth);
+        JsonNode item = first(data, "books");
+        return new OrderBook(parseLevels(item.path("bids")), parseLevels(item.path("asks")));
+    }
+
+    public List<Trade> trades(String instId, int limit) {
+        JsonNode data = get("/api/v5/market/trades?instId={i}&limit={l}", instId, limit);
+        List<Trade> trades = new ArrayList<>();
+        for (int i = data.size() - 1; i >= 0; i--) {
+            JsonNode item = data.get(i);
+            trades.add(new Trade(
+                    item.path("ts").asLong(),
+                    decimal(item, "px"),
+                    decimal(item, "sz"),
+                    "buy".equalsIgnoreCase(item.path("side").asText())));
+        }
+        return trades;
+    }
+
+    public MarkPrice markPrice(String instId, String indexInstId) {
+        JsonNode markData = get("/api/v5/public/mark-price?instType=SWAP&instId={i}", instId);
+        JsonNode markItem = first(markData, "mark-price");
+        JsonNode indexData = get("/api/v5/market/index-tickers?instId={i}", indexInstId);
+        JsonNode indexItem = first(indexData, "index-tickers");
+        return new MarkPrice(decimal(markItem, "markPx"), decimal(indexItem, "idxPx"), null, 0);
+    }
+
+    private JsonNode get(String uri, Object... vars) {
+        try {
+            String raw = rest.get().uri(uri, vars).retrieve().body(String.class);
+            JsonNode root = MAPPER.readTree(raw);
+            String code = root.path("code").asText("");
+            if (!"0".equals(code)) {
+                throw new ExchangeException(NAME,
+                        "接口返回错误 code=" + code + " msg=" + root.path("msg").asText(""));
+            }
+            return root.path("data");
+        } catch (ExchangeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ExchangeException(NAME, "请求失败 " + uri + ": " + e.getMessage(), e);
+        }
+    }
+
+    private static JsonNode first(JsonNode data, String api) {
+        if (!data.isArray() || data.isEmpty()) {
+            throw new ExchangeException(NAME, api + " 接口返回空数据");
+        }
+        return data.get(0);
+    }
+
+    static List<Candle> parseCandles(JsonNode data) {
+        List<Candle> candles = new ArrayList<>();
+        for (int i = data.size() - 1; i >= 0; i--) {
+            JsonNode row = data.get(i);
+            candles.add(new Candle(
+                    row.get(0).asLong(),
+                    new BigDecimal(row.get(1).asText()),
+                    new BigDecimal(row.get(2).asText()),
+                    new BigDecimal(row.get(3).asText()),
+                    new BigDecimal(row.get(4).asText()),
+                    new BigDecimal(row.get(5).asText())));
+        }
+        return candles;
+    }
+
+    static List<OrderBook.Level> parseLevels(JsonNode node) {
+        List<OrderBook.Level> levels = new ArrayList<>();
+        for (JsonNode row : node) {
+            levels.add(new OrderBook.Level(
+                    new BigDecimal(row.get(0).asText()),
+                    new BigDecimal(row.get(1).asText())));
+        }
+        return levels;
+    }
+
+    private static BigDecimal decimal(JsonNode node, String field) {
+        String text = node.path(field).asText(null);
+        if (text == null || text.isBlank()) {
+            throw new ExchangeException(NAME, "响应缺少字段 " + field);
+        }
+        return new BigDecimal(text);
+    }
+}

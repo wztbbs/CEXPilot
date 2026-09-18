@@ -1,0 +1,14 @@
+spring:
+  datasource:
+    # 与 linkedin_scrm 同一腾讯云 MySQL 实例，仅库名换成 cexpilot
+    url: jdbc:mysql://usw-cdb-mfdtb99z.sql.tencentcdb.com:27301/cexpilot?useUnicode=true&characterEncoding=utf-8&serverTimezone=UTC&useSSL=true
+    username: hrscrm
+    password: ${MYSQL_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 16
+      connection-timeout: 10000
+
+logging:
+  level:
+    com.cexpilot: info

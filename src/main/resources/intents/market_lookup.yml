@@ -1,0 +1,62 @@
+name: MARKET_LOOKUP
+
+description: >
+  查询明确的行情事实，例如当前价格、最近涨跌幅、资金费率、持仓量、成交量。
+  特点是问题直接对应某个指标的当前值或既定口径的统计值，
+  一次工具调用即可回答，不需要多指标交叉分析。
+
+scope:
+  exchanges: [binance, okx]
+  market_type: perpetual
+  # 各工具的时间口径不同，不在 intent 级统一承诺：
+  #   get_ticker      交易所官方滚动 24h
+  #   get_klines      1h / 4h / 24h 相对窗口（从当前往前取）
+  #   get_funding_rate / get_open_interest / get_mark_price  当前值 + 固定口径历史
+
+examples:
+  positive:
+    - "BTC 现在多少钱？"
+    - "ETH 最近 24 小时涨了多少？"
+    - "BTC 资金费率现在是多少？"
+    - "ETH 持仓量有多少？"
+    - "BTC 今天成交量怎么样？"
+    - "BNB 最近一小时的涨跌幅？"
+  negative:
+    - "BTC 为什么跌？"                       # MARKET_ANALYSIS：要求解释与多指标分析
+    - "OI 上涨但价格下跌怎么看？"             # MARKET_ANALYSIS：指标关系解读
+    - "Binance 和 OKX 哪边 Funding 更高？"    # EXCHANGE_COMPARE：跨所比较
+    - "这笔交易是干什么的？0x..."             # 链上交易分析，非行情意图
+
+planner:
+  # 仅作文档参考：意图识别与 Plan 生成合并后，路由已不消费这段配置
+  # （planner 始终看到全量已注册工具、用全局 llm.max-tool-calls 上限）；
+  # 保留它是为了记录"该意图预期用到的工具与调用量"，供后续统计对照。
+  allowed_tools:
+    - get_ticker
+    - get_klines
+    - get_funding_rate
+    - get_open_interest
+    - get_mark_price
+  # 事实查询一次调用即可回答，步数上限从全局 max-steps 收紧
+  max_tool_calls: 2
+
+evidence_policy:
+  # 消费者：prompt 模板 + eval 的 GroundingChecker
+  minimum:
+    - 至少一个工具返回的结构化事实
+  rules:
+    - "回答的数值必须来自工具返回的 Structured Facts，不允许凭记忆报价"
+    - "缺少数据时必须明确说明，不允许编造"
+    - "注明数据口径（如 ticker 为滚动 24h，klines 为窗口首尾价）"
+
+answer_policy:
+  require_evidence_grounding: true
+  explicitly_report_missing_evidence: true
+
+eval:
+  expected_behavior:
+    - "一次工具调用即可回答，不多调"
+    - "直接引用工具返回的数值，不自行换算"
+  forbidden_behavior:
+    - "在工具未返回数据时报出具体数值"
+    - "把单指标事实扩展成无依据的行情解读"

@@ -1,0 +1,38 @@
+# 多轮追问：setup_questions 先在同一对话执行，
+# 主问题用指代词，验证 Agent 能从对话上下文解析"那 / 呢"指向的对象。
+cases:
+  - id: conv-exchange-001
+    question: "那 OKX 呢？"
+    setup_questions:
+      - "Binance 上 BTC 最近 1 小时怎么了？"
+    expected_tools: [get_klines]
+    forbidden_tools: [get_transaction]
+    required_evidence_keys: [price_change]
+  - id: conv-symbol-001
+    question: "那 ETH 呢？"
+    setup_questions:
+      - "BTC 的资金费率怎么样？"
+    expected_tools: [get_funding_rate]
+    forbidden_tools: [get_transaction]
+    required_evidence_keys: [current_funding_rate]
+  - id: conv-window-001
+    question: "放大到最近 24 小时看看呢？"
+    setup_questions:
+      - "BTC 最近一小时价格变化多少？"
+    expected_tools: [get_klines]
+    forbidden_tools: [get_transaction]
+    required_evidence_keys: [price_change]
+  - id: conv-compare-001
+    question: "那两个交易所对比一下呢？"
+    setup_questions:
+      - "Binance 上 BTC 最近 4 小时走势怎么样？"
+    expected_tools: [compare_exchanges]
+    forbidden_tools: [get_transaction]
+    required_evidence_keys: [divergence]
+  - id: conv-oi-001
+    question: "持仓量有什么变化吗？"
+    setup_questions:
+      - "BTC 最近为什么下跌？"
+    expected_tools: [get_open_interest]
+    forbidden_tools: [get_transaction]
+    required_evidence_keys: [open_interest]
