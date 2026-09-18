@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS ask_trace (
     conversation_id   VARCHAR(64)   NULL,
     question          TEXT          NOT NULL,
     intent            VARCHAR(64)   NULL, -- planner 归类的统计 hint（intent 名 / UNKNOWN；出域为 NULL）
+    visitor_id        VARCHAR(64)   NULL, -- 访客标识（cexpilot_uid cookie）
     status            VARCHAR(16)   NOT NULL DEFAULT 'RUNNING',
     answer            MEDIUMTEXT    NULL,
     model             VARCHAR(64)   NULL,

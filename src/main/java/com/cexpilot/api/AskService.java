@@ -44,11 +44,17 @@ public class AskService {
         this.llmConfig = llmConfig;
     }
 
+    public AskResponse ask(String conversationId, String question) {
+        return ask(conversationId, question, null);
+    }
+
     /**
      * 一次问答的完整编排。这里只做流程串联：领域判断、查询规划与 DAG 执行在 DagRuntime
      * 里，计算逻辑在各工具内部。
+     *
+     * @param visitorId 访客标识（cexpilot_uid cookie），随 trace 落库用于统计；允许为 null
      */
-    public AskResponse ask(String conversationId, String question) {
+    public AskResponse ask(String conversationId, String question, String visitorId) {
         if (question == null || question.isBlank()) {
             throw new IllegalArgumentException("question 不能为空");
         }
@@ -67,7 +73,7 @@ public class AskService {
         //    同时记录 model 和 promptVersion（prompt 内容的哈希），便于排查答案可复现性。
         String traceId = UUID.randomUUID().toString();
         traceRepository.startTrace(traceId, resolvedConversationId, question,
-                llmConfig.getNormal().getModel(), runtime.promptVersion());
+                llmConfig.getNormal().getModel(), runtime.promptVersion(), visitorId);
 
         long start = System.currentTimeMillis();
         try {

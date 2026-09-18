@@ -10,9 +10,12 @@ import com.cexpilot.market.model.Ticker;
 import com.cexpilot.market.model.Trade;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -27,9 +30,11 @@ import java.util.List;
 public class OkxClient {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final Logger log = LoggerFactory.getLogger(OkxClient.class);
     private static final String NAME = "okx";
 
     private final RestClient rest;
+    private final String baseUrl;
 
     public OkxClient(ExchangeConfig config) {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
@@ -39,6 +44,7 @@ public class OkxClient {
         if (baseUrl.endsWith("/")) {
             baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
         }
+        this.baseUrl = baseUrl;
         this.rest = RestClient.builder().baseUrl(baseUrl).requestFactory(factory).build();
     }
 
@@ -136,20 +142,41 @@ public class OkxClient {
     }
 
     private JsonNode get(String uri, Object... vars) {
+        long start = System.currentTimeMillis();
+        log.info("okx 请求 GET {}{} 参数={}", baseUrl, uri, vars);
         try {
             String raw = rest.get().uri(uri, vars).retrieve().body(String.class);
+            log.info("okx 响应 200 {}ms {} body={}",
+                    System.currentTimeMillis() - start, uri, abbreviate(raw));
             JsonNode root = MAPPER.readTree(raw);
             String code = root.path("code").asText("");
             if (!"0".equals(code)) {
+                // OKX 业务错误码：HTTP 200 但 code != "0"
+                log.warn("okx 接口返回错误 {} code={} msg={}", uri, code, root.path("msg").asText(""));
                 throw new ExchangeException(NAME,
                         "接口返回错误 code=" + code + " msg=" + root.path("msg").asText(""));
             }
             return root.path("data");
         } catch (ExchangeException e) {
             throw e;
+        } catch (RestClientResponseException e) {
+            // HTTP 错误状态：状态码 + 响应 body 必须留下来
+            log.warn("okx 请求失败 {} {}ms 状态={} body={}",
+                    uri, System.currentTimeMillis() - start,
+                    e.getStatusCode(), abbreviate(e.getResponseBodyAsString()));
+            throw new ExchangeException(NAME,
+                    "请求失败 " + uri + ": HTTP " + e.getStatusCode() + " " + e.getStatusText(), e);
         } catch (Exception e) {
+            log.warn("okx 请求异常 {} {}ms: {}", uri, System.currentTimeMillis() - start, e.getMessage());
             throw new ExchangeException(NAME, "请求失败 " + uri + ": " + e.getMessage(), e);
         }
+    }
+
+    private static String abbreviate(String text) {
+        if (text == null) {
+            return null;
+        }
+        return text.length() <= 2000 ? text : text.substring(0, 2000) + "...";
     }
 
     private static JsonNode first(JsonNode data, String api) {

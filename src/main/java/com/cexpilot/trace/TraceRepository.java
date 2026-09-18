@@ -18,12 +18,13 @@ public class TraceRepository {
         this.jdbc = jdbc;
     }
 
-    public void startTrace(String traceId, String conversationId, String question, String model, String promptVersion) {
+    public void startTrace(String traceId, String conversationId, String question, String model,
+                           String promptVersion, String visitorId) {
         jdbc.update("""
-                        INSERT INTO ask_trace (trace_id, conversation_id, question, status, model, prompt_version)
-                        VALUES (?, ?, ?, 'RUNNING', ?, ?)
+                        INSERT INTO ask_trace (trace_id, conversation_id, question, status, model, prompt_version, visitor_id)
+                        VALUES (?, ?, ?, 'RUNNING', ?, ?, ?)
                         """,
-                traceId, conversationId, question, model, promptVersion);
+                traceId, conversationId, question, model, promptVersion, visitorId);
     }
 
     public void finishTrace(String traceId, String status, String answer, int llmSteps, int toolCalls,

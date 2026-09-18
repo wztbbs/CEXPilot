@@ -6,8 +6,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -21,10 +24,12 @@ import java.util.List;
 public class OpenAiCompatibleClient implements LlmClient {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final Logger log = LoggerFactory.getLogger(OpenAiCompatibleClient.class);
 
     private final RestClient restClient;
     private final LlmConfig.ModelConfig config;
     private final double temperature;
+    private final String baseUrl;
 
     public OpenAiCompatibleClient(LlmConfig.ModelConfig config, double temperature) {
         this.config = config;
@@ -36,9 +41,11 @@ public class OpenAiCompatibleClient implements LlmClient {
         if (baseUrl.endsWith("/")) {
             baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
         }
+        this.baseUrl = baseUrl;
         this.restClient = RestClient.builder()
                 .baseUrl(baseUrl)
                 .requestFactory(factory)
+                // Authorization 头只进请求，不进日志
                 .defaultHeader("Authorization", "Bearer " + config.getApiKey())
                 .build();
     }
@@ -53,6 +60,9 @@ public class OpenAiCompatibleClient implements LlmClient {
             body.set("tools", serializeTools(tools));
         }
 
+        long start = System.currentTimeMillis();
+        log.info("LLM 请求 POST {}/chat/completions model={} 消息数={} body={}",
+                baseUrl, config.getModel(), messages.size(), abbreviate(body.toString(), 2000));
         JsonNode response;
         try {
             String raw = restClient.post()
@@ -61,12 +71,22 @@ public class OpenAiCompatibleClient implements LlmClient {
                     .retrieve()
                     .body(String.class);
             response = MAPPER.readTree(raw);
+        } catch (RestClientResponseException e) {
+            // HTTP 错误状态（如 401/429/451）：状态码 + 响应 body 必须留下来
+            log.warn("LLM 请求失败 model={} {}ms 状态={} body={}",
+                    config.getModel(), System.currentTimeMillis() - start,
+                    e.getStatusCode(), abbreviate(e.getResponseBodyAsString(), 2000));
+            throw new LlmException("LLM 调用失败: HTTP " + e.getStatusCode() + " " + e.getStatusText(), e);
         } catch (Exception e) {
+            log.warn("LLM 请求异常 model={} {}ms: {}",
+                    config.getModel(), System.currentTimeMillis() - start, e.getMessage());
             throw new LlmException("LLM 调用失败: " + e.getMessage(), e);
         }
 
         JsonNode choices = response.path("choices");
         if (!choices.isArray() || choices.isEmpty()) {
+            log.warn("LLM 返回缺少 choices model={} body={}",
+                    config.getModel(), abbreviate(response.toString(), 2000));
             throw new LlmException("LLM 返回缺少 choices: " + response);
         }
         JsonNode message = choices.get(0).path("message");
@@ -90,7 +110,17 @@ public class OpenAiCompatibleClient implements LlmClient {
         Integer promptTokens = usage.path("prompt_tokens").isInt() ? usage.path("prompt_tokens").asInt() : null;
         Integer completionTokens = usage.path("completion_tokens").isInt() ? usage.path("completion_tokens").asInt() : null;
 
+        log.info("LLM 响应 {}ms model={} content={} promptTokens={} completionTokens={}",
+                System.currentTimeMillis() - start, config.getModel(),
+                abbreviate(content, 500), promptTokens, completionTokens);
         return new ChatResponse(content, toolCalls, promptTokens, completionTokens);
+    }
+
+    private static String abbreviate(String text, int max) {
+        if (text == null) {
+            return null;
+        }
+        return text.length() <= max ? text : text.substring(0, max) + "...";
     }
 
     private ArrayNode serializeMessages(List<ChatMessage> messages) {

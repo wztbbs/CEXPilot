@@ -11,6 +11,8 @@ import com.cexpilot.runtime.TraceSink;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -31,6 +33,7 @@ import java.util.Map;
 public class DagRuntime {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final Logger log = LoggerFactory.getLogger(DagRuntime.class);
     private static final String ANSWER_PROMPT_NAME = "agent_system";
     private static final String PLANNER_PROMPT_NAME = "dag_planner";
     private static final String OUT_OF_DOMAIN_FALLBACK =
@@ -84,6 +87,7 @@ public class DagRuntime {
             String reason = outcome.lastError() != null
                     ? "规划失败，降级为直接回答: " + outcome.lastError()
                     : "现有工具不足以回答，降级为直接回答";
+            log.warn("traceId={} {}", traceId, reason);
             sink.record(TraceEvent.plan(traceId, null, reason));
             userContent = question + "\n\n（系统未能为这个问题规划数据查询，请基于已有知识谨慎回答，"
                     + "并明确说明回答未经过实时数据验证、可能存在偏差。）";

@@ -87,6 +87,7 @@ public class DagExecutor {
         for (String dep : node.dependsOn()) {
             ToolResult depResult = ctx.get(dep);
             if (depResult == null || !depResult.ok()) {
+                log.warn("节点 {} 工具 {} 跳过: 上游节点 {} 失败", node.id(), node.tool(), dep);
                 return new NodeOutcome(ToolResult.failure("skipped: 上游节点失败"),
                         null, System.currentTimeMillis() - start);
             }
@@ -102,6 +103,10 @@ public class DagExecutor {
             return new NodeOutcome(ToolResult.failure("工具执行异常: " + e.getMessage()),
                     String.valueOf(resolvedArgs == null ? node.args() : resolvedArgs),
                     System.currentTimeMillis() - start);
+        }
+        if (!result.ok()) {
+            // 工具内部已把异常转成 failure（如交易所 451），异常路径的 warn 不会触发，这里必须补一条
+            log.warn("节点 {} 工具 {} 执行失败: {}", node.id(), node.tool(), result.error());
         }
         return new NodeOutcome(result,
                 resolvedArgs == null ? null : resolvedArgs.toString(),

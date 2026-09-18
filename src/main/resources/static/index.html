@@ -242,6 +242,13 @@
   });
   sendBtn.addEventListener('click', send);
 
+  // 点输入框容器的留白区域（textarea 之外的上半部分）也聚焦 textarea
+  document.getElementById('input-box').addEventListener('click', function (e) {
+    if (e.target !== sendBtn && !sendBtn.contains(e.target)) {
+      textarea.focus();
+    }
+  });
+
   textarea.focus();
 })();
 </script>

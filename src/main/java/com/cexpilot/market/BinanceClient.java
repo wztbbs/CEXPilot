@@ -10,9 +10,12 @@ import com.cexpilot.market.model.Ticker;
 import com.cexpilot.market.model.Trade;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -27,9 +30,11 @@ import java.util.List;
 public class BinanceClient {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final Logger log = LoggerFactory.getLogger(BinanceClient.class);
     private static final String NAME = "binance";
 
     private final RestClient rest;
+    private final String baseUrl;
 
     public BinanceClient(ExchangeConfig config) {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
@@ -39,6 +44,7 @@ public class BinanceClient {
         if (baseUrl.endsWith("/")) {
             baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
         }
+        this.baseUrl = baseUrl;
         this.rest = RestClient.builder().baseUrl(baseUrl).requestFactory(factory).build();
     }
 
@@ -111,12 +117,31 @@ public class BinanceClient {
     }
 
     private JsonNode get(String uri, Object... vars) {
+        long start = System.currentTimeMillis();
+        log.info("binance 请求 GET {}{} 参数={}", baseUrl, uri, vars);
         try {
             String raw = rest.get().uri(uri, vars).retrieve().body(String.class);
+            log.info("binance 响应 200 {}ms {} body={}",
+                    System.currentTimeMillis() - start, uri, abbreviate(raw));
             return MAPPER.readTree(raw);
+        } catch (RestClientResponseException e) {
+            // HTTP 错误状态（如 451 地域限制）：状态码 + 响应 body 必须留下来
+            log.warn("binance 请求失败 {} {}ms 状态={} body={}",
+                    uri, System.currentTimeMillis() - start,
+                    e.getStatusCode(), abbreviate(e.getResponseBodyAsString()));
+            throw new ExchangeException(NAME,
+                    "请求失败 " + uri + ": HTTP " + e.getStatusCode() + " " + e.getStatusText(), e);
         } catch (Exception e) {
+            log.warn("binance 请求异常 {} {}ms: {}", uri, System.currentTimeMillis() - start, e.getMessage());
             throw new ExchangeException(NAME, "请求失败 " + uri + ": " + e.getMessage(), e);
         }
+    }
+
+    private static String abbreviate(String text) {
+        if (text == null) {
+            return null;
+        }
+        return text.length() <= 2000 ? text : text.substring(0, 2000) + "...";
     }
 
     static List<Candle> parseCandles(JsonNode node) {
