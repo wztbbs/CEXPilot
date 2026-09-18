@@ -1,0 +1,54 @@
+name: MARKET_ANALYSIS
+
+description: >
+  行情归因与多指标交叉分析，例如"为什么跌/涨"、指标背离解读（OI 涨但价格跌）、
+  异动分析。特点是问题要求解释现象而非查询单一事实，
+  需要组合 K线、成交量、资金费率、持仓量等多个指标作为有限证据。
+
+scope:
+  exchanges: [binance, okx]
+  market_type: perpetual
+
+examples:
+  positive:
+    - "BTC 为什么跌？"
+    - "OI 上涨但价格下跌怎么看？"
+    - "BTC 最近一小时怎么了？"
+    - "ETH 这波上涨有资金费率的支撑吗？"
+    - "BTC 刚才的急跌有什么异常信号？"
+  negative:
+    - "BTC 现在多少钱？"                     # MARKET_LOOKUP：单一事实查询
+    - "Binance 和 OKX 哪边 Funding 更高？"    # EXCHANGE_COMPARE：跨所比较
+    - "这笔交易是干什么的？0x..."             # 链上交易分析，非行情意图
+
+planner:
+  # 仅作文档参考：路由已不消费该段，planner 始终可见全量工具
+  allowed_tools:
+    - get_ticker
+    - get_klines
+    - get_funding_rate
+    - get_open_interest
+    - get_mark_price
+    - get_orderbook
+    - get_recent_trades
+  max_tool_calls: 4
+
+evidence_policy:
+  minimum:
+    - 至少两个不同维度的工具返回的结构化事实（如 K线 + OI）
+  rules:
+    - "回答的数值必须来自工具返回的 Structured Facts，不允许凭记忆报价"
+    - "归因结论必须标注证据来源指标，证据不足时明确说不确定性"
+    - "缺少数据时必须明确说明，不允许编造"
+
+answer_policy:
+  require_evidence_grounding: true
+  explicitly_report_missing_evidence: true
+
+eval:
+  expected_behavior:
+    - "调用多个不同维度工具后再给归因分析"
+    - "结论与证据一一对应，不做无依据的宏观叙事"
+  forbidden_behavior:
+    - "只查一个指标就给出确定性归因"
+    - "在工具未返回数据时报出具体数值"

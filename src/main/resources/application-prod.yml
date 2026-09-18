@@ -9,6 +9,12 @@ spring:
       maximum-pool-size: 16
       connection-timeout: 10000
 
+exchange:
+  binance:
+    # 美国服务器直连币安会 451（地域限制），走新加坡服务器上的 nginx 反代；
+    # 该代理仅放行本服务器 IP。本地开发不走代理，用 application.yml 的默认官方地址。
+    base-url: ${BINANCE_BASE_URL:http://43.160.213.63:18080}
+
 logging:
   level:
     com.cexpilot: info

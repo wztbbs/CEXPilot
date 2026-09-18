@@ -1,0 +1,52 @@
+name: EXCHANGE_COMPARE
+
+description: >
+  跨交易所对比，例如同一币种在 Binance 与 OKX 的价格、资金费率、
+  持仓量差异，或两所走势是否背离。特点是问题显式或隐式要求
+  同一指标的跨所对照。
+
+scope:
+  exchanges: [binance, okx]
+  market_type: perpetual
+
+examples:
+  positive:
+    - "Binance 和 OKX 哪边 Funding 更高？"
+    - "BTC 在两家交易所的价格有价差吗？"
+    - "Binance 和 OKX 的 BTC 走势有背离吗？"
+    - "两所的 ETH 持仓量差异大吗？"
+  negative:
+    - "BTC 现在多少钱？"        # MARKET_LOOKUP：单所事实查询
+    - "BTC 为什么跌？"          # MARKET_ANALYSIS：单所归因分析
+    - "这笔交易是干什么的？0x..." # 链上交易分析，非行情意图
+
+planner:
+  # 仅作文档参考：路由已不消费该段，planner 始终可见全量工具
+  allowed_tools:
+    - compare_exchanges
+    - get_ticker
+    - get_klines
+    - get_funding_rate
+    - get_open_interest
+    - get_mark_price
+  max_tool_calls: 4
+
+evidence_policy:
+  minimum:
+    - 同一指标在两个交易所的结构化事实（或 compare_exchanges 的对比结果）
+  rules:
+    - "两侧数据必须来自同一时间口径，不允许拿 Binance 的 24h 值比 OKX 的当前值"
+    - "Binance 接口不可用（451 等地域限制）时明确说明只有单侧数据，不允许假装对比"
+    - "缺少数据时必须明确说明，不允许编造"
+
+answer_policy:
+  require_evidence_grounding: true
+  explicitly_report_missing_evidence: true
+
+eval:
+  expected_behavior:
+    - "对比类问题优先用 compare_exchanges 或对两所分别取数"
+    - "结论明确给出两侧数值与差异方向"
+  forbidden_behavior:
+    - "只取一个交易所的数据就下跨所结论"
+    - "在工具未返回数据时报出具体数值"
