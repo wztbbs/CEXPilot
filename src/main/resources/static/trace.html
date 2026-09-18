@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CEXPilot · Trace 回放</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif;
+    background: #f7f7f8;
+    color: #1f1f1f;
+  }
+  .container { max-width: 860px; margin: 0 auto; padding: 28px 16px 60px; }
+
+  h1 { font-size: 22px; font-weight: 600; }
+  .subtitle { color: #8a8a8a; font-size: 13px; margin-top: 4px; }
+
+  /* ── 查询条 ─────────────────────────── */
+  .search-bar { display: flex; gap: 10px; margin: 20px 0 28px; }
+  .search-bar input {
+    flex: 1; border: 1px solid #e4e4e7; border-radius: 12px;
+    padding: 12px 16px; font-size: 14px; outline: none; background: #fff;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .search-bar input:focus { border-color: #1f1f1f; }
+  .search-bar button {
+    border: none; border-radius: 12px; background: #1f1f1f; color: #fff;
+    padding: 0 22px; font-size: 14px; cursor: pointer;
+  }
+  .search-bar button:disabled { opacity: .4; cursor: not-allowed; }
+
+  .error-box { color: #c0392b; font-size: 14px; padding: 12px 0; }
+
+  /* ── 分区 ───────────────────────────── */
+  .section {
+    background: #fff; border: 1px solid #ececee; border-radius: 16px;
+    padding: 20px 22px; margin-bottom: 18px;
+  }
+  .section h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+  .section h2 .no {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; border-radius: 50%;
+    background: #1f1f1f; color: #fff; font-size: 12px;
+  }
+
+  .question-text { font-size: 16px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+  .meta-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .meta-item {
+    font-size: 12px; color: #666; background: #f4f4f5;
+    border-radius: 8px; padding: 4px 10px;
+  }
+  .meta-item b { color: #1f1f1f; font-weight: 600; }
+  .badge { font-size: 12px; border-radius: 8px; padding: 2px 8px; font-weight: 600; }
+  .badge.success { background: #e7f6ec; color: #1e8e4d; }
+  .badge.failed { background: #fdecea; color: #c0392b; }
+  .badge.running { background: #fff6e0; color: #b8860b; }
+
+  pre.json {
+    background: #f7f7f8; border: 1px solid #ececee; border-radius: 10px;
+    padding: 12px 14px; font-size: 12px; line-height: 1.6;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    overflow-x: auto; white-space: pre-wrap; word-break: break-all;
+  }
+  details { margin-top: 8px; }
+  details summary { cursor: pointer; font-size: 13px; color: #666; user-select: none; }
+  details summary:hover { color: #1f1f1f; }
+  details[open] summary { margin-bottom: 8px; }
+
+  /* ── DAG 拓扑 ───────────────────────── */
+  .dag-level { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+  .dag-arrow { text-align: center; color: #b0b0b0; font-size: 18px; line-height: 1.4; padding: 2px 0; }
+  .dag-node {
+    background: #fff; border: 1.5px solid #d9d9de; border-radius: 12px;
+    padding: 10px 16px; cursor: pointer; min-width: 150px;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .dag-node:hover { border-color: #1f1f1f; box-shadow: 0 2px 10px rgba(0,0,0,.08); }
+  .dag-node .nid { font-size: 11px; color: #9a9a9a; font-family: ui-monospace, Menlo, monospace; }
+  .dag-node .tool { font-size: 14px; font-weight: 600; margin-top: 2px; font-family: ui-monospace, Menlo, monospace; }
+  .dag-node .status { font-size: 11px; margin-top: 4px; }
+  .dag-node.ok { border-color: #1e8e4d; }
+  .dag-node.ok .status { color: #1e8e4d; }
+  .dag-node.fail { border-color: #c0392b; }
+  .dag-node.fail .status { color: #c0392b; }
+  .dag-node.pending { border-style: dashed; }
+  .dag-node.pending .status { color: #9a9a9a; }
+  .dag-deps { font-size: 11px; color: #9a9a9a; margin-top: 4px; }
+  .dag-empty { color: #8a8a8a; font-size: 13px; }
+
+  /* ── 弹框 ───────────────────────────── */
+  .modal-mask {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,.4); z-index: 100;
+    align-items: center; justify-content: center; padding: 20px;
+  }
+  .modal-mask.show { display: flex; }
+  .modal {
+    background: #fff; border-radius: 16px; max-width: 720px; width: 100%;
+    max-height: 82vh; overflow-y: auto; padding: 22px 24px;
+  }
+  .modal h3 { font-size: 15px; margin-bottom: 4px; font-family: ui-monospace, Menlo, monospace; }
+  .modal .modal-sub { font-size: 12px; color: #9a9a9a; margin-bottom: 14px; }
+  .modal h4 { font-size: 13px; margin: 14px 0 6px; color: #555; }
+  .modal-close {
+    float: right; border: none; background: #f4f4f5; border-radius: 8px;
+    width: 28px; height: 28px; cursor: pointer; font-size: 14px; color: #666;
+  }
+
+  .answer-text { font-size: 15px; line-height: 1.8; white-space: pre-wrap; word-break: break-word; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Trace 回放</h1>
+  <div class="subtitle">输入一次问答的 traceId，查看规划、DAG 拓扑与每个节点的入参/出参</div>
+
+  <div class="search-bar">
+    <input id="traceIdInput" placeholder="traceId，例如 3f8a…" spellcheck="false">
+    <button id="loadBtn">查询</button>
+  </div>
+
+  <div id="errorBox" class="error-box" style="display:none"></div>
+  <div id="content"></div>
+</div>
+
+<div class="modal-mask" id="modalMask">
+  <div class="modal">
+    <button class="modal-close" id="modalClose">✕</button>
+    <h3 id="modalTitle"></h3>
+    <div class="modal-sub" id="modalSub"></div>
+    <h4>入参（args）</h4>
+    <pre class="json" id="modalInput"></pre>
+    <h4>出参（工具返回）</h4>
+    <pre class="json" id="modalOutput"></pre>
+  </div>
+</div>
+
+<script>
+(function () {
+  var input = document.getElementById('traceIdInput');
+  var loadBtn = document.getElementById('loadBtn');
+  var errorBox = document.getElementById('errorBox');
+  var content = document.getElementById('content');
+  var modalMask = document.getElementById('modalMask');
+
+  function parseJson(v) {
+    if (v == null) return null;
+    if (typeof v === 'object') return v;
+    try { return JSON.parse(v); } catch (e) { return v; }
+  }
+  function pretty(v) {
+    var p = parseJson(v);
+    if (p == null) return '（无）';
+    return typeof p === 'string' ? p : JSON.stringify(p, null, 2);
+  }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  /* 拓扑分层（Kahn）：与后端 DagExecutor 同规则 */
+  function topoLevels(nodes) {
+    var indegree = {}, byId = {};
+    nodes.forEach(function (n) { byId[n.id] = n; indegree[n.id] = (n.depends_on || []).length; });
+    var levels = [], remaining = nodes.slice();
+    while (remaining.length) {
+      var ready = remaining.filter(function (n) { return indegree[n.id] === 0; });
+      if (!ready.length) { levels.push(remaining); break; } // 防御：有环则全放最后一层
+      levels.push(ready);
+      var readyIds = {};
+      ready.forEach(function (n) { readyIds[n.id] = true; });
+      remaining = remaining.filter(function (n) { return !readyIds[n.id]; });
+      remaining.forEach(function (n) {
+        (n.depends_on || []).forEach(function (d) { if (readyIds[d]) indegree[n.id]--; });
+      });
+    }
+    return levels;
+  }
+
+  function render(data) {
+    var trace = data.trace || {};
+    var events = (data.events || []).map(function (e) {
+      e.input = parseJson(e.input_json);
+      e.output = parseJson(e.output_json);
+      return e;
+    });
+    var html = '';
+
+    /* ① Query + 元信息 */
+    var statusClass = trace.status === 'SUCCESS' ? 'success' : (trace.status === 'FAILED' ? 'failed' : 'running');
+    html += '<div class="section"><h2><span class="no">1</span>用户问题</h2>'
+      + '<div class="question-text">' + esc(trace.question) + '</div>'
+      + '<div class="meta-grid">'
+      + '<span class="badge ' + statusClass + '">' + esc(trace.status) + '</span>'
+      + metaItem('intent', trace.intent)
+      + metaItem('visitor', trace.visitor_id && String(trace.visitor_id).slice(0, 8) + '…')
+      + metaItem('model', trace.model)
+      + metaItem('耗时', trace.duration_ms != null ? (trace.duration_ms / 1000).toFixed(1) + 's' : null)
+      + metaItem('tokens', trace.prompt_tokens != null ? (trace.prompt_tokens + trace.completion_tokens) : null)
+      + metaItem('工具调用', trace.tool_calls)
+      + metaItem('时间', trace.created_at)
+      + '</div></div>';
+
+    /* ② 规划输出（意图识别 + Plan 的合并 LLM 调用，可能含 repair 多次尝试） */
+    var plannerCalls = events.filter(function (e) { return e.event_type === 'LLM_CALL' && e.name === 'dag_planner'; });
+    html += '<div class="section"><h2><span class="no">2</span>意图识别 & 规划输出</h2>';
+    if (!plannerCalls.length) {
+      html += '<div class="dag-empty">没有规划调用记录</div>';
+    }
+    plannerCalls.forEach(function (e, i) {
+      var envelope = e.output && e.output.content != null ? parseJson(e.output.content) : e.output;
+      var label = plannerCalls.length > 1 ? '第 ' + (i + 1) + ' 次尝试' : '规划输出';
+      if (e.error) label += '（调用失败）';
+      html += '<details' + (i === plannerCalls.length - 1 ? ' open' : '') + '><summary>' + label
+        + (e.duration_ms != null ? ' · ' + (e.duration_ms / 1000).toFixed(1) + 's' : '') + '</summary>'
+        + '<pre class="json">' + esc(typeof envelope === 'string' ? envelope : JSON.stringify(envelope, null, 2)) + '</pre></details>';
+    });
+    /* 校验失败的 PLAN 记录也展示出来（学习价值最高的一类数据） */
+    var badPlans = events.filter(function (e) { return e.event_type === 'PLAN' && e.error; });
+    badPlans.forEach(function (e) {
+      html += '<details><summary>校验失败的 Plan · ' + esc(e.error) + '</summary>'
+        + '<pre class="json">' + esc(pretty(e.output)) + '</pre></details>';
+    });
+    html += '</div>';
+
+    /* ③ DAG 拓扑 */
+    var planEvents = events.filter(function (e) { return e.event_type === 'PLAN' && !e.error; });
+    var toolCalls = events.filter(function (e) { return e.event_type === 'TOOL_CALL'; });
+    var byNodeId = {};
+    toolCalls.forEach(function (e) {
+      if (e.input && e.input.node_id) byNodeId[e.input.node_id] = e;
+    });
+    html += '<div class="section"><h2><span class="no">3</span>Plan 拓扑（点击节点查看入参/出参）</h2>';
+    var plan = planEvents.length ? parseJson(planEvents[planEvents.length - 1].output) : null;
+    if (!plan || !plan.nodes || !plan.nodes.length) {
+      html += '<div class="dag-empty">本次问答没有执行 Plan（出域 / 工具不足 / 规划失败降级）</div>';
+    } else {
+      topoLevels(plan.nodes).forEach(function (level, li) {
+        if (li > 0) html += '<div class="dag-arrow">↓</div>';
+        html += '<div class="dag-level">';
+        level.forEach(function (n) {
+          var call = byNodeId[n.id];
+          var ok = call ? !call.error : null;
+          var cls = ok === null ? 'pending' : (ok ? 'ok' : 'fail');
+          var statusText = ok === null ? '未执行' : (ok ? '✓ 成功' : '✗ 失败');
+          if (call && call.duration_ms != null) statusText += ' · ' + (call.duration_ms / 1000).toFixed(1) + 's';
+          html += '<div class="dag-node ' + cls + '" data-node="' + esc(n.id) + '">'
+            + '<div class="nid">' + esc(n.id) + '</div>'
+            + '<div class="tool">' + esc(n.tool) + '</div>'
+            + '<div class="status">' + statusText + '</div>'
+            + (n.depends_on && n.depends_on.length
+                ? '<div class="dag-deps">依赖: ' + esc(n.depends_on.join(', ')) + '</div>' : '')
+            + '</div>';
+        });
+        html += '</div>';
+      });
+    }
+    html += '</div>';
+
+    /* ④ 汇总结论 */
+    html += '<div class="section"><h2><span class="no">4</span>汇总结论</h2>'
+      + '<div class="answer-text">' + esc(trace.answer || '（无回答）') + '</div></div>';
+
+    content.innerHTML = html;
+
+    /* 节点点击 → 弹框 */
+    content.querySelectorAll('.dag-node').forEach(function (el) {
+      el.addEventListener('click', function () {
+        var nodeId = el.getAttribute('data-node');
+        var call = byNodeId[nodeId];
+        var node = plan.nodes.filter(function (n) { return n.id === nodeId; })[0];
+        document.getElementById('modalTitle').textContent = node.id + ' · ' + node.tool;
+        document.getElementById('modalSub').textContent = call
+          ? ('耗时 ' + (call.duration_ms / 1000).toFixed(1) + 's' + (call.error ? ' · 失败' : ' · 成功'))
+          : '该节点未执行';
+        document.getElementById('modalInput').textContent = call ? pretty(call.input && call.input.args) : pretty(node.args);
+        document.getElementById('modalOutput').textContent = call ? pretty(call.output) : '（无执行记录）';
+        modalMask.className = 'modal-mask show';
+      });
+    });
+  }
+
+  function metaItem(label, value) {
+    if (value == null || value === '') return '';
+    return '<span class="meta-item">' + label + ' <b>' + esc(value) + '</b></span>';
+  }
+
+  function load() {
+    var id = input.value.trim();
+    if (!id) return;
+    loadBtn.disabled = true;
+    errorBox.style.display = 'none';
+    content.innerHTML = '';
+    fetch('/api/trace/' + encodeURIComponent(id))
+      .then(function (res) {
+        if (res.status === 404) throw new Error('没有找到这个 traceId 的记录');
+        if (!res.ok) throw new Error('查询失败（HTTP ' + res.status + '）');
+        return res.json();
+      })
+      .then(render)
+      .catch(function (e) {
+        errorBox.textContent = e.message;
+        errorBox.style.display = 'block';
+      })
+      .finally(function () { loadBtn.disabled = false; });
+  }
+
+  loadBtn.addEventListener('click', load);
+  input.addEventListener('keydown', function (e) { if (e.key === 'Enter') load(); });
+  document.getElementById('modalClose').addEventListener('click', function () {
+    modalMask.className = 'modal-mask';
+  });
+  modalMask.addEventListener('click', function (e) {
+    if (e.target === modalMask) modalMask.className = 'modal-mask';
+  });
+
+  /* 支持 ?id=xxx 直接分享链接 */
+  var fromUrl = new URLSearchParams(location.search).get('id');
+  if (fromUrl) { input.value = fromUrl; load(); }
+})();
+</script>
+</body>
+</html>

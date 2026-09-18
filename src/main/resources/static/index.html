@@ -65,6 +65,8 @@
     font-size: 12px;
     color: #9a9a9a;
   }
+  .msg.assistant .meta a { color: #9a9a9a; text-decoration: none; border-bottom: 1px dotted #c5c5c5; }
+  .msg.assistant .meta a:hover { color: #1f1f1f; }
   .msg.error .bubble { color: #c0392b; }
 
   /* 加载动画 */
@@ -214,13 +216,7 @@
         }
         conversationId = r.body.conversationId;
         var div = addMessage('assistant', r.body.answer || '（无回答）');
-        if (r.body.toolCalls > 0) {
-          var meta = document.createElement('div');
-          meta.className = 'meta';
-          meta.textContent = '调用 ' + r.body.toolCalls + ' 个数据工具 · 耗时 ' +
-            (r.body.durationMs / 1000).toFixed(1) + 's';
-          div.appendChild(meta);
-        }
+        appendMeta(div, r.body.toolCalls, r.body.durationMs, r.body.traceId);
       })
       .catch(function () {
         loadingEl.remove();
@@ -233,6 +229,23 @@
       });
   }
 
+  // 回答下方的 meta 行：可选的工具统计 + trace 回放链接
+  function appendMeta(div, toolCalls, durationMs, traceId) {
+    var meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = (toolCalls > 0
+      ? '调用 ' + toolCalls + ' 个数据工具 · 耗时 ' + (durationMs / 1000).toFixed(1) + 's · '
+      : '');
+    if (traceId) {
+      var link = document.createElement('a');
+      link.href = '/trace.html?id=' + encodeURIComponent(traceId);
+      link.target = '_blank';
+      link.textContent = '查看 trace';
+      meta.appendChild(link);
+    }
+    if (meta.textContent || traceId) div.appendChild(meta);
+  }
+
   // 页面加载时拉取该访客（cexpilot_uid cookie）最近会话的全部问答历史并回显
   function loadHistory() {
     fetch('/api/conversation/latest')
@@ -243,7 +256,10 @@
         app.className = 'chatting';
         data.messages.forEach(function (m) {
           addMessage('user', m.question);
-          if (m.answer) addMessage('assistant', m.answer);
+          if (m.answer) {
+            var div = addMessage('assistant', m.answer);
+            appendMeta(div, 0, 0, m.traceId);
+          }
         });
       })
       .catch(function () { /* 历史拉取失败不阻塞提问 */ });

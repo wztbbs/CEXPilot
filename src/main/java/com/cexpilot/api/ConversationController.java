@@ -33,13 +33,13 @@ public class ConversationController {
         List<QueryRecord> queries = conversation.history(conversationId);
         return new ConversationHistoryResponse(conversationId,
                 queries.stream()
-                        .map(q -> new QueryMessage(q.question(), q.answer(), q.createdAt()))
+                        .map(q -> new QueryMessage(q.question(), q.answer(), q.traceId(), q.createdAt()))
                         .toList());
     }
 
     public record ConversationHistoryResponse(String conversationId, List<QueryMessage> messages) {
     }
 
-    public record QueryMessage(String question, String answer, LocalDateTime createdAt) {
+    public record QueryMessage(String question, String answer, String traceId, LocalDateTime createdAt) {
     }
 }
