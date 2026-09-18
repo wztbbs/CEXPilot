@@ -21,10 +21,35 @@ public class ConversationRepository {
         return count != null && count > 0;
     }
 
-    public void createConversation(String conversationId, String title) {
+    public void createConversation(String conversationId, String title, String visitorId) {
         jdbc.update(
-                "INSERT INTO conversation (conversation_id, title) VALUES (?, ?)",
-                conversationId, title);
+                "INSERT INTO conversation (conversation_id, title, visitor_id) VALUES (?, ?, ?)",
+                conversationId, title, visitorId);
+    }
+
+    /** 访客最近活跃的会话；没有返回 null。 */
+    public String findLatestByVisitorId(String visitorId) {
+        List<String> ids = jdbc.query(
+                "SELECT conversation_id FROM conversation WHERE visitor_id = ? ORDER BY last_active_at DESC LIMIT 1",
+                (rs, rowNum) -> rs.getString("conversation_id"), visitorId);
+        return ids.isEmpty() ? null : ids.get(0);
+    }
+
+    /** 会话的全部问答，时间正序（历史回显用，不限条数）。 */
+    public List<QueryRecord> allQueries(String conversationId) {
+        return jdbc.query("""
+                        SELECT query_no, question, answer, trace_id, created_at
+                        FROM conversation_query
+                        WHERE conversation_id = ?
+                        ORDER BY query_no ASC
+                        """,
+                (rs, rowNum) -> new QueryRecord(
+                        rs.getInt("query_no"),
+                        rs.getString("question"),
+                        rs.getString("answer"),
+                        rs.getString("trace_id"),
+                        rs.getTimestamp("created_at").toLocalDateTime()),
+                conversationId);
     }
 
     public void touchConversation(String conversationId, String title) {

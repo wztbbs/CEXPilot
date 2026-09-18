@@ -61,7 +61,7 @@ public class AskService {
 
         // 1. 落定对话：conversationId 为空则新建对话；不为空则沿用（多轮追问的载体）。
         //    对话只保留最近几个 Query，不做长期记忆。
-        String resolvedConversationId = conversation.getOrCreateConversation(conversationId, question);
+        String resolvedConversationId = conversation.getOrCreateConversation(conversationId, question, visitorId);
 
         // 2. 渲染对话上下文：把最近几个 Q&A 拼成文本，注入 system prompt，
         //    让 LLM 能解析"那 OKX 呢"这类指代。

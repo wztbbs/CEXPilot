@@ -233,6 +233,22 @@
       });
   }
 
+  // 页面加载时拉取该访客（cexpilot_uid cookie）最近会话的全部问答历史并回显
+  function loadHistory() {
+    fetch('/api/conversation/latest')
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (data) {
+        if (!data || !data.conversationId || !data.messages || data.messages.length === 0) return;
+        conversationId = data.conversationId;
+        app.className = 'chatting';
+        data.messages.forEach(function (m) {
+          addMessage('user', m.question);
+          if (m.answer) addMessage('assistant', m.answer);
+        });
+      })
+      .catch(function () { /* 历史拉取失败不阻塞提问 */ });
+  }
+
   textarea.addEventListener('input', autoResize);
   textarea.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
@@ -249,6 +265,7 @@
     }
   });
 
+  loadHistory();
   textarea.focus();
 })();
 </script>

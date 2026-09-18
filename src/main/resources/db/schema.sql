@@ -3,10 +3,12 @@
 
 CREATE TABLE IF NOT EXISTS conversation (
     conversation_id VARCHAR(64)  NOT NULL PRIMARY KEY,
+    visitor_id      VARCHAR(64)  NULL, -- 访客标识（cexpilot_uid cookie），当前约定 1 访客 1 会话
     title           VARCHAR(255) NULL,
     status          VARCHAR(16)  NOT NULL DEFAULT 'ACTIVE',
     created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    last_active_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
+    last_active_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_conversation_visitor (visitor_id, last_active_at)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
 CREATE TABLE IF NOT EXISTS conversation_query (

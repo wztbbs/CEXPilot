@@ -21,15 +21,32 @@ public class ConversationService {
         this.repository = repository;
     }
 
-    /** conversationId 为空则创建新对话；不为空且不存在则按给定 id 创建。 */
-    public String getOrCreateConversation(String conversationId, String firstQuestion) {
+    /**
+     * conversationId 为空时：当前约定 1 访客 1 会话，visitorId 已有会话则复用最近活跃的那个；
+     * 否则新建。conversationId 不为空且不存在则按给定 id 创建。
+     */
+    public String getOrCreateConversation(String conversationId, String firstQuestion, String visitorId) {
         if (conversationId == null || conversationId.isBlank()) {
-            conversationId = UUID.randomUUID().toString();
+            String existing = visitorId == null ? null : repository.findLatestByVisitorId(visitorId);
+            conversationId = existing != null ? existing : UUID.randomUUID().toString();
         }
         if (!repository.conversationExists(conversationId)) {
-            repository.createConversation(conversationId, abbreviate(firstQuestion, 60));
+            repository.createConversation(conversationId, abbreviate(firstQuestion, 60), visitorId);
         }
         return conversationId;
+    }
+
+    /** 会话的全部问答历史（页面回显用），无会话时返回空表。 */
+    public List<QueryRecord> history(String conversationId) {
+        if (conversationId == null || conversationId.isBlank()) {
+            return List.of();
+        }
+        return repository.allQueries(conversationId);
+    }
+
+    /** 访客最近活跃的会话 id；没有返回 null。 */
+    public String latestConversationId(String visitorId) {
+        return repository.findLatestByVisitorId(visitorId);
     }
 
     /** 渲染注入 system prompt 的最近对话上下文。 */
