@@ -234,6 +234,8 @@
     });
     html += '<div class="section"><h2><span class="no">3</span>Plan 拓扑（点击节点查看入参/出参）</h2>';
     var plan = planEvents.length ? parseJson(planEvents[planEvents.length - 1].output) : null;
+    /* 兼容旧数据：合并规划改造初期的 PLAN 事件落的是整个 envelope（plan 在 .plan 子树） */
+    if (plan && !plan.nodes && plan.plan && plan.plan.nodes) plan = plan.plan;
     if (!plan || !plan.nodes || !plan.nodes.length) {
       html += '<div class="dag-empty">本次问答没有执行 Plan（出域 / 工具不足 / 规划失败降级）</div>';
     } else {

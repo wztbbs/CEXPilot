@@ -125,7 +125,7 @@ public class DagPlanner {
                 DagPlan plan = DagPlan.fromJson(planNode);
                 List<String> errors = validator.validate(plan, null, maxToolCalls);
                 if (errors.isEmpty()) {
-                    sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
+                    sink.record(TraceEvent.plan(traceId, plan.toJson().toString(), null));
                     return new PlanOutcome(true, intent, reply,
                             Optional.of(plan), promptTokens, completionTokens, null);
                 }
