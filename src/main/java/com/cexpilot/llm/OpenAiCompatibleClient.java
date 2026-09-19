@@ -55,6 +55,11 @@ public class OpenAiCompatibleClient implements LlmClient {
         ObjectNode body = MAPPER.createObjectNode();
         body.put("model", config.getModel());
         body.put("temperature", temperature);
+        if (config.getEnableThinking() != null) {
+            // Qwen3 混合模型的思考开关：思考 token 计入 completion 且逐字生成，
+            // 低延迟场景（规划 / 模板化回答）应关闭
+            body.put("enable_thinking", config.getEnableThinking());
+        }
         body.set("messages", serializeMessages(messages));
         if (tools != null && !tools.isEmpty()) {
             body.set("tools", serializeTools(tools));

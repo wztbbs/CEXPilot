@@ -20,6 +20,7 @@ llm:
     base-url: ${LLM_NORMAL_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
     api-key: ${LLM_NORMAL_API_KEY:}
     model: ${LLM_NORMAL_MODEL:qwen3.8-flash}
+    enable-thinking: ${LLM_NORMAL_ENABLE_THINKING:false}
     price-input-per-1k: ${LLM_NORMAL_PRICE_INPUT_PER_1K:0}
     price-output-per-1k: ${LLM_NORMAL_PRICE_OUTPUT_PER_1K:0}
   flagship:

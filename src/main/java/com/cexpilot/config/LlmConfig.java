@@ -65,6 +65,16 @@ public class LlmConfig {
         private String model = "";
         private double priceInputPer1k = 0;
         private double priceOutputPer1k = 0;
+        /** null = 不下发该参数；Qwen3 混合模型默认开思考，低延迟场景应显式设为 false。 */
+        private Boolean enableThinking;
+
+        public Boolean getEnableThinking() {
+            return enableThinking;
+        }
+
+        public void setEnableThinking(Boolean enableThinking) {
+            this.enableThinking = enableThinking;
+        }
 
         public String getBaseUrl() {
             return baseUrl;
