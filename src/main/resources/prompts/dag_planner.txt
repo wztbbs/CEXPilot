@@ -50,7 +50,7 @@ plan 是一个 JSON 对象：
 
 - id：节点唯一标识，用 n1、n2、n3… 命名。
 - tool：必须逐字来自上面的可用工具列表。
-- args：按工具的入参 Schema 填具体值；required 里的参数必须提供。币种符号统一用交易所格式（如 BTCUSDT），交易所用小写（binance / okx）；用户没有明确指定交易所时，exchange 一律填 okx。
+- args：按上面列出的参数说明填具体值；带 * 的参数必须提供，枚举参数只能取列出的值。币种符号统一用交易所格式（如 BTCUSDT），交易所用小写（binance / okx）；用户没有明确指定交易所时，exchange 一律填 okx。
 - depends_on：本节点依赖的上游节点 id 列表（执行顺序约束）；没有依赖时输出 []。
 
 # 数据引用

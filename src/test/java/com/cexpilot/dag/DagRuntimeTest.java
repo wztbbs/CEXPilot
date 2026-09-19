@@ -17,6 +17,8 @@ import com.cexpilot.runtime.TraceEvent;
 import com.cexpilot.runtime.TraceSink;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.io.DefaultResourceLoader;
 
@@ -26,6 +28,7 @@ import java.util.List;
 import java.util.Queue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -57,10 +60,16 @@ class DagRuntimeTest {
 
     static class EchoTool implements AgentTool {
         private final String name;
+        private final JsonNode data;
         int calls = 0;
 
         EchoTool(String name) {
+            this(name, null);
+        }
+
+        EchoTool(String name, JsonNode data) {
             this.name = name;
+            this.data = data;
         }
 
         @Override
@@ -81,7 +90,7 @@ class DagRuntimeTest {
         @Override
         public ToolResult execute(JsonNode args, ToolContext ctx) {
             calls++;
-            return ToolResult.success(MAPPER.createObjectNode().put("from", name));
+            return ToolResult.success(data != null ? data : MAPPER.createObjectNode().put("from", name));
         }
     }
 
@@ -144,11 +153,66 @@ class DagRuntimeTest {
         assertEquals("LLM_CALL", sink.events.get(4).eventType());
         assertEquals("answer", sink.events.get(4).name());
 
-        // 最终回答调用的 user 消息带上了 evidence JSON
+        // 最终回答调用的 user 消息带上了 evidence 摘要
         List<ChatMessage> answerCall = llm.seenMessages.get(1);
         ChatMessage user = answerCall.get(answerCall.size() - 1);
         assertTrue(user.content().contains("BTC 怎么了？"));
         assertTrue(user.content().contains("tool_a"));
+        // intent=MARKET_LOOKUP 走概览模板（限 150 字）
+        assertTrue(answerCall.get(0).content().contains("150"));
+    }
+
+    @Test
+    void answerReceivesSummarizedFactsWithoutDetailArrays() {
+        ObjectNode klineData = MAPPER.createObjectNode();
+        klineData.put("symbol", "BTC");
+        klineData.putObject("price_change").put("change_pct", 2.1);
+        ArrayNode candles = klineData.putArray("candles");
+        for (int i = 0; i < 100; i++) {
+            candles.addArray().add(i);
+        }
+        EchoTool klines = new EchoTool("get_klines", klineData);
+        FakeLlmClient llm = new FakeLlmClient(
+                new ChatResponse("""
+                        {"in_domain": true, "intent": "MARKET_ANALYSIS", "reply": null,
+                         "plan": {"nodes": [
+                           {"id": "n1", "tool": "get_klines", "args": {}, "depends_on": []}
+                         ]}}
+                        """, List.of(), 10, 5),
+                new ChatResponse("概览回答", List.of(), 20, 8));
+        ListSink sink = new ListSink();
+
+        ExecutionResult result = runtime(llm, List.of(klines), new DagConfig())
+                .execute("行情如何？", "", "trace-5", sink);
+
+        // 完整 evidence（含明细）仍随结果返回
+        assertTrue(result.evidence().toString().contains("candles"));
+        // answer 的 user 消息只有摘要：保留已计算指标，省略明细数组并标注
+        ChatMessage user = llm.seenMessages.get(1).get(1);
+        assertTrue(user.content().contains("price_change"));
+        assertTrue(user.content().contains("candles(100条)"));
+        assertFalse(user.content().contains("[0],[1]"));
+        // MARKET_ANALYSIS 同样走概览模板
+        assertTrue(llm.seenMessages.get(1).get(0).content().contains("150"));
+    }
+
+    @Test
+    void nonOverviewIntentKeepsGeneralAnswerPrompt() {
+        EchoTool tool = new EchoTool("tool_a");
+        FakeLlmClient llm = new FakeLlmClient(
+                new ChatResponse("""
+                        {"in_domain": true, "intent": "EXCHANGE_COMPARE", "reply": null,
+                         "plan": {"nodes": [
+                           {"id": "n1", "tool": "tool_a", "args": {}, "depends_on": []}
+                         ]}}
+                        """, List.of(), 10, 5),
+                new ChatResponse("对比回答", List.of(), 20, 8));
+        ListSink sink = new ListSink();
+
+        runtime(llm, List.of(tool), new DagConfig()).execute("两所价差？", "", "trace-6", sink);
+
+        String system = llm.seenMessages.get(1).get(0).content();
+        assertTrue(system.contains("金融语义纪律"));
     }
 
     @Test

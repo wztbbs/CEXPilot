@@ -19,9 +19,11 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * LLM 动态规划器（合并调用）：一次 LLM 调用同时完成领域判断、intent 归类（统计 hint）
@@ -191,9 +193,42 @@ public class DagPlanner {
         for (ToolSpec spec : specs) {
             sb.append("- ").append(spec.name())
                     .append("：").append(spec.description()).append('\n')
-                    .append("  入参 JSON Schema：").append(spec.inputSchema().toString()).append('\n');
+                    .append("  参数：").append(renderParams(spec.inputSchema())).append('\n');
         }
         return sb.toString();
+    }
+
+    /** 紧凑参数说明：只保留参数名、必填标记（*）、枚举取值与一句说明，不下发完整 JSON Schema。 */
+    private static String renderParams(JsonNode schema) {
+        JsonNode properties = schema.path("properties");
+        if (!properties.isObject() || properties.isEmpty()) {
+            return "无";
+        }
+        Set<String> required = new HashSet<>();
+        schema.path("required").forEach(node -> required.add(node.asText()));
+        List<String> params = new ArrayList<>();
+        properties.fields().forEachRemaining(field -> {
+            StringBuilder param = new StringBuilder(field.getKey());
+            if (required.contains(field.getKey())) {
+                param.append('*');
+            }
+            List<String> extras = new ArrayList<>();
+            JsonNode enumNode = field.getValue().path("enum");
+            if (enumNode.isArray() && !enumNode.isEmpty()) {
+                List<String> values = new ArrayList<>();
+                enumNode.forEach(value -> values.add(value.asText()));
+                extras.add(String.join("|", values));
+            }
+            String desc = field.getValue().path("description").asText("").trim();
+            if (!desc.isEmpty()) {
+                extras.add(desc);
+            }
+            if (!extras.isEmpty()) {
+                param.append('(').append(String.join(", ", extras)).append(')');
+            }
+            params.add(param.toString());
+        });
+        return String.join(", ", params);
     }
 
     private static String textOrNull(JsonNode node) {

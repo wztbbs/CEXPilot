@@ -12,6 +12,7 @@ import com.cexpilot.runtime.AgentTool;
 import com.cexpilot.runtime.ToolContext;
 import com.cexpilot.runtime.ToolRegistry;
 import com.cexpilot.runtime.ToolResult;
+import com.cexpilot.runtime.ToolSchemas;
 import com.cexpilot.runtime.TraceEvent;
 import com.cexpilot.runtime.TraceSink;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -200,6 +201,38 @@ class DagPlannerTest {
         assertTrue(sink.events.stream()
                 .filter(e -> e.eventType().equals("PLAN"))
                 .anyMatch(e -> e.error() != null && e.error().contains("未注册的工具")));
+    }
+
+    @Test
+    void toolListIsCompactWithoutFullJsonSchema() {
+        StubTool schemaTool = new StubTool() {
+            @Override
+            public JsonNode inputSchema() {
+                return ToolSchemas.parse("""
+                        {"type": "object", "properties": {
+                          "symbol": {"type": "string", "description": "币种基础代码"},
+                          "window": {"type": "string", "enum": ["1h", "4h", "24h"], "description": "时间窗口，默认 1h"}
+                        }, "required": ["symbol"]}
+                        """);
+            }
+        };
+        ToolRegistry registry = new ToolRegistry(List.of(schemaTool));
+        FakeLlmClient llm = new FakeLlmClient(respond(VALID_ENVELOPE));
+        DagPlanner planner = new DagPlanner(llm, registry,
+                new IntentRegistry(new DefaultResourceLoader()), new LlmConfig(), new DagConfig(),
+                new PromptStore(new DefaultResourceLoader()),
+                new PlanValidator(registry, new DagConfig()));
+
+        planner.plan("问题", "", "trace-7", new ListSink());
+
+        String system = llm.seenMessages.get(0).get(0).content();
+        // 紧凑格式：参数名 + 必填 * + 枚举 + 一句说明
+        assertTrue(system.contains("echo_tool：测试工具"));
+        assertTrue(system.contains("symbol*(币种基础代码)"));
+        assertTrue(system.contains("window(1h|4h|24h, 时间窗口，默认 1h)"));
+        // 不下发完整 JSON Schema
+        assertFalse(system.contains("\"type\": \"object\""));
+        assertFalse(system.contains("properties"));
     }
 
     @Test

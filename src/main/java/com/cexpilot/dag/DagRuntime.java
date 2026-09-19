@@ -18,10 +18,15 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * DAG 运行时（替代原 ReAct 循环）：一次问答 = DagPlanner 合并调用（领域判断 + intent 归类
  * + 规划）→ DagExecutor 并行执行 → 汇总 evidence → 1 次不带工具的 LLM 调用生成最终回答。
+ *
+ * 回答输入经过 EvidenceSummarizer 投影：明细序列（candles / history 等）不进 prompt，
+ * 只保留已计算的指标；概览类 intent（MARKET_LOOKUP / MARKET_ANALYSIS）走严格模板
+ * agent_overview（限 150 字、禁止引申），其余走通用 agent_system。
  *
  * 分支：
  * - 出域：不执行工具、不调 answer LLM，直接用 planner 给的 reply（为空用固定话术）；
@@ -35,6 +40,8 @@ public class DagRuntime {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Logger log = LoggerFactory.getLogger(DagRuntime.class);
     private static final String ANSWER_PROMPT_NAME = "agent_system";
+    private static final String OVERVIEW_PROMPT_NAME = "agent_overview";
+    private static final Set<String> OVERVIEW_INTENTS = Set.of("MARKET_LOOKUP", "MARKET_ANALYSIS");
     private static final String PLANNER_PROMPT_NAME = "dag_planner";
     private static final String OUT_OF_DOMAIN_FALLBACK =
             "我只支持 web3 / 加密货币交易领域的问题，暂时无法回答其他类型的问题。";
@@ -68,6 +75,7 @@ public class DagRuntime {
         int steps = 0;
 
         String userContent;
+        String promptName = ANSWER_PROMPT_NAME;
         if (outcome.plan().isPresent()) {
             DagPlan plan = outcome.plan().get();
             DagExecutor.ExecutionOutcome execution = executor.execute(plan, traceId, sink);
@@ -80,8 +88,12 @@ public class DagRuntime {
                 toolCallCount++;
                 appendEvidence(evidence, node.id(), node.tool(), result);
             }
-            userContent = question + "\n\n<EVIDENCE>\n" + evidence.toString()
-                    + "\n</EVIDENCE>\n以上是基于你的问题查询到的真实数据（JSON）。请基于这些证据回答，证据不足的部分明确说明。";
+            ArrayNode facts = EvidenceSummarizer.summarize(evidence);
+            userContent = question + "\n\n<FACTS>\n" + facts.toString()
+                    + "\n</FACTS>\n以上是基于你的问题查询到的真实数据摘要（JSON）。请基于这些事实回答，事实不足的部分明确说明。";
+            if (outcome.intent() != null && OVERVIEW_INTENTS.contains(outcome.intent())) {
+                promptName = OVERVIEW_PROMPT_NAME;
+            }
         } else {
             // 未执行任何工具的降级路径：模型判断工具不足，或规划 repair 耗尽
             String reason = outcome.lastError() != null
@@ -93,7 +105,7 @@ public class DagRuntime {
                     + "并明确说明回答未经过实时数据验证、可能存在偏差。）";
         }
 
-        String systemPrompt = prompts.render(ANSWER_PROMPT_NAME,
+        String systemPrompt = prompts.render(promptName,
                 Map.of("conversation_context", conversationContext == null ? "" : conversationContext));
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(ChatMessage.system(systemPrompt));
