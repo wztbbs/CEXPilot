@@ -21,7 +21,7 @@ public class GetTickerTool extends AbstractMarketTool {
 
     @Override
     public String description() {
-        return "获取最新成交价、24小时涨跌幅（百分比）与24小时成交量，用于回答「现在价格多少 / 今天涨了多少」这类问题";
+        return "获取最新成交价、24小时涨跌幅（百分比）、24小时成交量（以基础币计）与成交额（USDT），用于回答「现在价格多少 / 今天涨了多少 / 成交量多大」这类问题";
     }
 
     @Override
@@ -42,8 +42,12 @@ public class GetTickerTool extends AbstractMarketTool {
         facts.put("symbol", base);
         facts.put("last_price", ticker.lastPrice());
         facts.put("change_pct_24h", ticker.changePct24h());
-        facts.put("base_volume_24h", ticker.baseVolume24h());
-        facts.put("quote_volume_24h_usdt", ticker.quoteVolume24h());
+        facts.put("volume_24h_base", ticker.baseVolume24h());
+        facts.put("turnover_24h_usdt", ticker.quoteVolume24h());
+        // 量的单位二义性是 LLM 误标的源头（把 BTC 个数当成 USDT 成交额），显式标注
+        ObjectNode units = facts.putObject("units");
+        units.put("volume_24h_base", base);
+        units.put("turnover_24h_usdt", "USDT");
         return facts;
     }
 }
