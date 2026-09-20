@@ -2,6 +2,7 @@ package com.cexpilot.market.tool;
 
 import com.cexpilot.market.MarketCalculator;
 import com.cexpilot.market.MarketDataService;
+import com.cexpilot.market.Times;
 import com.cexpilot.market.model.FundingInfo;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -40,11 +41,13 @@ public class GetFundingRateTool extends AbstractMarketTool {
             facts.put("current_funding_rate_pct",
                     MarketCalculator.roundPlain(info.currentRate().multiply(new BigDecimal("100")), 4));
         }
-        facts.put("next_funding_time", info.nextFundingTime());
+        if (info.nextFundingTime() > 0) {
+            facts.put("next_funding_time_utc8", Times.readable(info.nextFundingTime()));
+        }
         facts.put("trend", MarketCalculator.fundingTrend(info.recentRates()));
         facts.putObject("units").put("current_funding_rate", "fraction")
                 .put("current_funding_rate_pct", "%").put("recent_rates", "fraction")
-                .put("next_funding_time", "unix_ms");
+                .put("next_funding_time_utc8", "yyyy-MM-dd HH:mm:ss UTC+8");
 
         ArrayNode rates = facts.putArray("recent_rates");
         for (BigDecimal rate : info.recentRates()) {

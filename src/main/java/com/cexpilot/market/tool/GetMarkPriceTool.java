@@ -2,6 +2,7 @@ package com.cexpilot.market.tool;
 
 import com.cexpilot.market.MarketCalculator;
 import com.cexpilot.market.MarketDataService;
+import com.cexpilot.market.Times;
 import com.cexpilot.market.model.MarkPrice;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -49,7 +50,7 @@ public class GetMarkPriceTool extends AbstractMarketTool {
                     markPrice.fundingRate().multiply(new BigDecimal("100")), 4));
         }
         if (markPrice.nextFundingTime() > 0) {
-            facts.put("next_funding_time", markPrice.nextFundingTime());
+            facts.put("next_funding_time_utc8", Times.readable(markPrice.nextFundingTime()));
         }
         return facts;
     }

@@ -3,6 +3,7 @@ package com.cexpilot.market.tool;
 import com.cexpilot.market.MarketCalculator;
 import com.cexpilot.market.MarketDataService;
 import com.cexpilot.market.TimeWindow;
+import com.cexpilot.market.Times;
 import com.cexpilot.market.model.Candle;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -53,13 +54,13 @@ public class GetKlinesTool extends AbstractMarketTool {
         priceChange.put("low", change.low());
 
         facts.set("freshness", freshness(candles, window));
-        facts.putArray("candles_columns").add("open_time_ms").add("open_price_usdt")
+        facts.putArray("candles_columns").add("open_time_utc8").add("open_price_usdt")
                 .add("high_price_usdt").add("low_price_usdt").add("close_price_usdt").add("volume");
 
         ArrayNode rows = facts.putArray("candles");
         for (Candle c : candles) {
             ArrayNode row = rows.addArray();
-            row.add(c.openTime());
+            row.add(Times.readable(c.openTime()));
             row.add(c.open());
             row.add(c.high());
             row.add(c.low());
@@ -78,7 +79,7 @@ public class GetKlinesTool extends AbstractMarketTool {
             default -> 3_600_000L;
         };
         long ageMs = System.currentTimeMillis() - lastOpenTime;
-        node.put("last_candle_open_time", lastOpenTime);
+        node.put("last_candle_open_time_utc8", Times.readable(lastOpenTime));
         node.put("age_seconds", ageMs / 1000);
         node.put("data_fresh", ageMs <= intervalMs * 2);
         return node;
