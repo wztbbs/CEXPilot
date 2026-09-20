@@ -15,6 +15,7 @@ import com.cexpilot.runtime.TraceEvent;
 import com.cexpilot.runtime.TraceSink;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.stereotype.Component;
 
@@ -178,6 +179,14 @@ public class DagPlanner {
                             Optional.of(plan), promptTokens, completionTokens, null);
                 }
                 lastError = "plan 校验失败: " + String.join("; ", errors);
+                if (lastError.contains("未注册的工具")) {
+                    // 常见诱因：模型把 args 胶水进 tool 字符串。给出可用工具名和格式提示
+                    StringBuilder names = new StringBuilder();
+                    registry.specs().forEach(spec -> names.append(names.isEmpty() ? "" : ", ")
+                            .append(spec.name()));
+                    lastError += "；tool 字段只能填工具名本身（可用：" + names
+                            + "），args 必须是独立的 JSON 对象字段，如 {\"tool\": \"get_ticker\", \"args\": {\"symbol\": \"BTC\"}}";
+                }
             } catch (Exception e) {
                 lastError = "plan 解析失败: " + e.getMessage();
             }
@@ -250,18 +259,19 @@ public class DagPlanner {
     }
 
     /**
-     * planner 输出信封的 JSON Schema。plan 不列入 required：模型判断工具不足以回答时
-     * 可以省略 plan（等价于协议里的 plan=null）；reply/intent 同理允许省略。
+     * planner 输出信封的 JSON Schema。plan/reply 允许 null：模型判断工具不足以回答时
+     * 输出 plan=null；tool 字段带注册工具名枚举，guided decoding 从生成层面禁止
+     * 编造工具名或把 args 胶水进 tool 字符串。
      */
-    private static JsonNode plannerSchema() {
+    private JsonNode plannerSchema() {
         try {
-            return MAPPER.readTree("""
+            ObjectNode schema = (ObjectNode) MAPPER.readTree("""
                     {"type": "object", "additionalProperties": false,
                      "properties": {
                        "in_domain": {"type": "boolean"},
                        "intent": {"type": "string"},
-                       "reply": {"type": "string"},
-                       "plan": {"type": "object", "additionalProperties": false,
+                       "reply": {"type": ["string", "null"]},
+                       "plan": {"type": ["object", "null"], "additionalProperties": false,
                          "properties": {"nodes": {"type": "array", "items": {
                            "type": "object", "additionalProperties": false,
                            "properties": {
@@ -277,6 +287,11 @@ public class DagPlanner {
                      },
                      "required": ["in_domain"]}
                     """);
+            ArrayNode toolEnum = MAPPER.createArrayNode();
+            registry.specs().forEach(spec -> toolEnum.add(spec.name()));
+            ((ObjectNode) schema.at("/properties/plan/properties/nodes/items/properties/tool"))
+                    .set("enum", toolEnum);
+            return schema;
         } catch (Exception e) {
             throw new IllegalStateException("planner schema 内置常量解析失败", e);
         }

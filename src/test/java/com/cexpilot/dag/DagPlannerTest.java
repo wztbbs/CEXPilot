@@ -188,11 +188,13 @@ class DagPlannerTest {
 
         assertTrue(outcome.plan().isPresent());
         assertEquals(2, llm.seenMessages.size());
-        // repair 消息携带校验错误明细
+        // repair 消息携带校验错误明细 + 针对工具名错误的格式提示
         List<ChatMessage> secondCall = llm.seenMessages.get(1);
         ChatMessage repair = secondCall.get(secondCall.size() - 1);
         assertEquals("user", repair.role());
         assertTrue(repair.content().contains("未注册的工具"));
+        assertTrue(repair.content().contains("tool 字段只能填工具名本身"));
+        assertTrue(repair.content().contains("echo_tool"));
         // token 累计两轮
         assertEquals(20, outcome.promptTokens());
         // trace：2 次 LLM_CALL + 2 条 PLAN（第一条带 error）
