@@ -364,6 +364,58 @@ class DagPlannerTest {
     }
 
     @Test
+    void longReasoningReplyWithoutPlanTriggersRepair() {
+        // 模型把推理过程倒进 reply 且没给 plan：协议误用，必须 repair 而不是透传
+        FakeLlmClient llm = new FakeLlmClient(
+                respond("{\"in_domain\": true, \"intent\": \"MARKET_LOOKUP\","
+                        + " \"reply\": \"" + "推理".repeat(60) + "\"}"),
+                respond(VALID_ENVELOPE));
+        ListSink sink = new ListSink();
+
+        DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
+                .plan("问题", "", "trace-15", sink);
+
+        assertTrue(outcome.plan().isPresent());
+        assertEquals(2, llm.seenMessages.size());
+        List<ChatMessage> secondCall = llm.seenMessages.get(1);
+        assertTrue(secondCall.get(secondCall.size() - 1).content().contains("推理过程"));
+    }
+
+    @Test
+    void longReasoningReplyWithEmptyNodesTriggersRepair() {
+        // 空 nodes + 超长 reply 同理：不能透传
+        FakeLlmClient llm = new FakeLlmClient(
+                respond("{\"in_domain\": true, \"intent\": \"MARKET_LOOKUP\","
+                        + " \"reply\": \"" + "推理".repeat(60) + "\", \"plan\": {\"nodes\": []}}"),
+                respond(VALID_ENVELOPE));
+        ListSink sink = new ListSink();
+
+        DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
+                .plan("问题", "", "trace-16", sink);
+
+        assertTrue(outcome.plan().isPresent());
+        assertEquals(2, llm.seenMessages.size());
+    }
+
+    @Test
+    void longReasoningReplyDroppedWhenPlanValid() {
+        // plan 合法但 reply 是推理 dump：直接丢弃 reply，不为它浪费 repair
+        FakeLlmClient llm = new FakeLlmClient(respond(
+                "{\"in_domain\": true, \"intent\": \"MARKET_LOOKUP\","
+                        + " \"reply\": \"" + "推理".repeat(60) + "\","
+                        + " \"plan\": {\"nodes\": [{\"id\": \"n1\", \"tool\": \"echo_tool\", \"args\": {}}]}}"));
+        ListSink sink = new ListSink();
+
+        DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
+                .plan("问题", "", "trace-17", sink);
+
+        assertTrue(outcome.plan().isPresent());
+        assertNull(outcome.reply());
+        assertNull(outcome.lastError());
+        assertEquals(1, llm.seenMessages.size());
+    }
+
+    @Test
     void plannerResponseFormatBuildsJsonSchema() {
         DagConfig dagConfig = new DagConfig();
         dagConfig.setPlannerResponseFormat("json_schema");

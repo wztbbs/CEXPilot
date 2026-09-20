@@ -94,7 +94,11 @@ public class DagRuntime {
 
         ArrayNode facts = MAPPER.createArrayNode();
         ObjectNode queryStatus = MAPPER.createObjectNode();
-        if (outcome.reply() != null) queryStatus.put("missing", outcome.reply());
+        // reply 是 planner 写的查询缺口说明；模型偶尔会把推理过程倒进来，截断防污染
+        if (outcome.reply() != null) {
+            String missing = outcome.reply();
+            queryStatus.put("missing", missing.length() <= 200 ? missing : missing.substring(0, 200));
+        }
         if (outcome.plan().isPresent()) {
             DagPlan plan = outcome.plan().get();
             DagExecutor.ExecutionOutcome execution = executor.execute(plan, traceId, sink);

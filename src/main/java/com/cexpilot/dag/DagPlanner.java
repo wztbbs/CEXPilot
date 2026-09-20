@@ -32,6 +32,7 @@ import java.util.Set;
  * - in_domain=false → 直接接受（reply 为产品边界话术），不 repair；
  * - in_domain=true 且 plan=null → 模型有意不规划（工具不足以回答或需追问），不 repair；
  *   plan 存在但 nodes 为空且 reply 非空时同理（模型常这么表达追问），直接接受；
+ *   但 reply 超长（>100 字）视为模型把推理过程倒进了 reply 的协议误用，走 repair；
  * - in_domain=true 且 plan 非空 → LlmJson 容错解析 + PlanValidator 确定性校验，
  *   失败把错误明细追加为消息让 LLM 修复，最多重试 plannerMaxRetries 次；
  * - 信封缺失（非对象 / 没有 in_domain 字段，如直接输出 nodes 裸数组）→ 先抢救：
@@ -50,6 +51,8 @@ public class DagPlanner {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final String PROMPT_NAME = "dag_planner";
     private static final String TRACE_NAME = "dag_planner";
+    /** 透传 reply 的长度上限：合法追问/边界话术都很短，超长基本是把推理过程倒进了 reply。 */
+    private static final int REPLY_MAX_LENGTH = 100;
 
     private final LlmClient llm;
     private final ToolRegistry registry;
@@ -134,7 +137,16 @@ public class DagPlanner {
             String reply = textOrNull(parsed.path("reply"));
             JsonNode planNode = parsed.path("plan");
             if (!planNode.isObject()) {
-                // 模型有意不规划（plan=null）：工具不足以回答，不 repair
+                if (isReasoningDump(reply)) {
+                    // 模型把推理过程倒进 reply 且没给 plan：协议误用，按格式错误 repair，
+                    // 不能直接接受——否则推理原文会被透传成答案
+                    lastError = "reply 只能写一句要对用户说的简短话术（" + REPLY_MAX_LENGTH
+                            + " 字以内），禁止输出推理过程；问题可查询时必须输出 plan 字段";
+                    sink.record(TraceEvent.plan(traceId, parsed.toString(), lastError));
+                    appendRepair(messages, response.content(), lastError);
+                    continue;
+                }
+                // 模型有意不规划（plan=null）：工具不足以回答或需追问，不 repair
                 sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
                 return new PlanOutcome(true, intent, reply,
                         Optional.empty(), promptTokens, completionTokens, null);
@@ -143,6 +155,13 @@ public class DagPlanner {
             try {
                 DagPlan plan = DagPlan.fromJson(planNode);
                 if (plan.nodes().isEmpty() && reply != null && !reply.isBlank()) {
+                    if (isReasoningDump(reply)) {
+                        lastError = "reply 只能写一句要对用户说的简短话术（" + REPLY_MAX_LENGTH
+                                + " 字以内），禁止输出推理过程；问题可查询时必须输出 plan 字段";
+                        sink.record(TraceEvent.plan(traceId, parsed.toString(), lastError));
+                        appendRepair(messages, response.content(), lastError);
+                        continue;
+                    }
                     // 空 nodes + reply：模型有意不规划（向用户追问或说明能力缺口），
                     // 等价于 plan=null，直接接受不 repair——否则重试三次后 reply 还会被丢掉
                     sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
@@ -152,7 +171,10 @@ public class DagPlanner {
                 List<String> errors = validator.validate(plan, null, maxToolCalls);
                 if (errors.isEmpty()) {
                     sink.record(TraceEvent.plan(traceId, plan.toJson().toString(), null));
-                    return new PlanOutcome(true, intent, reply,
+                    // reply 与 plan 并存时只作查询缺口说明；推理 dump 直接丢弃
+                    // （plan 已合法，不值得为 reply 再走一轮 repair）
+                    String effectiveReply = isReasoningDump(reply) ? null : reply;
+                    return new PlanOutcome(true, intent, effectiveReply,
                             Optional.of(plan), promptTokens, completionTokens, null);
                 }
                 lastError = "plan 校验失败: " + String.join("; ", errors);
@@ -167,11 +189,15 @@ public class DagPlanner {
                 Optional.empty(), promptTokens, completionTokens, lastError);
     }
 
+    /** 判断 reply 是否是推理 dump：合法话术很短，超长即视为协议误用。 */
+    private static boolean isReasoningDump(String reply) {
+        return reply != null && reply.length() > REPLY_MAX_LENGTH;
+    }
+
     /**
      * 信封缺失时的抢救：裸 nodes 数组、{"plan": {...}}、{"nodes": [...]} 都视为
      * 模型判断正确但包装丢失；内容能通过 PlanValidator 校验就接受，否则返回空走 repair。
-     */
-    private Optional<DagPlan> salvagePlan(JsonNode parsed, int maxToolCalls) {
+     */    private Optional<DagPlan> salvagePlan(JsonNode parsed, int maxToolCalls) {
         JsonNode planNode = null;
         if (parsed.isArray()) {
             ObjectNode wrapped = MAPPER.createObjectNode();
