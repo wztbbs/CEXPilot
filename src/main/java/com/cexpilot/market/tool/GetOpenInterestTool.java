@@ -9,7 +9,10 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.stereotype.Component;
 
 /**
- * 持仓量：当前值 + 24 小时历史 + 已计算的变化百分比。
+ * 持仓量：当前值 + 24 小时历史序列 + 已计算的变化百分比。
+ * 当前值恒为单合约口径（open_interest_single_contract）；历史序列在 OKX 是该币种
+ * 全市场合约汇总、在币安是同合约——两个字段口径可能不同，字段名显式拆开，
+ * 变化率 series_change_24h_pct 由序列自身算出，禁止模型跨口径相减。
  */
 @Component
 public class GetOpenInterestTool extends AbstractMarketTool {
@@ -33,20 +36,20 @@ public class GetOpenInterestTool extends AbstractMarketTool {
         ObjectNode facts = MAPPER.createObjectNode();
         facts.put("exchange", exchange.displayName());
         facts.put("symbol", base);
-        facts.put("open_interest", MarketCalculator.round(info.currentOi(), 2));
+        facts.put("open_interest_single_contract", MarketCalculator.round(info.currentOi(), 2));
         facts.put("unit", info.unit());
-        // 单位已统一为 USD；OKX 历史是全市场合约汇总，与当前值的单合约口径不同
-        facts.put("history_scope", okx
-                ? "该币种全市场合约汇总；不同于当前值的单合约口径" : "该永续合约");
-        facts.putArray("history_columns").add("timestamp_ms").add("open_interest");
+        facts.put("series_scope", okx
+                ? "该币种全市场合约汇总；与 open_interest_single_contract 口径不同，禁止跨口径相减"
+                : "该永续合约，与 open_interest_single_contract 同口径");
+        facts.putArray("series_columns").add("timestamp_ms").add("open_interest");
         var changePct = MarketCalculator.oiChangePct(info.history());
         if (changePct != null) {
-            facts.put("oi_change_24h_pct", changePct);
+            facts.put("series_change_24h_pct", changePct);
         }
 
-        ArrayNode history = facts.putArray("history");
+        ArrayNode series = facts.putArray("open_interest_aggregate_series");
         for (OpenInterestInfo.OiPoint point : info.history()) {
-            ArrayNode row = history.addArray();
+            ArrayNode row = series.addArray();
             row.add(point.timestamp());
             row.add(MarketCalculator.round(point.oi(), 2));
         }

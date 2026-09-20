@@ -1,6 +1,6 @@
 name: get_open_interest
 enabled: true
-description: 查询当前持仓量（USD 名义值）、近24小时历史及变化百分比；窗口固定，OKX历史为全市场合约汇总口径。
+description: 查询当前持仓量（USD 名义值）、近24小时历史序列及变化百分比。open_interest_single_contract 是单合约当前值；open_interest_aggregate_series 是历史序列（OKX 为该币种全市场合约汇总，币安为同合约）。两个字段口径可能不同，禁止跨口径相减；24 小时变化直接用 series_change_24h_pct。
 # capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
 capabilities:
   - 查询永续合约当前持仓量（USD 名义值）

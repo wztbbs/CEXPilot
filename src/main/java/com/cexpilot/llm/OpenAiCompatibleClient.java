@@ -6,16 +6,22 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.apache.hc.client5.http.config.ConnectionConfig;
+import org.apache.hc.client5.http.config.RequestConfig;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.client5.http.impl.classic.HttpClients;
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
+import org.apache.hc.core5.util.TimeValue;
+import org.apache.hc.core5.util.Timeout;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
@@ -24,6 +30,10 @@ import java.util.function.Consumer;
  * OpenAI 兼容协议的 chat/completions 客户端，支持 function calling。
  * 兼容 OpenAI / DashScope 兼容模式 / DeepSeek 等实现。
  * 不作为组件自动注册：normal / flagship 两套实例由 LlmClientConfig 显式声明。
+ *
+ * HTTP 层用 Apache HttpClient5 连接池（keep-alive 复用，避免每次调用重新 TLS 握手；
+ * 跨境链路下手握手一次约 0.5~1s）。idle 连接 30s 主动驱逐，防止复用到对端已静默
+ * 关闭的半死连接。超时：连接 10s，等响应头 60s，数据包间隔 60s（挂死快速失败）。
  */
 public class OpenAiCompatibleClient implements LlmClient {
 
@@ -40,9 +50,26 @@ public class OpenAiCompatibleClient implements LlmClient {
         this.config = config;
         this.temperature = temperature;
         this.seed = seed;
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofSeconds(10));
-        factory.setReadTimeout(Duration.ofSeconds(300));
+
+        PoolingHttpClientConnectionManager connectionManager = new PoolingHttpClientConnectionManager();
+        connectionManager.setMaxTotal(50);
+        connectionManager.setDefaultMaxPerRoute(50);
+        connectionManager.setDefaultConnectionConfig(ConnectionConfig.custom()
+                .setConnectTimeout(Timeout.ofSeconds(10))
+                // socket timeout = 两次数据包之间的最长间隔，对流式响应同样生效（chunk 间隙）
+                .setSocketTimeout(Timeout.ofSeconds(60))
+                .build());
+        RequestConfig requestConfig = RequestConfig.custom()
+                // 等响应头的最长时间：覆盖非流式调用的整体生成耗时
+                .setResponseTimeout(Timeout.ofSeconds(60))
+                .build();
+        CloseableHttpClient httpClient = HttpClients.custom()
+                .setConnectionManager(connectionManager)
+                .setDefaultRequestConfig(requestConfig)
+                .evictExpiredConnections()
+                .evictIdleConnections(TimeValue.ofSeconds(30))
+                .build();
+
         String baseUrl = config.getBaseUrl();
         if (baseUrl.endsWith("/")) {
             baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
@@ -50,7 +77,7 @@ public class OpenAiCompatibleClient implements LlmClient {
         this.baseUrl = baseUrl;
         this.restClient = RestClient.builder()
                 .baseUrl(baseUrl)
-                .requestFactory(factory)
+                .requestFactory(new HttpComponentsClientHttpRequestFactory(httpClient))
                 // Authorization 头只进请求，不进日志
                 .defaultHeader("Authorization", "Bearer " + config.getApiKey())
                 .build();

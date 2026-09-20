@@ -35,10 +35,10 @@ public class GetFundingRateTool extends AbstractMarketTool {
         ObjectNode facts = MAPPER.createObjectNode();
         facts.put("exchange", exchange.displayName());
         facts.put("symbol", base);
-        facts.put("current_funding_rate", info.currentRate());
+        facts.put("current_funding_rate", MarketCalculator.roundPlain(info.currentRate(), 8));
         if (info.currentRate() != null) {
             facts.put("current_funding_rate_pct",
-                    info.currentRate().multiply(new BigDecimal("100")).stripTrailingZeros());
+                    MarketCalculator.roundPlain(info.currentRate().multiply(new BigDecimal("100")), 4));
         }
         facts.put("next_funding_time", info.nextFundingTime());
         facts.put("trend", MarketCalculator.fundingTrend(info.recentRates()));
@@ -48,7 +48,7 @@ public class GetFundingRateTool extends AbstractMarketTool {
 
         ArrayNode rates = facts.putArray("recent_rates");
         for (BigDecimal rate : info.recentRates()) {
-            rates.add(rate);
+            rates.add(MarketCalculator.roundPlain(rate, 8));
         }
         return facts;
     }

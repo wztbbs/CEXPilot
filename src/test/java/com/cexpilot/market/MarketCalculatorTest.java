@@ -114,6 +114,20 @@ class MarketCalculatorTest {
         assertNull(MarketCalculator.round(null, 4));
     }
 
+    @Test
+    void roundPlainAvoidsScientificNotation() {
+        // 资金费率这类小数值：round 后去尾零，且 toString 必须是 plain（Jackson 按 toString 序列化）
+        assertEquals("0.00008393",
+                MarketCalculator.roundPlain(bd("0.0000839314618605"), 8).toString());
+        assertEquals("0.0084",
+                MarketCalculator.roundPlain(bd("0.00839314618605"), 4).toString());
+        assertEquals("0.0001",
+                MarketCalculator.roundPlain(bd("0.0001"), 8).toString());
+        assertEquals("80480.9453",
+                MarketCalculator.roundPlain(bd("80480.94531159"), 4).toString());
+        assertNull(MarketCalculator.roundPlain(null, 8));
+    }
+
     private static BigDecimal bd(String value) {
         return new BigDecimal(value);
     }

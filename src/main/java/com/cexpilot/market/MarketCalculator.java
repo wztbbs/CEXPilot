@@ -131,6 +131,16 @@ public final class MarketCalculator {
         return value.setScale(scale, RoundingMode.HALF_UP);
     }
 
+    /**
+     * round 之后去掉多余的尾零，并保证 toString 为 plain 表示——Jackson 默认按
+     * BigDecimal.toString() 序列化，stripTrailingZeros 直接输出会出现 1E-4 这类
+     * 科学计数，混进 prompt 干扰模型读数。
+     */
+    public static BigDecimal roundPlain(BigDecimal value, int scale) {
+        BigDecimal rounded = round(value, scale);
+        return rounded == null ? null : new BigDecimal(rounded.stripTrailingZeros().toPlainString());
+    }
+
     private static BigDecimal pctChange(BigDecimal from, BigDecimal to) {
         if (from == null || to == null || from.signum() == 0) {
             return null;

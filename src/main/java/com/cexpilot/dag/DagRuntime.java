@@ -29,7 +29,8 @@ import java.util.function.Consumer;
  *
  * 按计划保留回答所需明细，其余投影为摘要；所有意图共享同一事实约束模板，
  * 命中意图时追加该意图的 evidence_policy.rules 作为回答要求。
- * 出域直接返回边界话术；无计划时传空 FACTS 和查询缺口，禁止凭记忆降级回答。
+ * 出域直接返回边界话术；planner 有意不规划且给出 reply（追问/能力缺口）时直接透传为答案；
+ * 仅当规划彻底失败（repair 耗尽）时传空 FACTS 走降级回答，禁止凭记忆降级回答。
  */
 @Component
 public class DagRuntime {
@@ -74,6 +75,17 @@ public class DagRuntime {
                     ? OUT_OF_DOMAIN_FALLBACK : outcome.reply();
             return new ExecutionResult(answer, MAPPER.createArrayNode(), 0, 0,
                     totalPromptTokens, totalCompletionTokens, null);
+        }
+
+        // planner 有意不规划且给了面向用户的话（追问、说明能力缺口）：直接透传为答案，
+        // 不再走 answer LLM——否则会被泛化成"本轮未获取到数据"，把有用信息丢掉
+        if (outcome.plan().isEmpty() && outcome.lastError() == null
+                && outcome.reply() != null && !outcome.reply().isBlank()) {
+            if (answerDelta != null) {
+                answerDelta.accept(outcome.reply());
+            }
+            return new ExecutionResult(outcome.reply(), MAPPER.createArrayNode(), 0, 0,
+                    totalPromptTokens, totalCompletionTokens, outcome.intent());
         }
 
         ArrayNode evidence = MAPPER.createArrayNode();

@@ -325,6 +325,45 @@ class DagPlannerTest {
     }
 
     @Test
+    void emptyNodesWithReplyAcceptedAsIntentionalSkip() {
+        // 模型用 plan:{"nodes":[]} + reply 表达追问：等价于 plan=null，直接接受不 repair
+        FakeLlmClient llm = new FakeLlmClient(respond(
+                "{\"in_domain\": true, \"intent\": \"MARKET_LOOKUP\","
+                        + " \"reply\": \"请提供需要查询的币种代码\", \"plan\": {\"nodes\": []}}"));
+        ListSink sink = new ListSink();
+
+        DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
+                .plan("现在盘口压单重不重", "", "trace-13", sink);
+
+        assertTrue(outcome.inDomain());
+        assertEquals("MARKET_LOOKUP", outcome.intent());
+        assertEquals("请提供需要查询的币种代码", outcome.reply());
+        assertTrue(outcome.plan().isEmpty());
+        assertNull(outcome.lastError());
+        assertEquals(1, llm.seenMessages.size());
+        assertNull(sink.events.get(1).error());
+    }
+
+    @Test
+    void emptyNodesWithoutReplyTriggersRepair() {
+        // 空 nodes 且没有 reply：模型什么都没表达，仍按校验失败走 repair
+        FakeLlmClient llm = new FakeLlmClient(
+                respond("{\"in_domain\": true, \"intent\": \"MARKET_LOOKUP\","
+                        + " \"reply\": null, \"plan\": {\"nodes\": []}}"),
+                respond(VALID_ENVELOPE));
+        ListSink sink = new ListSink();
+
+        DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
+                .plan("问题", "", "trace-14", sink);
+
+        assertTrue(outcome.plan().isPresent());
+        assertEquals(2, llm.seenMessages.size());
+        assertTrue(sink.events.stream()
+                .filter(e -> e.eventType().equals("PLAN"))
+                .anyMatch(e -> e.error() != null && e.error().contains("plan 不包含任何节点")));
+    }
+
+    @Test
     void plannerResponseFormatBuildsJsonSchema() {
         DagConfig dagConfig = new DagConfig();
         dagConfig.setPlannerResponseFormat("json_schema");

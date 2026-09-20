@@ -30,7 +30,8 @@ import java.util.Set;
  * 与 Plan 生成。渲染 dag_planner prompt（注入对话上下文、intent 列表、全量已注册工具
  * 与规模约束），LLM 不带 tools 输出 {"in_domain", "intent", "reply", "plan"}：
  * - in_domain=false → 直接接受（reply 为产品边界话术），不 repair；
- * - in_domain=true 且 plan=null → 模型有意不规划（工具不足以回答），不 repair；
+ * - in_domain=true 且 plan=null → 模型有意不规划（工具不足以回答或需追问），不 repair；
+ *   plan 存在但 nodes 为空且 reply 非空时同理（模型常这么表达追问），直接接受；
  * - in_domain=true 且 plan 非空 → LlmJson 容错解析 + PlanValidator 确定性校验，
  *   失败把错误明细追加为消息让 LLM 修复，最多重试 plannerMaxRetries 次；
  * - 信封缺失（非对象 / 没有 in_domain 字段，如直接输出 nodes 裸数组）→ 先抢救：
@@ -141,6 +142,13 @@ public class DagPlanner {
 
             try {
                 DagPlan plan = DagPlan.fromJson(planNode);
+                if (plan.nodes().isEmpty() && reply != null && !reply.isBlank()) {
+                    // 空 nodes + reply：模型有意不规划（向用户追问或说明能力缺口），
+                    // 等价于 plan=null，直接接受不 repair——否则重试三次后 reply 还会被丢掉
+                    sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
+                    return new PlanOutcome(true, intent, reply,
+                            Optional.empty(), promptTokens, completionTokens, null);
+                }
                 List<String> errors = validator.validate(plan, null, maxToolCalls);
                 if (errors.isEmpty()) {
                     sink.record(TraceEvent.plan(traceId, plan.toJson().toString(), null));

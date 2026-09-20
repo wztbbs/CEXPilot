@@ -244,33 +244,46 @@ class DagRuntimeTest {
     }
 
     @Test
-    void nullPlanPassesEmptyFactsAndMissingReason() {
+    void nullPlanWithReplyPassesThroughDirectly() {
         EchoTool tool = new EchoTool("tool_a");
         FakeLlmClient llm = new FakeLlmClient(
                 new ChatResponse("{\"in_domain\": true, \"intent\": \"UNKNOWN\","
-                        + " \"reply\": \"缺少链上持仓数据\", \"plan\": null}", List.of(), 10, 5),
-                new ChatResponse("缺少查询事实，无法确认", List.of(), 20, 8));
+                        + " \"reply\": \"缺少链上持仓数据\", \"plan\": null}", List.of(), 10, 5));
         ListSink sink = new ListSink();
+        List<String> deltas = new ArrayList<>();
 
         ExecutionResult result = runtime(llm, List.of(tool), new DagConfig())
-                .execute("这个问题工具不够", "", "trace-3", sink);
+                .execute("这个问题工具不够", "", "trace-3", sink, deltas::add);
 
-        assertEquals("缺少查询事实，无法确认", result.answer());
+        // reply 直接成为答案，不再走 answer LLM 泛化；流式场景一次性推全量
+        assertEquals("缺少链上持仓数据", result.answer());
+        assertEquals(List.of("缺少链上持仓数据"), deltas);
         assertEquals("UNKNOWN", result.intent());
         assertEquals(0, tool.calls);
         assertEquals(0, result.toolCallCount());
         assertEquals(0, result.evidence().size());
-        assertEquals(30, result.promptTokens());
-        // 降级回答了，user 消息注明局限
-        List<ChatMessage> answerCall = llm.seenMessages.get(1);
-        ChatMessage user = answerCall.get(answerCall.size() - 1);
-        assertTrue(user.content().contains("<FACTS>\n[]\n</FACTS>"));
-        assertTrue(user.content().contains("缺少链上持仓数据"));
-        assertFalse(user.content().contains("请基于已有知识"));
-        assertTrue(answerCall.get(0).content().contains("不得凭已有知识补全缺失事实"));
-        // 降级原因落 PLAN trace
-        assertTrue(sink.events.stream().anyMatch(e -> e.eventType().equals("PLAN")
-                && e.error() != null && e.error().contains("没有可执行的查询计划")));
+        assertEquals(10, result.promptTokens());
+        assertEquals(1, llm.seenMessages.size());
+        assertTrue(sink.events.stream().noneMatch(e -> "answer".equals(e.name())));
+    }
+
+    @Test
+    void emptyNodesWithReplyPassesThroughDirectly() {
+        // D10 场景：planner 追问"请提供币种代码"（nodes 为空），reply 必须透传给用户
+        EchoTool tool = new EchoTool("tool_a");
+        FakeLlmClient llm = new FakeLlmClient(
+                new ChatResponse("{\"in_domain\": true, \"intent\": \"MARKET_LOOKUP\","
+                        + " \"reply\": \"请提供需要查询的币种代码（如 BTC、ETH 等）\","
+                        + " \"plan\": {\"nodes\": []}}", List.of(), 10, 5));
+        ListSink sink = new ListSink();
+
+        ExecutionResult result = runtime(llm, List.of(tool), new DagConfig())
+                .execute("现在盘口压单重不重", "", "trace-7", sink);
+
+        assertEquals("请提供需要查询的币种代码（如 BTC、ETH 等）", result.answer());
+        assertEquals("MARKET_LOOKUP", result.intent());
+        assertEquals(0, tool.calls);
+        assertEquals(1, llm.seenMessages.size());
     }
 
     @Test

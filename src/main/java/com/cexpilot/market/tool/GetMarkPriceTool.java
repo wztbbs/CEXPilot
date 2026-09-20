@@ -1,5 +1,6 @@
 package com.cexpilot.market.tool;
 
+import com.cexpilot.market.MarketCalculator;
 import com.cexpilot.market.MarketDataService;
 import com.cexpilot.market.model.MarkPrice;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -33,18 +34,19 @@ public class GetMarkPriceTool extends AbstractMarketTool {
         facts.put("exchange", exchange.displayName());
         facts.put("symbol", base);
         if (markPrice.markPrice() != null) {
-            facts.put("mark_price", markPrice.markPrice());
+            facts.put("mark_price", MarketCalculator.roundPlain(markPrice.markPrice(), 4));
         }
         if (markPrice.indexPrice() != null) {
-            facts.put("index_price", markPrice.indexPrice());
+            facts.put("index_price", MarketCalculator.roundPlain(markPrice.indexPrice(), 4));
         }
         if (markPrice.markPrice() != null && markPrice.indexPrice() != null) {
-            facts.put("basis", markPrice.markPrice().subtract(markPrice.indexPrice()));
+            facts.put("basis", MarketCalculator.roundPlain(
+                    markPrice.markPrice().subtract(markPrice.indexPrice()), 4));
         }
         if (markPrice.fundingRate() != null) {
-            facts.put("current_funding_rate", markPrice.fundingRate());
-            facts.put("current_funding_rate_pct",
-                    markPrice.fundingRate().multiply(new BigDecimal("100")).stripTrailingZeros());
+            facts.put("current_funding_rate", MarketCalculator.roundPlain(markPrice.fundingRate(), 8));
+            facts.put("current_funding_rate_pct", MarketCalculator.roundPlain(
+                    markPrice.fundingRate().multiply(new BigDecimal("100")), 4));
         }
         if (markPrice.nextFundingTime() > 0) {
             facts.put("next_funding_time", markPrice.nextFundingTime());
