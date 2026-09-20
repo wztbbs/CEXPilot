@@ -240,6 +240,8 @@ public class DagPlanner {
         if (format == null || format.isBlank()) {
             return null;
         }
+        // 容忍运维层带来的引号（.env / docker env-file 可能不剥引号）
+        format = format.trim().replaceAll("^\"+|\"+$", "");
         if ("json_object".equals(format)) {
             ObjectNode node = MAPPER.createObjectNode();
             node.put("type", "json_object");
@@ -281,7 +283,7 @@ public class DagPlanner {
                              "depends_on": {"type": "array", "items": {"type": "string"}},
                              "include_details": {"type": "boolean"}
                            },
-                           "required": ["id", "tool"]
+                           "required": ["id", "tool", "args", "depends_on"]
                          }}},
                          "required": ["nodes"]}
                      },

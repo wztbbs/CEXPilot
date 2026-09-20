@@ -418,6 +418,58 @@ class DagPlannerTest {
     }
 
     @Test
+    void nodeMissingArgsTriggersRepair() {
+        // 节点只有 tool 没有 args：校验报缺少必填参数，走 repair 后修好
+        StubTool tickerTool = new StubTool() {
+            @Override
+            public String name() {
+                return "get_ticker";
+            }
+
+            @Override
+            public JsonNode inputSchema() {
+                return ToolSchemas.parse("""
+                        {"type": "object", "properties": {
+                          "symbol": {"type": "string"}
+                        }, "required": ["symbol"]}
+                        """);
+            }
+        };
+        ToolRegistry registry = com.cexpilot.runtime.TestTools.registry(List.of(tickerTool));
+        DagConfig dagConfig = new DagConfig();
+        FakeLlmClient llm = new FakeLlmClient(
+                respond("{\"in_domain\": true, \"intent\": \"MARKET_LOOKUP\", \"reply\": null,"
+                        + " \"plan\": {\"nodes\": [{\"id\": \"n1\", \"tool\": \"get_ticker\"}]}}"),
+                respond("{\"in_domain\": true, \"intent\": \"MARKET_LOOKUP\", \"reply\": null,"
+                        + " \"plan\": {\"nodes\": [{\"id\": \"n1\", \"tool\": \"get_ticker\","
+                        + " \"args\": {\"symbol\": \"BTC\"}, \"depends_on\": []}]}}"));
+        DagPlanner planner = new DagPlanner(llm, registry,
+                new IntentRegistry(new DefaultResourceLoader()), new LlmConfig(), dagConfig,
+                new PromptStore(new DefaultResourceLoader()),
+                new PlanValidator(registry, dagConfig));
+
+        DagPlanner.PlanOutcome outcome = planner.plan("问题", "", "trace-18", new ListSink());
+
+        assertTrue(outcome.plan().isPresent());
+        assertEquals(2, llm.seenMessages.size());
+        List<ChatMessage> secondCall = llm.seenMessages.get(1);
+        assertTrue(secondCall.get(secondCall.size() - 1).content().contains("缺少必填参数: symbol"));
+    }
+
+    @Test
+    void plannerResponseFormatToleratesQuotedValue() {
+        // 运维层（.env / docker env-file）可能不剥引号，带引号的值应按 json_schema 处理
+        DagConfig dagConfig = new DagConfig();
+        dagConfig.setPlannerResponseFormat("\"json_schema\"");
+        FakeLlmClient llm = new FakeLlmClient(respond(VALID_ENVELOPE));
+
+        DagPlanner.PlanOutcome outcome = planner(llm, dagConfig)
+                .plan("问题", "", "trace-19", new ListSink());
+
+        assertTrue(outcome.plan().isPresent());
+    }
+
+    @Test
     void plannerResponseFormatBuildsJsonSchema() {
         DagConfig dagConfig = new DagConfig();
         dagConfig.setPlannerResponseFormat("json_schema");
