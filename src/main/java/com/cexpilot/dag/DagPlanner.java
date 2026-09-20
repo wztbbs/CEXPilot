@@ -75,14 +75,7 @@ public class DagPlanner {
 
     public PlanOutcome plan(String question, String conversationContext, String traceId, TraceSink sink) {
         int maxToolCalls = llmConfig.getMaxToolCalls();
-        int maxNodes = Math.min(dagConfig.getMaxNodes(), maxToolCalls);
-
-        String systemPrompt = prompts.render(PROMPT_NAME, Map.of(
-                "intents", renderIntentList(),
-                "tools", renderTools(registry.specs()),
-                "max_nodes", String.valueOf(maxNodes),
-                "max_depth", String.valueOf(dagConfig.getMaxDepth()),
-                "conversation_context", conversationContext == null ? "" : conversationContext));
+        String systemPrompt = systemPrompt(conversationContext);
 
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(ChatMessage.system(systemPrompt));
@@ -143,6 +136,20 @@ public class DagPlanner {
                 Optional.empty(), promptTokens, completionTokens, lastError);
     }
 
+    private String systemPrompt(String conversationContext) {
+        return prompts.render(PROMPT_NAME, Map.of(
+                "intents", renderIntentList(),
+                "tools", renderTools(registry.specs()),
+                "max_nodes", String.valueOf(Math.min(dagConfig.getMaxNodes(), llmConfig.getMaxToolCalls())),
+                "max_depth", String.valueOf(dagConfig.getMaxDepth()),
+                "conversation_context", conversationContext == null ? "" : conversationContext));
+    }
+
+    /** 不含每轮历史的有效规划提示词版本，包含实际注入的工具和意图配置。 */
+    public String promptVersion() {
+        return PromptStore.fingerprint(systemPrompt(""));
+    }
+
     /** LLM 编造未注册的 intent 名时记 UNKNOWN，防止编造的名字进入统计。 */
     private String normalizeIntent(JsonNode node) {
         if (node.isTextual()) {
@@ -189,46 +196,58 @@ public class DagPlanner {
     }
 
     private static String renderTools(List<ToolSpec> specs) {
-        StringBuilder sb = new StringBuilder();
+        Map<String, JsonNode> common = new java.util.LinkedHashMap<>();
+        Map<String, Integer> counts = new java.util.HashMap<>();
+        Set<String> different = new HashSet<>();
         for (ToolSpec spec : specs) {
-            sb.append("- ").append(spec.name())
-                    .append("：").append(spec.description()).append('\n')
-                    .append("  参数：").append(renderParams(spec.inputSchema())).append('\n');
+            spec.inputSchema().path("properties").fields().forEachRemaining(field -> {
+                JsonNode previous = common.putIfAbsent(field.getKey(), field.getValue());
+                if (previous != null && !previous.equals(field.getValue())) different.add(field.getKey());
+                counts.merge(field.getKey(), 1, Integer::sum);
+            });
+        }
+        common.keySet().removeIf(key -> counts.get(key) < 2 || different.contains(key));
+        StringBuilder sb = new StringBuilder();
+        if (!common.isEmpty()) {
+            sb.append("公共参数定义（仅适用于列出该参数的工具）：\n");
+            common.forEach((name, schema) -> sb.append("  ").append(name)
+                    .append('(').append(renderParamDefinition(schema)).append(")\n"));
+        }
+        for (ToolSpec spec : specs) {
+            sb.append("- ").append(spec.name()).append("：").append(spec.description()).append('\n')
+                    .append("  参数：").append(renderParams(spec.inputSchema(), common.keySet())).append('\n');
         }
         return sb.toString();
     }
 
-    /** 紧凑参数说明：只保留参数名、必填标记（*）、枚举取值与一句说明，不下发完整 JSON Schema。 */
-    private static String renderParams(JsonNode schema) {
+    private static String renderParams(JsonNode schema, Set<String> common) {
         JsonNode properties = schema.path("properties");
-        if (!properties.isObject() || properties.isEmpty()) {
-            return "无";
-        }
+        if (properties.isEmpty()) return "无";
         Set<String> required = new HashSet<>();
         schema.path("required").forEach(node -> required.add(node.asText()));
         List<String> params = new ArrayList<>();
         properties.fields().forEachRemaining(field -> {
-            StringBuilder param = new StringBuilder(field.getKey());
-            if (required.contains(field.getKey())) {
-                param.append('*');
-            }
-            List<String> extras = new ArrayList<>();
-            JsonNode enumNode = field.getValue().path("enum");
-            if (enumNode.isArray() && !enumNode.isEmpty()) {
-                List<String> values = new ArrayList<>();
-                enumNode.forEach(value -> values.add(value.asText()));
-                extras.add(String.join("|", values));
-            }
-            String desc = field.getValue().path("description").asText("").trim();
-            if (!desc.isEmpty()) {
-                extras.add(desc);
-            }
-            if (!extras.isEmpty()) {
-                param.append('(').append(String.join(", ", extras)).append(')');
-            }
-            params.add(param.toString());
+            String param = field.getKey() + (required.contains(field.getKey()) ? "*" : "");
+            if (!common.contains(field.getKey())) param += "(" + renderParamDefinition(field.getValue()) + ")";
+            params.add(param);
         });
         return String.join(", ", params);
+    }
+
+    private static String renderParamDefinition(JsonNode field) {
+        List<String> parts = new ArrayList<>();
+        parts.add(field.path("type").asText());
+        if (field.path("enum").isArray()) {
+            List<String> values = new ArrayList<>();
+            field.get("enum").forEach(value -> values.add(value.asText()));
+            parts.add(String.join("|", values));
+        }
+        for (String key : List.of("default", "minimum", "maximum", "pattern")) {
+            if (field.has(key)) parts.add(key + "=" + field.get(key).asText());
+        }
+        String description = field.path("description").asText("").trim();
+        if (!description.isEmpty()) parts.add(description);
+        return String.join(", ", parts);
     }
 
     private static String textOrNull(JsonNode node) {

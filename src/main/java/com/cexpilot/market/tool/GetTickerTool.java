@@ -2,7 +2,6 @@ package com.cexpilot.market.tool;
 
 import com.cexpilot.market.MarketDataService;
 import com.cexpilot.market.model.Ticker;
-import com.cexpilot.runtime.ToolSchemas;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.stereotype.Component;
@@ -17,18 +16,6 @@ public class GetTickerTool extends AbstractMarketTool {
     @Override
     public String name() {
         return "get_ticker";
-    }
-
-    @Override
-    public String description() {
-        return "获取最新成交价、24小时涨跌幅（百分比）、24小时成交量（以基础币计）与成交额（USDT），用于回答「现在价格多少 / 今天涨了多少 / 成交量多大」这类问题";
-    }
-
-    @Override
-    public JsonNode inputSchema() {
-        return ToolSchemas.parse("""
-                {"type": "object", "properties": {%s}, "required": ["exchange", "symbol"]}
-                """.formatted(exchangeSymbolSchema()));
     }
 
     @Override

@@ -4,7 +4,6 @@ import com.cexpilot.market.MarketCalculator;
 import com.cexpilot.market.MarketDataService;
 import com.cexpilot.market.TimeWindow;
 import com.cexpilot.market.model.Candle;
-import com.cexpilot.runtime.ToolSchemas;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -26,21 +25,6 @@ public class GetKlinesTool extends AbstractMarketTool {
     @Override
     public String name() {
         return "get_klines";
-    }
-
-    @Override
-    public String description() {
-        return "获取指定交易所某币种的K线数据，并返回已计算好的窗口涨跌幅、最高价、最低价（涨跌幅单位是百分比，可直接引用，不要自己重新计算）";
-    }
-
-    @Override
-    public JsonNode inputSchema() {
-        return ToolSchemas.parse("""
-                {"type": "object", "properties": {
-                %s,
-                "window": {"type": "string", "enum": ["1h", "4h", "24h"], "description": "时间窗口，默认 1h"}
-                }, "required": ["exchange", "symbol"]}
-                """.formatted(exchangeSymbolSchema()));
     }
 
     @Override
@@ -69,6 +53,8 @@ public class GetKlinesTool extends AbstractMarketTool {
         priceChange.put("low", change.low());
 
         facts.set("freshness", freshness(candles, window));
+        facts.putArray("candles_columns").add("open_time_ms").add("open_price_usdt")
+                .add("high_price_usdt").add("low_price_usdt").add("close_price_usdt").add("volume");
 
         ArrayNode rows = facts.putArray("candles");
         for (Candle c : candles) {

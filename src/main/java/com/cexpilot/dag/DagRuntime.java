@@ -24,15 +24,8 @@ import java.util.Set;
  * DAG 运行时（替代原 ReAct 循环）：一次问答 = DagPlanner 合并调用（领域判断 + intent 归类
  * + 规划）→ DagExecutor 并行执行 → 汇总 evidence → 1 次不带工具的 LLM 调用生成最终回答。
  *
- * 回答输入经过 EvidenceSummarizer 投影：明细序列（candles / history 等）不进 prompt，
- * 只保留已计算的指标；概览类 intent（MARKET_LOOKUP / MARKET_ANALYSIS）走严格模板
- * agent_overview（限 150 字、禁止引申），其余走通用 agent_system。
- *
- * 分支：
- * - 出域：不执行工具、不调 answer LLM，直接用 planner 给的 reply（为空用固定话术）；
- * - 在域且 Plan 合法：执行 DAG 后基于证据回答；
- * - 在域但 Plan 为空（工具不足或 repair 耗尽）：降级为 LLM 基于已有知识直接回答
- *   （user 消息注明局限），evidence 为空数组。
+ * 按计划保留回答所需明细，其余投影为摘要；所有意图使用同一事实约束模板。
+ * 出域直接返回边界话术；无计划时传空 FACTS 和查询缺口，禁止凭记忆降级回答。
  */
 @Component
 public class DagRuntime {
@@ -40,9 +33,6 @@ public class DagRuntime {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Logger log = LoggerFactory.getLogger(DagRuntime.class);
     private static final String ANSWER_PROMPT_NAME = "agent_system";
-    private static final String OVERVIEW_PROMPT_NAME = "agent_overview";
-    private static final Set<String> OVERVIEW_INTENTS = Set.of("MARKET_LOOKUP", "MARKET_ANALYSIS");
-    private static final String PLANNER_PROMPT_NAME = "dag_planner";
     private static final String OUT_OF_DOMAIN_FALLBACK =
             "我只支持 web3 / 加密货币交易领域的问题，暂时无法回答其他类型的问题。";
 
@@ -74,8 +64,9 @@ public class DagRuntime {
         int toolCallCount = 0;
         int steps = 0;
 
-        String userContent;
-        String promptName = ANSWER_PROMPT_NAME;
+        ArrayNode facts = MAPPER.createArrayNode();
+        ObjectNode queryStatus = MAPPER.createObjectNode();
+        if (outcome.reply() != null) queryStatus.put("missing", outcome.reply());
         if (outcome.plan().isPresent()) {
             DagPlan plan = outcome.plan().get();
             DagExecutor.ExecutionOutcome execution = executor.execute(plan, traceId, sink);
@@ -88,24 +79,19 @@ public class DagRuntime {
                 toolCallCount++;
                 appendEvidence(evidence, node.id(), node.tool(), result);
             }
-            ArrayNode facts = EvidenceSummarizer.summarize(evidence);
-            userContent = question + "\n\n<FACTS>\n" + facts.toString()
-                    + "\n</FACTS>\n以上是基于你的问题查询到的真实数据摘要（JSON）。请基于这些事实回答，事实不足的部分明确说明。";
-            if (outcome.intent() != null && OVERVIEW_INTENTS.contains(outcome.intent())) {
-                promptName = OVERVIEW_PROMPT_NAME;
-            }
+            Set<String> keepDetails = plan.nodes().stream().filter(PlanNode::includeDetails)
+                    .map(PlanNode::id).collect(java.util.stream.Collectors.toSet());
+            facts = EvidenceSummarizer.summarize(evidence, keepDetails);
         } else {
-            // 未执行任何工具的降级路径：模型判断工具不足，或规划 repair 耗尽
-            String reason = outcome.lastError() != null
-                    ? "规划失败，降级为直接回答: " + outcome.lastError()
-                    : "现有工具不足以回答，降级为直接回答";
+            String reason = outcome.lastError() != null ? "查询规划失败" : "没有可执行的查询计划";
             log.warn("traceId={} {}", traceId, reason);
             sink.record(TraceEvent.plan(traceId, null, reason));
-            userContent = question + "\n\n（系统未能为这个问题规划数据查询，请基于已有知识谨慎回答，"
-                    + "并明确说明回答未经过实时数据验证、可能存在偏差。）";
+            queryStatus.put("status", reason);
         }
+        String userContent = question + "\n\n<FACTS>\n" + facts + "\n</FACTS>\n<QUERY_STATUS>\n"
+                + queryStatus + "\n</QUERY_STATUS>";
 
-        String systemPrompt = prompts.render(promptName,
+        String systemPrompt = prompts.render(ANSWER_PROMPT_NAME,
                 Map.of("conversation_context", conversationContext == null ? "" : conversationContext));
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(ChatMessage.system(systemPrompt));
@@ -168,6 +154,6 @@ public class DagRuntime {
     }
 
     public String promptVersion() {
-        return prompts.version(PLANNER_PROMPT_NAME);
+        return PromptStore.fingerprint(planner.promptVersion() + prompts.version(ANSWER_PROMPT_NAME));
     }
 }

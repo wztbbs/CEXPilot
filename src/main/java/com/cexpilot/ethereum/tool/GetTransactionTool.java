@@ -4,7 +4,6 @@ import com.cexpilot.ethereum.TxAnalysisService;
 import com.cexpilot.runtime.AgentTool;
 import com.cexpilot.runtime.ToolContext;
 import com.cexpilot.runtime.ToolResult;
-import com.cexpilot.runtime.ToolSchemas;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.stereotype.Component;
 
@@ -24,20 +23,6 @@ public class GetTransactionTool implements AgentTool {
     @Override
     public String name() {
         return "get_transaction";
-    }
-
-    @Override
-    public String description() {
-        return "分析一笔以太坊主网交易：输入交易哈希，返回执行状态、Gas 费用、ERC20 转账、授权（含无限额度风险提示）、Swap 事件与资金流等结构化事实。用户给出 0x 开头的 64 位交易哈希时使用";
-    }
-
-    @Override
-    public JsonNode inputSchema() {
-        return ToolSchemas.parse("""
-                {"type": "object", "properties": {
-                "tx_hash": {"type": "string", "description": "以太坊交易哈希，0x 开头 64 位十六进制"}
-                }, "required": ["tx_hash"]}
-                """);
     }
 
     @Override

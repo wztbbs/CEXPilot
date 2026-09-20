@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS ask_trace (
     error             TEXT          NULL,
     created_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     finished_at       DATETIME      NULL,
-    KEY idx_trace_conversation (conversation_id, created_at)
+    KEY idx_trace_conversation (conversation_id, created_at),
+    KEY idx_trace_created_at (created_at)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
 -- 每次 LLM 调用 / Tool 调用 = 一条 trace_event

@@ -11,8 +11,8 @@
 ## 架构一句话
 
 ```
-用户问题 → AgentRuntime（有界 tool-calling 循环）
-        → ToolRegistry 里的工具（内部是确定性取数+计算，返回结构化事实）
+用户问题 → DagPlanner（领域判断、意图归类、查询规划）
+        → DagExecutor 并行执行 ToolRegistry 中的工具（确定性取数与计算）
         → LLM 基于事实生成答案 → 答案 + Evidence + Trace（MySQL）
 ```
 
@@ -33,7 +33,7 @@
 
 | 包 | 职责 |
 |---|---|
-| `runtime` | AgentRuntime / ToolRegistry / TraceSink（Agent 骨架） |
+| `runtime` / `dag` | YAML 工具注册、规划、参数校验、DAG 执行与事实回答 |
 | `llm` | OpenAI 兼容客户端（function calling） |
 | `market` | Binance / OKX 客户端、数据标准化、确定性计算、8 个行情工具 |
 | `ethereum` | RPC 客户端、ABI 事件解码、交易资金流分析 |
@@ -78,6 +78,10 @@ curl -X POST localhost:8080/api/feedback -H 'Content-Type: application/json' \
   -d '{"traceId": "<trace_id>", "rating": "down", "category": "data_error"}'
 curl localhost:8080/api/trace/<trace_id>
 
+# 按时间窗口批量捞 Trace 排查问题（含每条的 events 和 feedback；窗口最长 24h，beginHour 必须大于 endHour）
+curl 'localhost:8080/api/traces?beginHour=4&endHour=0'     # 最近 4 小时
+curl 'localhost:8080/api/traces?beginHour=12&endHour=8'    # 12 小时前 到 8 小时前
+
 # Smoke Eval（真实调用 LLM 与交易所 API）
 curl -X POST 'localhost:8080/api/eval/run'           # 全部 25 条 case
 curl -X POST 'localhost:8080/api/eval/run?category=market'
@@ -86,5 +90,27 @@ curl -X POST 'localhost:8080/api/eval/run?category=market'
 ## 测试
 
 ```bash
-mvn test   # 44 个纯单元测试，不依赖网络与数据库
+mvn clean test   # 单元与配置集成测试，不调用外部 LLM、交易所或数据库
 ```
+
+## 工具配置与提示词
+
+工具元数据的唯一来源是 `src/main/resources/tools/*.yml`。Java `AgentTool` 只提供绑定名称和执行逻辑，不再包含 description 或参数 schema。
+
+| 配置字段 | 用途 | 是否传给 LLM |
+| --- | --- | --- |
+| tool `name` | 绑定同名 Java 执行器；重复、缺失绑定启动报错 | 是 |
+| tool `enabled` | 控制注册与可执行性；false 时不暴露、不执行 | 不直接传入 |
+| tool `description` | 简短能力及关键限制 | 是 |
+| tool `input_schema` | 参数校验及默认值补齐 | 以精简参数说明传入；相同参数定义合并 |
+| tool `capabilities` / `limitations` / `scope` | 维护文档；需要模型知道的限制须写入 description | 否 |
+| intent `name` / `description` | 意图归类，仅用于统计 | 是 |
+| intent 其余字段 | 文档参考，不限制工具调用或控制回答策略 | 否 |
+
+`input_schema` 当前支持扁平对象：`type`、`properties`、`required`、`additionalProperties`，以及参数的 `type`（string/integer/number/boolean）、`description`、`enum`、`default`、`minimum`、`maximum`、`pattern`。不支持的 schema 字段或无效默认值会在启动时失败，避免配置被静默忽略。规划时校验具体参数；执行时在上游引用解析后再次校验并补齐默认值。默认值只补缺省字段，不替换显式 null。
+
+配置随应用在启动时加载，修改后需要重新构建并重启，不支持热更新。参数键名须与执行器读取的键一致；修改参数契约时仍需同步执行逻辑。提示词版本包含实际渲染的工具、意图、规划约束和回答模板，便于追踪配置变更。
+
+第一次调用使用 `prompts/dag_planner.txt`，只规划必要查询。部分可查询时保留可用计划并说明其余缺口；用户要求明细时，节点设置 `include_details: true`（默认 false），该节点的工具返回明细会保留到回答输入。该标记不改变工具自身的取数及明细条数上限。
+
+第二次调用统一使用 `prompts/agent_system.txt`，仅根据 query 和本轮 FACTS 回答。历史只用于消解指代。无计划时发送空 FACTS 和 QUERY_STATUS，不允许凭已有知识补答；查询失败和单侧数据缺失同样需要明确说明。概览默认省略已知行情工具的明细，未知工具和链上资金流不会按数组长度被自动裁剪。

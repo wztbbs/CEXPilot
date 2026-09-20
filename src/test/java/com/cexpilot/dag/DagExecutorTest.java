@@ -28,7 +28,7 @@ class DagExecutorTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    abstract static class BaseTool implements AgentTool {
+    abstract static class BaseTool implements com.cexpilot.runtime.TestTools.TestTool {
         @Override
         public String description() {
             return "测试工具";
@@ -146,7 +146,7 @@ class DagExecutorTest {
     @Test
     void sameLayerRunsInParallel() {
         CountDownLatch rendezvous = new CountDownLatch(2);
-        DagExecutor executor = new DagExecutor(new ToolRegistry(List.of(
+        DagExecutor executor = new DagExecutor(com.cexpilot.runtime.TestTools.registry(List.of(
                 new LatchTool("tool_x", rendezvous), new LatchTool("tool_y", rendezvous))), config());
         DagPlan plan = plan("""
                 {"nodes": [
@@ -170,7 +170,7 @@ class DagExecutorTest {
         RecordingTool upstream = new RecordingTool("upstream_tool", order);
         RecordingTool downstream = new RecordingTool("downstream_tool", order);
         ListSink sink = new ListSink();
-        DagExecutor executor = new DagExecutor(new ToolRegistry(List.of(upstream, downstream)), config());
+        DagExecutor executor = new DagExecutor(com.cexpilot.runtime.TestTools.registry(List.of(upstream, downstream)), config());
         DagPlan plan = plan("""
                 {"nodes": [
                   {"id": "n1", "tool": "upstream_tool", "args": {}, "depends_on": []},
@@ -197,7 +197,7 @@ class DagExecutorTest {
         RecordingTool downstream = new RecordingTool("downstream_tool", order);
         ListSink sink = new ListSink();
         DagExecutor executor = new DagExecutor(
-                new ToolRegistry(List.of(new FailingTool(), downstream)), config());
+                com.cexpilot.runtime.TestTools.registry(List.of(new FailingTool(), downstream)), config());
         DagPlan plan = plan("""
                 {"nodes": [
                   {"id": "n1", "tool": "failing_tool", "args": {}, "depends_on": []},
@@ -224,7 +224,7 @@ class DagExecutorTest {
         RecordingTool fast = new RecordingTool("fast_tool", order);
         ListSink sink = new ListSink();
         DagExecutor executor = new DagExecutor(
-                new ToolRegistry(List.of(new SlowTool(), fast)), config);
+                com.cexpilot.runtime.TestTools.registry(List.of(new SlowTool(), fast)), config);
         DagPlan plan = plan("""
                 {"nodes": [
                   {"id": "n1", "tool": "slow_tool", "args": {}, "depends_on": []},
@@ -241,5 +241,47 @@ class DagExecutorTest {
         // 同层另一个节点不受影响
         assertTrue(outcome.context().get("n2").ok());
         assertEquals(List.of("fast_tool"), order);
+    }
+    @Test
+    void yamlDefaultsAndResolvedArgumentValidationReachExecutor() throws Exception {
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        AgentTool upstream = new AgentTool() {
+            public String name() { return "upstream"; }
+            public ToolResult execute(JsonNode args, ToolContext ctx) {
+                return ToolResult.success(MAPPER.createObjectNode().put("limit", 100));
+            }
+        };
+        AgentTool downstream = new AgentTool() {
+            public String name() { return "downstream"; }
+            public ToolResult execute(JsonNode args, ToolContext ctx) {
+                calls.incrementAndGet();
+                return ToolResult.success(args);
+            }
+        };
+        var empty = MAPPER.readTree("{\"type\":\"object\",\"properties\":{}}");
+        var bounded = MAPPER.readTree("""
+                {"type":"object","properties":{"limit":{"type":"integer","default":3,"maximum":5}}}
+                """);
+        ToolRegistry registry = new ToolRegistry(List.of(upstream, downstream), List.of(
+                new com.cexpilot.runtime.ToolDefinition("upstream", true, "上游", empty),
+                new com.cexpilot.runtime.ToolDefinition("downstream", true, "下游", bounded)));
+        DagPlan plan = DagPlan.fromJson(MAPPER.readTree("""
+                {"nodes":[
+                  {"id":"n1","tool":"upstream","args":{}},
+                  {"id":"n2","tool":"downstream","args":{}},
+                  {"id":"n3","tool":"downstream","args":{"limit":"{{n1.data.limit}}"},"depends_on":["n1"]}
+                ]}
+                """));
+        assertTrue(new PlanValidator(registry, config()).validate(plan, null, 8).isEmpty());
+        DagExecutor executor = new DagExecutor(registry, config());
+        try {
+            var execution = executor.execute(plan, "defaults", new ListSink());
+            assertEquals(3, execution.context().get("n2").data().path("limit").asInt());
+            assertFalse(execution.context().get("n3").ok());
+            assertTrue(execution.context().get("n3").error().contains("maximum"));
+            assertEquals(1, calls.get());
+        } finally {
+            executor.shutdown();
+        }
     }
 }

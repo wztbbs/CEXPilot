@@ -46,7 +46,7 @@ public abstract class AbstractMarketTool implements AgentTool {
     }
 
     protected Exchange parseExchange(JsonNode args) {
-        return Exchange.parse(args.path("exchange").asText("okx"));
+        return Exchange.parse(args.path("exchange").asText());
     }
 
     protected String parseBase(JsonNode args) {
@@ -54,12 +54,7 @@ public abstract class AbstractMarketTool implements AgentTool {
     }
 
     protected TimeWindow parseWindow(JsonNode args) {
-        return TimeWindow.parse(args.path("window").asText("1h"));
+        return TimeWindow.parse(args.path("window").asText());
     }
 
-    protected static String exchangeSymbolSchema() {
-        return """
-                "exchange": {"type": "string", "enum": ["binance", "okx"], "description": "交易所；用户未明确指定时使用 okx"},
-                "symbol": {"type": "string", "description": "币种基础代码，如 BTC / ETH"}""";
-    }
 }

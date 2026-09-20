@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
- * 工具入参 JSON Schema 的便捷构造：直接写 JSON 字符串解析成 JsonNode。
+ * 仅供测试构造合成 schema，生产参数定义来自 YAML。
  */
 public final class ToolSchemas {
 

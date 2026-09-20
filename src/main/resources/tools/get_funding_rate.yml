@@ -1,8 +1,7 @@
 name: get_funding_rate
 enabled: true
-description: >
-  获取永续合约资金费率：当前费率、下次结算时间、最近历史费率序列与已计算的趋势
-  （rising/falling/flat）。费率为正说明多头付费给空头，为负则相反
+description: 查询当前资金费率、下次结算时间、最近10期费率及趋势。
+# capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
 capabilities:
   - 查询当前资金费率（同时给出小数与百分比两种形式）与下次结算时间
   - 给出最近 10 期历史费率序列与已计算的趋势（rising / falling / flat）
@@ -14,12 +13,14 @@ scope:
   market_type: perpetual
 input_schema:
   type: object
+  additionalProperties: false
   required: [exchange, symbol]
   properties:
     exchange:
       type: string
       enum: [binance, okx]
+      default: okx
       description: 交易所
     symbol:
       type: string
-      description: 币种基础代码，如 BTC / ETH
+      description: 基础币代码，如 BTC / ETH

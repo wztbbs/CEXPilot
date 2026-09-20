@@ -3,7 +3,6 @@ package com.cexpilot.market.tool;
 import com.cexpilot.market.MarketCalculator;
 import com.cexpilot.market.MarketDataService;
 import com.cexpilot.market.model.Trade;
-import com.cexpilot.runtime.ToolSchemas;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -29,25 +28,10 @@ public class GetRecentTradesTool extends AbstractMarketTool {
     }
 
     @Override
-    public String description() {
-        return "获取最近逐笔成交记录，并返回已计算的主动买入占比（buy_volume_ratio 接近 1 说明买方主动性强）。用于判断短期多空力量";
-    }
-
-    @Override
-    public JsonNode inputSchema() {
-        return ToolSchemas.parse("""
-                {"type": "object", "properties": {
-                %s,
-                "limit": {"type": "integer", "description": "成交条数，默认 50，最大 100"}
-                }, "required": ["exchange", "symbol"]}
-                """.formatted(exchangeSymbolSchema()));
-    }
-
-    @Override
     protected JsonNode doExecute(JsonNode args) {
         var exchange = parseExchange(args);
         String base = parseBase(args);
-        int limit = args.path("limit").asInt(50);
+        int limit = args.path("limit").intValue();
         List<Trade> trades = market.recentTrades(exchange, base, limit);
 
         ObjectNode facts = MAPPER.createObjectNode();
@@ -63,6 +47,9 @@ public class GetRecentTradesTool extends AbstractMarketTool {
             }
         }
 
+        facts.put("sample_basis", "最近N笔成交，不代表固定时间窗口；统计基于全部样本，明细最多20笔");
+        facts.putArray("recent_trades_columns").add("time_ms").add("price_usdt")
+                .add("quantity").add("aggressor_side");
         ArrayNode rows = facts.putArray("recent_trades");
         trades.stream().limit(OUTPUT_TRADES).forEach(trade -> {
             ArrayNode row = rows.addArray();

@@ -2,7 +2,6 @@ package com.cexpilot.market.tool;
 
 import com.cexpilot.market.MarketDataService;
 import com.cexpilot.market.model.MarkPrice;
-import com.cexpilot.runtime.ToolSchemas;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.stereotype.Component;
@@ -22,18 +21,6 @@ public class GetMarkPriceTool extends AbstractMarketTool {
     @Override
     public String name() {
         return "get_mark_price";
-    }
-
-    @Override
-    public String description() {
-        return "获取永续合约标记价格与现货指数价格，以及已计算的基差（标记价-指数价）。用于判断合约相对现货的溢价程度";
-    }
-
-    @Override
-    public JsonNode inputSchema() {
-        return ToolSchemas.parse("""
-                {"type": "object", "properties": {%s}, "required": ["exchange", "symbol"]}
-                """.formatted(exchangeSymbolSchema()));
     }
 
     @Override

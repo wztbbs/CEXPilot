@@ -1,9 +1,7 @@
 name: get_transaction
 enabled: true
-description: >
-  分析一笔以太坊主网交易：输入交易哈希，返回执行状态、Gas 费用、ERC20 转账、
-  授权（含无限额度风险提示）、Swap 事件与资金流等结构化事实。
-  用户给出 0x 开头的 64 位交易哈希时使用
+description: 分析以太坊主网单笔交易的状态、Gas、ERC20转账、授权风险、Swap事件及资金流；不支持其他链。
+# capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
 capabilities:
   - 分析以太坊主网单笔交易的执行状态与 Gas 费用
   - 识别 ERC20 转账、授权（含无限额度风险提示）、Swap 事件与资金流向
@@ -14,8 +12,10 @@ scope:
   chain: ethereum_mainnet
 input_schema:
   type: object
+  additionalProperties: false
   required: [tx_hash]
   properties:
     tx_hash:
       type: string
-      description: 以太坊交易哈希，0x 开头 64 位十六进制
+      pattern: '^0x[0-9a-fA-F]{64}$'
+      description: 完整以太坊交易哈希（0x加64位十六进制）

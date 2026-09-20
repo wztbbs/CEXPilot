@@ -26,7 +26,7 @@ public record DagPlan(List<PlanNode> nodes) {
      */
     public static DagPlan fromJson(JsonNode json) {
         JsonNode nodesNode = json == null ? null : json.path("nodes");
-        if (!nodesNode.isArray()) {
+        if (nodesNode == null || !nodesNode.isArray()) {
             throw new IllegalArgumentException("plan 缺少 nodes 数组");
         }
         List<PlanNode> nodes = new ArrayList<>();
@@ -43,7 +43,10 @@ public record DagPlan(List<PlanNode> nodes) {
                     }
                 }
             }
-            nodes.add(new PlanNode(id, tool, args, dependsOn));
+            if (node.has("include_details") && !node.get("include_details").isBoolean()) {
+                throw new IllegalArgumentException("include_details 必须是布尔值");
+            }
+            nodes.add(new PlanNode(id, tool, args, dependsOn, node.path("include_details").asBoolean(false)));
         }
         return new DagPlan(nodes);
     }
@@ -66,6 +69,7 @@ public record DagPlan(List<PlanNode> nodes) {
             n.put("id", node.id());
             n.put("tool", node.tool());
             n.set("args", node.args());
+            if (node.includeDetails()) n.put("include_details", true);
             var deps = n.putArray("depends_on");
             node.dependsOn().forEach(deps::add);
         }

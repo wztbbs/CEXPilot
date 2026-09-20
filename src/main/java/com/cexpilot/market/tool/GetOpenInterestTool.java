@@ -3,7 +3,6 @@ package com.cexpilot.market.tool;
 import com.cexpilot.market.MarketCalculator;
 import com.cexpilot.market.MarketDataService;
 import com.cexpilot.market.model.OpenInterestInfo;
-import com.cexpilot.runtime.ToolSchemas;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -25,18 +24,6 @@ public class GetOpenInterestTool extends AbstractMarketTool {
     }
 
     @Override
-    public String description() {
-        return "获取永续合约持仓量（Open Interest）：当前持仓量（以基础币计）、近24小时历史序列与已计算的24小时变化百分比";
-    }
-
-    @Override
-    public JsonNode inputSchema() {
-        return ToolSchemas.parse("""
-                {"type": "object", "properties": {%s}, "required": ["exchange", "symbol"]}
-                """.formatted(exchangeSymbolSchema()));
-    }
-
-    @Override
     protected JsonNode doExecute(JsonNode args) {
         var exchange = parseExchange(args);
         String base = parseBase(args);
@@ -47,6 +34,9 @@ public class GetOpenInterestTool extends AbstractMarketTool {
         facts.put("symbol", base);
         facts.put("open_interest", info.currentOi());
         facts.put("unit", info.unit());
+        facts.put("history_scope", exchange == com.cexpilot.market.Exchange.OKX
+                ? "该币种全市场SWAP汇总；不同于当前值的单合约口径" : "该永续合约");
+        facts.putArray("history_columns").add("timestamp_ms").add("open_interest");
         var changePct = MarketCalculator.oiChangePct(info.history());
         if (changePct != null) {
             facts.put("oi_change_24h_pct", changePct);

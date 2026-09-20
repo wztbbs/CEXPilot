@@ -9,7 +9,6 @@ import com.cexpilot.market.model.Candle;
 import com.cexpilot.runtime.AgentTool;
 import com.cexpilot.runtime.ToolContext;
 import com.cexpilot.runtime.ToolResult;
-import com.cexpilot.runtime.ToolSchemas;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -42,25 +41,10 @@ public class CompareExchangesTool implements AgentTool {
     }
 
     @Override
-    public String description() {
-        return "对比 Binance 与 OKX 同一币种在同一时间窗口内的价格变化，返回两所各自的涨跌幅与差异是否显著（significant=true 表示两所走势出现明显背离）。用于回答两所走势差异类问题";
-    }
-
-    @Override
-    public JsonNode inputSchema() {
-        return ToolSchemas.parse("""
-                {"type": "object", "properties": {
-                "symbol": {"type": "string", "description": "币种基础代码，如 BTC / ETH"},
-                "window": {"type": "string", "enum": ["1h", "4h", "24h"], "description": "时间窗口，默认 1h"}
-                }, "required": ["symbol"]}
-                """);
-    }
-
-    @Override
     public ToolResult execute(JsonNode args, ToolContext ctx) {
         try {
             String base = SymbolMapper.normalize(args.path("symbol").asText(null));
-            TimeWindow window = TimeWindow.parse(args.path("window").asText("1h"));
+            TimeWindow window = TimeWindow.parse(args.path("window").asText());
 
             CompletableFuture<ExchangeResult> binanceFuture = CompletableFuture.supplyAsync(
                     () -> fetch(Exchange.BINANCE, base, window));

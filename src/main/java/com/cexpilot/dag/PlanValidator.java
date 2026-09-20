@@ -1,9 +1,8 @@
 package com.cexpilot.dag;
 
 import com.cexpilot.config.DagConfig;
-import com.cexpilot.runtime.AgentTool;
 import com.cexpilot.runtime.ToolRegistry;
-import com.fasterxml.jackson.databind.JsonNode;
+import com.cexpilot.runtime.ToolArguments;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayDeque;
@@ -19,7 +18,7 @@ import java.util.Set;
  * Plan 确定性校验（不调 LLM），返回全部错误明细供 DagPlanner 喂回 LLM 修复：
  * - 结构：id 非空唯一、depends_on 引用存在、三色 DFS 判环；
  * - 供给：tool 已注册且在 allowedTools 白名单内；
- * - 入参：满足 inputSchema 的 required（值为具体值或 {{ref}} 均可，类型不做完整校验）；
+ * - 入参：满足 inputSchema 的 required（值为具体值或 {{ref}} 均可，类型、枚举、范围等按 YAML 校验）；
  * - 规模：节点数 ≤ min(maxNodes, maxToolCalls)、拓扑深度 ≤ maxDepth；
  * - 引用闭合：每个 {{ref}} 的目标节点存在且在（传递）依赖闭包内。
  */
@@ -36,7 +35,7 @@ public class PlanValidator {
 
     /**
      * @param allowedTools      本轮允许使用的工具名子集；null 表示全量工具
-     * @param maxToolCalls      本轮工具调用上限（intent 覆盖值或全局配置）
+     * @param maxToolCalls      本轮工具调用上限
      * @return 错误明细列表；空列表表示校验通过
      */
     public List<String> validate(DagPlan plan, Set<String> allowedTools, int maxToolCalls) {
@@ -65,7 +64,7 @@ public class PlanValidator {
 
         for (PlanNode node : nodes) {
             validateTool(node, allowedTools, errors);
-            validateRequiredArgs(node, errors);
+            validateArgs(node, errors);
             for (String dep : node.dependsOn()) {
                 if (!byId.containsKey(dep)) {
                     errors.add(node.id() + " 的 depends_on 引用了不存在的节点: " + dep);
@@ -93,21 +92,11 @@ public class PlanValidator {
         }
     }
 
-    private void validateRequiredArgs(PlanNode node, List<String> errors) {
-        AgentTool tool = node.tool() == null ? null : registry.get(node.tool());
-        if (tool == null) {
-            return;
-        }
-        JsonNode required = tool.inputSchema().path("required");
-        if (!required.isArray()) {
-            return;
-        }
-        JsonNode args = node.args();
-        for (JsonNode field : required) {
-            String name = field.asText();
-            if (!args.has(name) || args.get(name).isNull()) {
-                errors.add(node.id() + " 缺少工具 " + node.tool() + " 的必填参数: " + name);
-            }
+    private void validateArgs(PlanNode node, List<String> errors) {
+        var spec = registry.spec(node.tool());
+        if (spec == null) return;
+        for (String error : ToolArguments.validate(node.args(), spec.inputSchema(), true)) {
+            errors.add(node.id() + " 工具 " + node.tool() + ": " + error);
         }
     }
 

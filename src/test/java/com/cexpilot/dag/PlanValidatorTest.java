@@ -22,7 +22,7 @@ class PlanValidatorTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    static class StubTool implements AgentTool {
+    static class StubTool implements com.cexpilot.runtime.TestTools.TestTool {
         private final String name;
         private final List<String> required;
 
@@ -57,7 +57,7 @@ class PlanValidatorTest {
     }
 
     private static PlanValidator validator(DagConfig config) {
-        ToolRegistry registry = new ToolRegistry(List.of(
+        ToolRegistry registry = com.cexpilot.runtime.TestTools.registry(List.of(
                 new StubTool("tool_a", List.of("symbol")),
                 new StubTool("tool_b", List.of())));
         return new PlanValidator(registry, config);

@@ -11,7 +11,12 @@ import java.util.List;
 public record PlanNode(String id,
                        String tool,
                        JsonNode args,
-                       List<String> dependsOn) {
+                       List<String> dependsOn,
+                       boolean includeDetails) {
+
+    public PlanNode(String id, String tool, JsonNode args, List<String> dependsOn) {
+        this(id, tool, args, dependsOn, false);
+    }
 
     public PlanNode {
         dependsOn = dependsOn == null ? List.of() : List.copyOf(dependsOn);

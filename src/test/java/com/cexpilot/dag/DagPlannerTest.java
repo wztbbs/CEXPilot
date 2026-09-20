@@ -57,7 +57,7 @@ class DagPlannerTest {
         }
     }
 
-    static class StubTool implements AgentTool {
+    static class StubTool implements com.cexpilot.runtime.TestTools.TestTool {
         @Override
         public String name() {
             return "echo_tool";
@@ -89,7 +89,7 @@ class DagPlannerTest {
     }
 
     private static DagPlanner planner(LlmClient llm, DagConfig dagConfig) {
-        ToolRegistry registry = new ToolRegistry(List.of(new StubTool()));
+        ToolRegistry registry = com.cexpilot.runtime.TestTools.registry(List.of(new StubTool()));
         return new DagPlanner(llm, registry, new IntentRegistry(new DefaultResourceLoader()),
                 new LlmConfig(), dagConfig,
                 new PromptStore(new DefaultResourceLoader()),
@@ -216,7 +216,7 @@ class DagPlannerTest {
                         """);
             }
         };
-        ToolRegistry registry = new ToolRegistry(List.of(schemaTool));
+        ToolRegistry registry = com.cexpilot.runtime.TestTools.registry(List.of(schemaTool));
         FakeLlmClient llm = new FakeLlmClient(respond(VALID_ENVELOPE));
         DagPlanner planner = new DagPlanner(llm, registry,
                 new IntentRegistry(new DefaultResourceLoader()), new LlmConfig(), new DagConfig(),
@@ -228,8 +228,8 @@ class DagPlannerTest {
         String system = llm.seenMessages.get(0).get(0).content();
         // 紧凑格式：参数名 + 必填 * + 枚举 + 一句说明
         assertTrue(system.contains("echo_tool：测试工具"));
-        assertTrue(system.contains("symbol*(币种基础代码)"));
-        assertTrue(system.contains("window(1h|4h|24h, 时间窗口，默认 1h)"));
+        assertTrue(system.contains("symbol*(string, 币种基础代码)"));
+        assertTrue(system.contains("window(string, 1h|4h|24h, 时间窗口，默认 1h)"));
         // 不下发完整 JSON Schema
         assertFalse(system.contains("\"type\": \"object\""));
         assertFalse(system.contains("properties"));

@@ -1,8 +1,7 @@
 name: get_recent_trades
 enabled: true
-description: >
-  获取最近逐笔成交记录，并返回已计算的主动买入占比
-  （buy_volume_ratio 接近 1 说明买方主动性强）。用于判断短期多空力量
+description: 查询最近N笔成交的统计与主动买入量占比，明细最多20笔；按笔数采样，不代表固定时间窗口。
+# capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
 capabilities:
   - 获取最近逐笔成交记录（时间、价格、数量、主动方向）
   - 给出已计算的成交笔数、主动买入笔数与主动买入量占比
@@ -14,15 +13,20 @@ scope:
   market_type: perpetual
 input_schema:
   type: object
+  additionalProperties: false
   required: [exchange, symbol]
   properties:
     exchange:
       type: string
       enum: [binance, okx]
+      default: okx
       description: 交易所
     symbol:
       type: string
-      description: 币种基础代码，如 BTC / ETH
+      description: 基础币代码，如 BTC / ETH
     limit:
       type: integer
-      description: 成交条数，默认 50，最大 100
+      default: 50
+      minimum: 10
+      maximum: 100
+      description: 请求成交笔数

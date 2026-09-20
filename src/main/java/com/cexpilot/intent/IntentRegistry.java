@@ -8,7 +8,6 @@ import org.springframework.stereotype.Component;
 import org.yaml.snakeyaml.Yaml;
 
 import java.io.InputStream;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -55,22 +54,7 @@ public class IntentRegistry {
         if (name == null || name.isBlank()) {
             throw new IllegalStateException("intent 缺少 name: " + resource.getFilename());
         }
-        List<String> allowedTools = new ArrayList<>();
-        Integer maxToolCalls = null;
-        Object planner = doc.get("planner");
-        if (planner instanceof Map<?, ?> plannerMap) {
-            Object tools = plannerMap.get("allowed_tools");
-            if (tools instanceof List<?> toolList) {
-                for (Object tool : toolList) {
-                    allowedTools.add(String.valueOf(tool));
-                }
-            }
-            Object maxCalls = plannerMap.get("max_tool_calls");
-            if (maxCalls instanceof Number number) {
-                maxToolCalls = number.intValue();
-            }
-        }
-        return new IntentDefinition(name, description, List.copyOf(allowedTools), maxToolCalls);
+        return new IntentDefinition(name, description);
     }
 
     private static String asString(Object value) {

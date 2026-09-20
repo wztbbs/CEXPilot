@@ -6,6 +6,10 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -65,5 +69,34 @@ public class TraceRepository {
     public List<Map<String, Object>> findEvents(String traceId) {
         return jdbc.queryForList(
                 "SELECT * FROM trace_event WHERE trace_id = ? ORDER BY seq", traceId);
+    }
+
+    public List<Map<String, Object>> findTracesBetween(LocalDateTime begin, LocalDateTime end) {
+        return jdbc.queryForList(
+                "SELECT * FROM ask_trace WHERE created_at BETWEEN ? AND ? ORDER BY created_at DESC",
+                Timestamp.valueOf(begin), Timestamp.valueOf(end));
+    }
+
+    public Map<String, List<Map<String, Object>>> findEventsByTraceIds(List<String> traceIds) {
+        return groupByTraceId(
+                "SELECT * FROM trace_event WHERE trace_id IN (%s) ORDER BY trace_id, seq", traceIds);
+    }
+
+    public Map<String, List<Map<String, Object>>> findFeedbackByTraceIds(List<String> traceIds) {
+        return groupByTraceId(
+                "SELECT * FROM feedback WHERE trace_id IN (%s) ORDER BY trace_id, id", traceIds);
+    }
+
+    private Map<String, List<Map<String, Object>>> groupByTraceId(String sql, List<String> traceIds) {
+        if (traceIds.isEmpty()) {
+            return Map.of();
+        }
+        String placeholders = String.join(", ", Collections.nCopies(traceIds.size(), "?"));
+        List<Map<String, Object>> rows = jdbc.queryForList(String.format(sql, placeholders), traceIds.toArray());
+        Map<String, List<Map<String, Object>>> grouped = new LinkedHashMap<>();
+        for (Map<String, Object> row : rows) {
+            grouped.computeIfAbsent((String) row.get("trace_id"), k -> new ArrayList<>()).add(row);
+        }
+        return grouped;
     }
 }

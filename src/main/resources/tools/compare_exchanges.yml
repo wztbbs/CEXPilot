@@ -1,8 +1,7 @@
 name: compare_exchanges
 enabled: true
-description: >
-  对比 Binance 与 OKX 同一币种在同一时间窗口内的价格变化，返回两所各自的涨跌幅
-  与差异是否显著（significant=true 表示两所走势出现明显背离）。用于回答两所走势差异类问题
+description: 对比 Binance 与 OKX 同币种、同窗口的涨跌幅及背离指标；不比较资金费率或持仓量。
+# capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
 capabilities:
   - 并行对比 Binance 与 OKX 同一币种在同一窗口的价格涨跌幅
   - 给出两所涨跌幅差值与是否显著背离（阈值 0.3%）
@@ -15,12 +14,14 @@ scope:
   market_type: perpetual
 input_schema:
   type: object
+  additionalProperties: false
   required: [symbol]
   properties:
     symbol:
       type: string
-      description: 币种基础代码，如 BTC / ETH
+      description: 基础币代码，如 BTC / ETH
     window:
       type: string
       enum: [1h, 4h, 24h]
-      description: 时间窗口，默认 1h
+      default: 1h
+      description: 从当前向前的时间窗口

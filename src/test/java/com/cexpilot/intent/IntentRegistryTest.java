@@ -21,10 +21,7 @@ class IntentRegistryTest {
 
         assertNotNull(intent);
         assertTrue(intent.description().contains("行情"));
-        assertTrue(intent.allowedTools().contains("get_ticker"));
-        assertTrue(intent.allowedTools().contains("get_klines"));
-        assertTrue(intent.allowedTools().contains("get_funding_rate"));
-        assertEquals(2, intent.maxToolCalls());
+        assertEquals("MARKET_LOOKUP", intent.name());
     }
 
     @Test

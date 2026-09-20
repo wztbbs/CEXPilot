@@ -95,7 +95,7 @@ public class DagExecutor {
         JsonNode resolvedArgs = null;
         ToolResult result;
         try {
-            resolvedArgs = ReferenceResolver.resolve(node.args(), ctx);
+            resolvedArgs = registry.prepareArguments(node.tool(), ReferenceResolver.resolve(node.args(), ctx));
             AgentTool tool = registry.get(node.tool());
             result = tool.execute(resolvedArgs, new ToolContext(traceId, null));
         } catch (Exception e) {

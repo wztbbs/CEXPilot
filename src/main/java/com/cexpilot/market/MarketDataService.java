@@ -69,18 +69,16 @@ public class MarketDataService {
     }
 
     public OrderBook orderBook(Exchange exchange, String base, int depth) {
-        int boundedDepth = Math.max(5, Math.min(depth, 50));
         return switch (exchange) {
-            case BINANCE -> binance.depth(SymbolMapper.binanceSymbol(base), boundedDepth);
-            case OKX -> okx.orderBook(SymbolMapper.okxInstId(base), boundedDepth);
+            case BINANCE -> binance.depth(SymbolMapper.binanceSymbol(base), depth);
+            case OKX -> okx.orderBook(SymbolMapper.okxInstId(base), depth);
         };
     }
 
     public List<Trade> recentTrades(Exchange exchange, String base, int limit) {
-        int boundedLimit = Math.max(10, Math.min(limit, 100));
         return switch (exchange) {
-            case BINANCE -> binance.trades(SymbolMapper.binanceSymbol(base), boundedLimit);
-            case OKX -> okx.trades(SymbolMapper.okxInstId(base), boundedLimit);
+            case BINANCE -> binance.trades(SymbolMapper.binanceSymbol(base), limit);
+            case OKX -> okx.trades(SymbolMapper.okxInstId(base), limit);
         };
     }
 

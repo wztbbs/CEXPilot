@@ -11,10 +11,5 @@ public interface AgentTool {
 
     String name();
 
-    String description();
-
-    /** JSON Schema 对象，用于 function calling 的 parameters 字段。 */
-    JsonNode inputSchema();
-
     ToolResult execute(JsonNode args, ToolContext ctx);
 }

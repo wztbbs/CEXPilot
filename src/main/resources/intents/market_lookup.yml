@@ -1,10 +1,8 @@
 name: MARKET_LOOKUP
 
-description: >
-  查询明确的行情事实，例如当前价格、最近涨跌幅、资金费率、持仓量、成交量。
-  特点是问题直接对应某个指标的当前值或既定口径的统计值，
-  一次工具调用即可回答，不需要多指标交叉分析。
+description: 查询价格、涨跌幅、成交量、资金费率或持仓量等行情事实，不要求解释原因。
 
+# 以下字段仅用于维护文档，不注入提示词、不参与运行时策略。
 scope:
   exchanges: [binance, okx]
   market_type: perpetual
@@ -37,11 +35,9 @@ planner:
     - get_funding_rate
     - get_open_interest
     - get_mark_price
-  # 事实查询一次调用即可回答，步数上限从全局 max-steps 收紧
   max_tool_calls: 2
 
 evidence_policy:
-  # 消费者：prompt 模板 + eval 的 GroundingChecker
   minimum:
     - 至少一个工具返回的结构化事实
   rules:
@@ -55,7 +51,7 @@ answer_policy:
 
 eval:
   expected_behavior:
-    - "一次工具调用即可回答，不多调"
+    - "只查询回答问题所需的事实；多币种可多次调用"
     - "直接引用工具返回的数值，不自行换算"
   forbidden_behavior:
     - "在工具未返回数据时报出具体数值"

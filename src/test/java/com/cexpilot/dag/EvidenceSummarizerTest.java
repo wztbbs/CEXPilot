@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * EvidenceSummarizer：已登记工具的明细字段被省略并标注 note；未登记工具按数组长度兜底；
+ * EvidenceSummarizer：已登记工具的明细字段被省略并标注 note；未登记工具保留明细；
  * 失败条目原样透传。
  */
 class EvidenceSummarizerTest {
@@ -61,7 +61,7 @@ class EvidenceSummarizerTest {
     }
 
     @Test
-    void unknownToolFallsBackToArraySize() {
+    void unknownToolKeepsLargeArrays() {
         ObjectNode data = MAPPER.createObjectNode();
         data.put("value", 1);
         data.putArray("small_list").add(1).add(2);
@@ -74,8 +74,8 @@ class EvidenceSummarizerTest {
 
         JsonNode projectedData = summary.get(0).get("data");
         assertTrue(projectedData.has("small_list"));
-        assertFalse(projectedData.has("big_list"));
-        assertTrue(summary.get(0).get("note").asText().contains("big_list(50条)"));
+        assertTrue(projectedData.has("big_list"));
+        assertFalse(summary.get(0).has("note"));
     }
 
     @Test
@@ -97,5 +97,19 @@ class EvidenceSummarizerTest {
         EvidenceSummarizer.summarize(evidence);
 
         assertTrue(evidence.get(0).get("data").has("candles"));
+    }
+    @Test
+    void requestedDetailsAreKeptOnlyForSelectedNode() {
+        ObjectNode data = MAPPER.createObjectNode();
+        data.putArray("recent_rates").add(0.0001).add(0.0002);
+        data.putArray("recent_rates_columns").add("rate_fraction");
+        ObjectNode first = entry("get_funding_rate", data);
+        ObjectNode second = entry("get_funding_rate", data);
+        second.put("node_id", "n2");
+        ArrayNode result = EvidenceSummarizer.summarize(evidenceOf(first, second), java.util.Set.of("n1"));
+        assertEquals(2, result.get(0).path("data").path("recent_rates").size());
+        assertFalse(result.get(1).path("data").has("recent_rates"));
+        assertTrue(result.get(0).path("data").has("recent_rates_columns"));
+        assertFalse(result.get(1).path("data").has("recent_rates_columns"));
     }
 }

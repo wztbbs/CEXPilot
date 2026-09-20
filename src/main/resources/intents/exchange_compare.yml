@@ -1,10 +1,8 @@
 name: EXCHANGE_COMPARE
 
-description: >
-  跨交易所对比，例如同一币种在 Binance 与 OKX 的价格、资金费率、
-  持仓量差异，或两所走势是否背离。特点是问题显式或隐式要求
-  同一指标的跨所对照。
+description: 对比同一币种在不同交易所的行情指标或走势。
 
+# 以下字段仅用于维护文档，不注入提示词、不参与运行时策略。
 scope:
   exchanges: [binance, okx]
   market_type: perpetual

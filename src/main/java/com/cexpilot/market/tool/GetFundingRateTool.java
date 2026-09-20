@@ -3,7 +3,6 @@ package com.cexpilot.market.tool;
 import com.cexpilot.market.MarketCalculator;
 import com.cexpilot.market.MarketDataService;
 import com.cexpilot.market.model.FundingInfo;
-import com.cexpilot.runtime.ToolSchemas;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -28,18 +27,6 @@ public class GetFundingRateTool extends AbstractMarketTool {
     }
 
     @Override
-    public String description() {
-        return "获取永续合约资金费率：当前费率、下次结算时间、最近历史费率序列与已计算的趋势（rising/falling/flat）。费率为正说明多头付费给空头，为负则相反";
-    }
-
-    @Override
-    public JsonNode inputSchema() {
-        return ToolSchemas.parse("""
-                {"type": "object", "properties": {%s}, "required": ["exchange", "symbol"]}
-                """.formatted(exchangeSymbolSchema()));
-    }
-
-    @Override
     protected JsonNode doExecute(JsonNode args) {
         var exchange = parseExchange(args);
         String base = parseBase(args);
@@ -55,6 +42,9 @@ public class GetFundingRateTool extends AbstractMarketTool {
         }
         facts.put("next_funding_time", info.nextFundingTime());
         facts.put("trend", MarketCalculator.fundingTrend(info.recentRates()));
+        facts.putObject("units").put("current_funding_rate", "fraction")
+                .put("current_funding_rate_pct", "%").put("recent_rates", "fraction")
+                .put("next_funding_time", "unix_ms");
 
         ArrayNode rates = facts.putArray("recent_rates");
         for (BigDecimal rate : info.recentRates()) {

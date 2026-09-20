@@ -3,7 +3,6 @@ package com.cexpilot.market.tool;
 import com.cexpilot.market.MarketCalculator;
 import com.cexpilot.market.MarketDataService;
 import com.cexpilot.market.model.OrderBook;
-import com.cexpilot.runtime.ToolSchemas;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -28,25 +27,10 @@ public class GetOrderbookTool extends AbstractMarketTool {
     }
 
     @Override
-    public String description() {
-        return "获取当前盘口快照：买卖各档位价格与挂单量、已计算的买卖盘不平衡度（>1买盘厚，<1卖盘厚）与买卖价差。只能反映当前状态，不能解释过去的价格变化";
-    }
-
-    @Override
-    public JsonNode inputSchema() {
-        return ToolSchemas.parse("""
-                {"type": "object", "properties": {
-                %s,
-                "depth": {"type": "integer", "description": "档位数，默认 20，最大 50"}
-                }, "required": ["exchange", "symbol"]}
-                """.formatted(exchangeSymbolSchema()));
-    }
-
-    @Override
     protected JsonNode doExecute(JsonNode args) {
         var exchange = parseExchange(args);
         String base = parseBase(args);
-        int depth = args.path("depth").asInt(20);
+        int depth = args.path("depth").intValue();
         OrderBook book = market.orderBook(exchange, base, depth);
 
         ObjectNode facts = MAPPER.createObjectNode();
@@ -64,6 +48,8 @@ public class GetOrderbookTool extends AbstractMarketTool {
         if (spread != null) {
             facts.put("spread", spread);
         }
+        facts.putArray("bids_columns").add("price_usdt").add("quantity");
+        facts.putArray("asks_columns").add("price_usdt").add("quantity");
         facts.set("bids", levels(book.bids()));
         facts.set("asks", levels(book.asks()));
         return facts;

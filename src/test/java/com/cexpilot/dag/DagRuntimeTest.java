@@ -58,7 +58,7 @@ class DagRuntimeTest {
         }
     }
 
-    static class EchoTool implements AgentTool {
+    static class EchoTool implements com.cexpilot.runtime.TestTools.TestTool {
         private final String name;
         private final JsonNode data;
         int calls = 0;
@@ -104,7 +104,7 @@ class DagRuntimeTest {
     }
 
     private static DagRuntime runtime(FakeLlmClient llm, List<AgentTool> tools, DagConfig dagConfig) {
-        ToolRegistry registry = new ToolRegistry(tools);
+        ToolRegistry registry = com.cexpilot.runtime.TestTools.registry(tools);
         PromptStore prompts = new PromptStore(new DefaultResourceLoader());
         IntentRegistry intentRegistry = new IntentRegistry(new DefaultResourceLoader());
         DagPlanner planner = new DagPlanner(llm, registry, intentRegistry, new LlmConfig(), dagConfig,
@@ -158,8 +158,9 @@ class DagRuntimeTest {
         ChatMessage user = answerCall.get(answerCall.size() - 1);
         assertTrue(user.content().contains("BTC 怎么了？"));
         assertTrue(user.content().contains("tool_a"));
-        // intent=MARKET_LOOKUP 走概览模板（限 150 字）
-        assertTrue(answerCall.get(0).content().contains("150"));
+        // 所有意图使用相同的事实约束，不强制固定字数
+        assertTrue(answerCall.get(0).content().contains("事实性结论只能来自 FACTS"));
+        assertFalse(answerCall.get(0).content().contains("150"));
     }
 
     @Test
@@ -192,12 +193,12 @@ class DagRuntimeTest {
         assertTrue(user.content().contains("price_change"));
         assertTrue(user.content().contains("candles(100条)"));
         assertFalse(user.content().contains("[0],[1]"));
-        // MARKET_ANALYSIS 同样走概览模板
-        assertTrue(llm.seenMessages.get(1).get(0).content().contains("150"));
+        // 分析类也受事实约束，但允许用户请求的证据分析
+        assertTrue(llm.seenMessages.get(1).get(0).content().contains("用户要求分析时"));
     }
 
     @Test
-    void nonOverviewIntentKeepsGeneralAnswerPrompt() {
+    void exchangeComparisonUsesSameFactBoundaries() {
         EchoTool tool = new EchoTool("tool_a");
         FakeLlmClient llm = new FakeLlmClient(
                 new ChatResponse("""
@@ -212,7 +213,7 @@ class DagRuntimeTest {
         runtime(llm, List.of(tool), new DagConfig()).execute("两所价差？", "", "trace-6", sink);
 
         String system = llm.seenMessages.get(1).get(0).content();
-        assertTrue(system.contains("金融语义纪律"));
+        assertTrue(system.contains("事实性结论只能来自 FACTS"));
     }
 
     @Test
@@ -240,18 +241,18 @@ class DagRuntimeTest {
     }
 
     @Test
-    void nullPlanFallsBackToDirectAnswerWithUnknownIntent() {
+    void nullPlanPassesEmptyFactsAndMissingReason() {
         EchoTool tool = new EchoTool("tool_a");
         FakeLlmClient llm = new FakeLlmClient(
                 new ChatResponse("{\"in_domain\": true, \"intent\": \"UNKNOWN\","
                         + " \"reply\": \"缺少链上持仓数据\", \"plan\": null}", List.of(), 10, 5),
-                new ChatResponse("基于已有知识的谨慎回答", List.of(), 20, 8));
+                new ChatResponse("缺少查询事实，无法确认", List.of(), 20, 8));
         ListSink sink = new ListSink();
 
         ExecutionResult result = runtime(llm, List.of(tool), new DagConfig())
                 .execute("这个问题工具不够", "", "trace-3", sink);
 
-        assertEquals("基于已有知识的谨慎回答", result.answer());
+        assertEquals("缺少查询事实，无法确认", result.answer());
         assertEquals("UNKNOWN", result.intent());
         assertEquals(0, tool.calls);
         assertEquals(0, result.toolCallCount());
@@ -260,20 +261,23 @@ class DagRuntimeTest {
         // 降级回答了，user 消息注明局限
         List<ChatMessage> answerCall = llm.seenMessages.get(1);
         ChatMessage user = answerCall.get(answerCall.size() - 1);
-        assertTrue(user.content().contains("未能为这个问题规划数据查询"));
+        assertTrue(user.content().contains("<FACTS>\n[]\n</FACTS>"));
+        assertTrue(user.content().contains("缺少链上持仓数据"));
+        assertFalse(user.content().contains("请基于已有知识"));
+        assertTrue(answerCall.get(0).content().contains("不得凭已有知识补全缺失事实"));
         // 降级原因落 PLAN trace
         assertTrue(sink.events.stream().anyMatch(e -> e.eventType().equals("PLAN")
-                && e.error() != null && e.error().contains("工具不足以回答")));
+                && e.error() != null && e.error().contains("没有可执行的查询计划")));
     }
 
     @Test
-    void plannerFailureFallsBackToDirectAnswer() {
+    void plannerFailurePassesEmptyFactsWithoutKnowledgeFallback() {
         EchoTool tool = new EchoTool("tool_a");
         // planner 两轮都返回非 JSON，重试耗尽；第 3 次调用是降级回答
         FakeLlmClient llm = new FakeLlmClient(
                 new ChatResponse("garbage", List.of(), 10, 5),
                 new ChatResponse("still garbage", List.of(), 10, 5),
-                new ChatResponse("基于已有知识的谨慎回答", List.of(), 20, 8));
+                new ChatResponse("缺少查询事实，无法确认", List.of(), 20, 8));
         DagConfig dagConfig = new DagConfig();
         dagConfig.setPlannerMaxRetries(1);
         ListSink sink = new ListSink();
@@ -281,7 +285,7 @@ class DagRuntimeTest {
         ExecutionResult result = runtime(llm, List.of(tool), dagConfig)
                 .execute("BTC 怎么了？", "", "trace-4", sink);
 
-        assertEquals("基于已有知识的谨慎回答", result.answer());
+        assertEquals("缺少查询事实，无法确认", result.answer());
         assertEquals("UNKNOWN", result.intent());
         assertEquals(0, tool.calls);
         assertEquals(0, result.toolCallCount());
@@ -294,5 +298,24 @@ class DagRuntimeTest {
                 .filter(e -> e.eventType().equals("PLAN") && e.error() != null).count();
         assertEquals(3, planErrors);
         assertTrue(sink.events.stream().noneMatch(e -> e.eventType().equals("TOOL_CALL")));
+    }
+    @Test
+    void requestedHistoryAndPartialQueryGapReachAnswer() {
+        ObjectNode data = MAPPER.createObjectNode();
+        data.putArray("recent_rates").add(0.0001).add(0.0002);
+        EchoTool tool = new EchoTool("get_funding_rate", data);
+        FakeLlmClient llm = new FakeLlmClient(
+                new ChatResponse("""
+                        {"in_domain":true,"intent":"MARKET_LOOKUP","reply":"仅有最近两期数据",
+                         "plan":{"nodes":[{"id":"n1","tool":"get_funding_rate","args":{},
+                         "depends_on":[],"include_details":true}]}}
+                        """, List.of(), 10, 5),
+                new ChatResponse("最近两期费率", List.of(), 20, 8));
+        runtime(llm, List.of(tool), new DagConfig()).execute("列出最近10期费率", "", "details", new ListSink());
+        String answerInput = llm.seenMessages.get(1).get(1).content();
+        assertTrue(answerInput.contains("\"recent_rates\":[1.0E-4,2.0E-4]")
+                || answerInput.contains("\"recent_rates\":[0.0001,0.0002]"));
+        assertTrue(answerInput.contains("仅有最近两期数据"));
+        assertFalse(answerInput.contains("明细序列已省略"));
     }
 }

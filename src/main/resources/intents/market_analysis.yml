@@ -1,10 +1,8 @@
 name: MARKET_ANALYSIS
 
-description: >
-  行情归因与多指标交叉分析，例如"为什么跌/涨"、指标背离解读（OI 涨但价格跌）、
-  异动分析。特点是问题要求解释现象而非查询单一事实，
-  需要组合 K线、成交量、资金费率、持仓量等多个指标作为有限证据。
+description: 要求解释行情变化、异常或多个指标之间的关系。
 
+# 以下字段仅用于维护文档，不注入提示词、不参与运行时策略。
 scope:
   exchanges: [binance, okx]
   market_type: perpetual

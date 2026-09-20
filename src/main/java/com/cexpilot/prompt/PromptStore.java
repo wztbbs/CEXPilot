@@ -37,7 +37,7 @@ public class PromptStore {
     }
 
     public String version(String name) {
-        return versions.computeIfAbsent(name, n -> md5Prefix(load(n)));
+        return versions.computeIfAbsent(name, n -> fingerprint(load(n)));
     }
 
     private String load(String name) {
@@ -51,7 +51,7 @@ public class PromptStore {
         });
     }
 
-    private static String md5Prefix(String content) {
+    public static String fingerprint(String content) {
         try {
             MessageDigest md = MessageDigest.getInstance("MD5");
             return HexFormat.of().formatHex(md.digest(content.getBytes(StandardCharsets.UTF_8)))

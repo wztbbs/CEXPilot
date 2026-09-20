@@ -1,8 +1,7 @@
 name: get_open_interest
 enabled: true
-description: >
-  获取永续合约持仓量（Open Interest）：当前持仓量（以基础币计）、
-  近24小时历史序列与已计算的24小时变化百分比
+description: 查询当前持仓量（基础币）、近24小时历史及变化百分比；窗口固定，OKX历史为全市场SWAP汇总口径。
+# capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
 capabilities:
   - 查询永续合约当前持仓量（以基础币计）
   - 给出近 24 小时持仓量历史序列与已计算的 24 小时变化百分比
@@ -15,12 +14,14 @@ scope:
   market_type: perpetual
 input_schema:
   type: object
+  additionalProperties: false
   required: [exchange, symbol]
   properties:
     exchange:
       type: string
       enum: [binance, okx]
+      default: okx
       description: 交易所
     symbol:
       type: string
-      description: 币种基础代码，如 BTC / ETH
+      description: 基础币代码，如 BTC / ETH
