@@ -1,6 +1,8 @@
 package com.cexpilot.api;
 
 import com.cexpilot.trace.TraceRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -21,6 +23,8 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api")
 public class TraceController {
+
+    private static final Logger log = LoggerFactory.getLogger(TraceController.class);
 
     private final TraceRepository traceRepository;
 
@@ -49,11 +53,18 @@ public class TraceController {
         if (invalid != null) {
             return ResponseEntity.badRequest().body(Map.of("error", invalid));
         }
-        LocalDateTime now = LocalDateTime.now();
-        LocalDateTime begin = now.minusMinutes(Math.round(beginHour * 60));
-        LocalDateTime end = now.minusMinutes(Math.round(endHour * 60));
+        long beginMinutesAgo = Math.round(beginHour * 60);
+        long endMinutesAgo = Math.round(endHour * 60);
 
-        List<Map<String, Object>> traces = traceRepository.findTracesBetween(begin, end);
+        // 窗口在 DB 侧按 DB 时钟计算（created_at 由 DB 写入）；这里取 dbNow 仅为展示窗口边界
+        LocalDateTime dbNow = traceRepository.dbNow().toLocalDateTime();
+        LocalDateTime begin = dbNow.minusMinutes(beginMinutesAgo);
+        LocalDateTime end = dbNow.minusMinutes(endMinutesAgo);
+
+        List<Map<String, Object>> traces = traceRepository.findTracesBetween(beginMinutesAgo, endMinutesAgo);
+        log.info("traces 查询: beginHour={}, endHour={}, dbNow={}, 窗口 [{} ~ {}], 命中 {} 条",
+                beginHour, endHour, dbNow, begin, end, traces.size());
+
         List<String> traceIds = traces.stream().map(t -> (String) t.get("trace_id")).toList();
         Map<String, List<Map<String, Object>>> eventsByTrace = traceRepository.findEventsByTraceIds(traceIds);
         Map<String, List<Map<String, Object>>> feedbackByTrace = traceRepository.findFeedbackByTraceIds(traceIds);

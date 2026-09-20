@@ -5,8 +5,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import java.sql.Timestamp;
-import java.time.Instant;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -38,11 +36,11 @@ public class TraceRepository {
                         UPDATE ask_trace
                         SET status = ?, answer = ?, llm_steps = ?, tool_calls = ?,
                             prompt_tokens = ?, completion_tokens = ?, cost = ?, duration_ms = ?,
-                            error = ?, intent = ?, finished_at = ?
+                            error = ?, intent = ?, finished_at = NOW()
                         WHERE trace_id = ?
                         """,
                 status, answer, llmSteps, toolCalls, promptTokens, completionTokens, cost,
-                durationMs, error, intent, Timestamp.from(Instant.now()), traceId);
+                durationMs, error, intent, traceId);
     }
 
     public void appendEvent(String traceId, TraceEvent event) {
@@ -71,10 +69,19 @@ public class TraceRepository {
                 "SELECT * FROM trace_event WHERE trace_id = ? ORDER BY seq", traceId);
     }
 
-    public List<Map<String, Object>> findTracesBetween(LocalDateTime begin, LocalDateTime end) {
-        return jdbc.queryForList(
-                "SELECT * FROM ask_trace WHERE created_at BETWEEN ? AND ? ORDER BY created_at DESC",
-                Timestamp.valueOf(begin), Timestamp.valueOf(end));
+    // 窗口由数据库自己的 NOW() 计算：created_at 是 DB 时钟写的，比较双方必须同为 DB 时钟，
+    // 否则应用服务器（如硅谷）与数据库（如 UTC+8）时区不一致时会捞空。
+    public List<Map<String, Object>> findTracesBetween(long beginMinutesAgo, long endMinutesAgo) {
+        return jdbc.queryForList("""
+                        SELECT * FROM ask_trace
+                        WHERE created_at BETWEEN NOW() - INTERVAL ? MINUTE AND NOW() - INTERVAL ? MINUTE
+                        ORDER BY created_at DESC
+                        """,
+                beginMinutesAgo, endMinutesAgo);
+    }
+
+    public Timestamp dbNow() {
+        return jdbc.queryForObject("SELECT NOW()", Timestamp.class);
     }
 
     public Map<String, List<Map<String, Object>>> findEventsByTraceIds(List<String> traceIds) {
