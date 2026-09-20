@@ -44,6 +44,7 @@ public class GetKlinesTool extends AbstractMarketTool {
         facts.put("exchange", exchange.displayName());
         facts.put("symbol", base);
         facts.put("window", window.code());
+        facts.put("candle_interval", window.interval());
         facts.put("candle_count", candles.size());
 
         ObjectNode priceChange = facts.putObject("price_change");

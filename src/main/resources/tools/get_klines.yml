@@ -1,6 +1,6 @@
 name: get_klines
 enabled: true
-description: 查询最近指定窗口的K线及已计算的涨跌幅、最高价、最低价；不支持指定历史起止时间。
+description: 查询最近指定窗口的K线及已计算的涨跌幅、最高价、最低价；不支持指定历史起止时间。K线粒度：1h窗口为5分钟/根（12根），4h窗口为15分钟/根（16根），24h窗口为1小时/根（24根），以返回的 candle_interval 为准。
 # capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
 capabilities:
   - 获取最近 1h / 4h / 24h 窗口的K线序列（开高低收量）
