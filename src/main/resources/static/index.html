@@ -201,26 +201,78 @@
 
     addMessage('user', question);
     var loadingEl = addLoading();
+    var answerDiv = null;
+    var answerBubble = null;
 
-    fetch('/api/ask', {
+    function appendDelta(text) {
+      if (!answerDiv) {
+        loadingEl.remove();
+        answerDiv = addMessage('assistant', '');
+        answerBubble = answerDiv.querySelector('.bubble');
+      }
+      answerBubble.textContent += text;
+      scrollToBottom();
+    }
+
+    // SSE 事件块：event: <name>\ndata: <json>\n\n（data 为单行 JSON，换行已转义）
+    function handleEvent(raw) {
+      var name = 'message';
+      var data = '';
+      raw.split('\n').forEach(function (line) {
+        if (line.indexOf('event:') === 0) name = line.slice(6).trim();
+        else if (line.indexOf('data:') === 0) data += line.slice(5).trim();
+      });
+      if (!data) return;
+      var payload;
+      try { payload = JSON.parse(data); } catch (e) { return; }
+      if (name === 'meta') {
+        conversationId = payload.conversationId;
+      } else if (name === 'delta') {
+        appendDelta(payload.text);
+      } else if (name === 'done') {
+        if (!answerDiv) {
+          loadingEl.remove();
+          answerDiv = addMessage('assistant', '（无回答）');
+        }
+        appendMeta(answerDiv, payload.toolCalls, payload.durationMs, payload.traceId);
+      } else if (name === 'error') {
+        loadingEl.remove();
+        addMessage('error', payload.error || '请求失败，请稍后再试');
+      }
+    }
+
+    function pump(reader, decoder, buffer) {
+      return reader.read().then(function (r) {
+        if (r.done) {
+          if (buffer.trim()) handleEvent(buffer);
+          return;
+        }
+        buffer += decoder.decode(r.value, { stream: true });
+        var idx;
+        while ((idx = buffer.indexOf('\n\n')) >= 0) {
+          handleEvent(buffer.slice(0, idx));
+          buffer = buffer.slice(idx + 2);
+        }
+        return pump(reader, decoder, buffer);
+      });
+    }
+
+    fetch('/api/ask/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ conversationId: conversationId, question: question })
     })
-      .then(function (res) { return res.json().then(function (body) { return { ok: res.ok, body: body }; }); })
-      .then(function (r) {
-        loadingEl.remove();
-        if (!r.ok) {
-          addMessage('error', r.body.error || '请求失败，请稍后再试');
-          return;
+      .then(function (res) {
+        if (!res.ok || !res.body) {
+          return res.json().then(function (body) {
+            throw new Error(body.error || '请求失败，请稍后再试');
+          });
         }
-        conversationId = r.body.conversationId;
-        var div = addMessage('assistant', r.body.answer || '（无回答）');
-        appendMeta(div, r.body.toolCalls, r.body.durationMs, r.body.traceId);
+        return pump(res.body.getReader(), new TextDecoder('utf-8'), '');
       })
-      .catch(function () {
+      .catch(function (e) {
         loadingEl.remove();
-        addMessage('error', '网络异常，请稍后再试');
+        addMessage('error', e.message || '网络异常，请稍后再试');
       })
       .finally(function () {
         pending = false;

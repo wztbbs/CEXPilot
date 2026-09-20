@@ -321,4 +321,52 @@ class DagRuntimeTest {
         assertTrue(answerInput.contains("仅有最近两期数据"));
         assertFalse(answerInput.contains("明细序列已省略"));
     }
+
+    @Test
+    void streamingAnswerFallsBackToOneShotDelta() {
+        // FakeLlmClient 默认 chatStream：非流式调用后一次性回调完整内容
+        EchoTool tool = new EchoTool("tool_a");
+        FakeLlmClient llm = new FakeLlmClient(
+                new ChatResponse("""
+                        {"in_domain": true, "intent": "MARKET_LOOKUP", "reply": null,
+                         "plan": {"nodes": [{"id": "n1", "tool": "tool_a", "args": {}, "depends_on": []}]}}
+                        """, List.of(), 10, 5),
+                new ChatResponse("最终回答", List.of(), 20, 8));
+        List<String> deltas = new ArrayList<>();
+
+        ExecutionResult result = runtime(llm, List.of(tool), new DagConfig())
+                .execute("BTC 怎么了？", "", "trace-stream", new ListSink(), deltas::add);
+
+        assertEquals("最终回答", result.answer());
+        assertEquals(List.of("最终回答"), deltas);
+        assertEquals(30, result.promptTokens());
+    }
+
+    @Test
+    void streamingAnswerRoutesThroughChatStream() {
+        EchoTool tool = new EchoTool("tool_a");
+        FakeLlmClient llm = new FakeLlmClient(
+                new ChatResponse("""
+                        {"in_domain": true, "intent": "MARKET_LOOKUP", "reply": null,
+                         "plan": {"nodes": [{"id": "n1", "tool": "tool_a", "args": {}, "depends_on": []}]}}
+                        """, List.of(), 10, 5)) {
+            @Override
+            public ChatResponse chatStream(List<ChatMessage> messages, List<ToolSpec> tools,
+                                           java.util.function.Consumer<String> onDelta) {
+                seenMessages.add(List.copyOf(messages));
+                onDelta.accept("最终");
+                onDelta.accept("回答");
+                return new ChatResponse("最终回答", List.of(), 20, 8);
+            }
+        };
+        List<String> deltas = new ArrayList<>();
+
+        ExecutionResult result = runtime(llm, List.of(tool), new DagConfig())
+                .execute("BTC 怎么了？", "", "trace-stream2", new ListSink(), deltas::add);
+
+        assertEquals("最终回答", result.answer());
+        assertEquals(List.of("最终", "回答"), deltas);
+        // answer 走了 chatStream：第二次调用即 answer 阶段
+        assertEquals(2, llm.seenMessages.size());
+    }
 }

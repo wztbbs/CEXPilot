@@ -65,6 +65,10 @@ java -jar target/cexpilot-0.1.0.jar --spring.profiles.active=prod   # 线上
 curl -X POST localhost:8080/api/ask -H 'Content-Type: application/json' \
   -d '{"question": "BTC 最近 1 小时怎么了？"}'
 
+# 流式问答（SSE：meta → delta × N → done / error），前端逐字出答案
+curl -N -X POST localhost:8080/api/ask/stream -H 'Content-Type: application/json' \
+  -d '{"question": "BTC 最近 1 小时怎么了？"}'
+
 # 多轮追问（带上次返回的 conversationId）
 curl -X POST localhost:8080/api/ask -H 'Content-Type: application/json' \
   -d '{"conversationId": "<conversation_id>", "question": "那 OKX 呢？"}'

@@ -12,9 +12,13 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 
 /**
  * OpenAI 兼容协议的 chat/completions 客户端，支持 function calling。
@@ -59,24 +63,7 @@ public class OpenAiCompatibleClient implements LlmClient {
 
     @Override
     public ChatResponse chat(List<ChatMessage> messages, List<ToolSpec> tools, JsonNode responseFormat) {
-        ObjectNode body = MAPPER.createObjectNode();
-        body.put("model", config.getModel());
-        body.put("temperature", temperature);
-        if (seed != null) {
-            body.put("seed", seed);
-        }
-        if (responseFormat != null) {
-            body.set("response_format", responseFormat);
-        }
-        if (config.getEnableThinking() != null) {
-            // Qwen3 混合模型的思考开关：思考 token 计入 completion 且逐字生成，
-            // 低延迟场景（规划 / 模板化回答）应关闭
-            body.put("enable_thinking", config.getEnableThinking());
-        }
-        body.set("messages", serializeMessages(messages));
-        if (tools != null && !tools.isEmpty()) {
-            body.set("tools", serializeTools(tools));
-        }
+        ObjectNode body = buildBody(messages, tools, responseFormat);
 
         long start = System.currentTimeMillis();
         log.info("LLM 请求 POST {}/chat/completions model={} 消息数={} body={}",
@@ -135,6 +122,96 @@ public class OpenAiCompatibleClient implements LlmClient {
                 System.currentTimeMillis() - start, config.getModel(),
                 abbreviate(content, 500), promptTokens, completionTokens, cachedTokens);
         return new ChatResponse(content, toolCalls, promptTokens, completionTokens);
+    }
+
+    /**
+     * 流式回答（OpenAI SSE）：逐 chunk 回调增量文本，聚合为完整响应返回。
+     * stream_options.include_usage 让最后一个 chunk 携带 token 用量；客户端断开等
+     * 回调异常会向上传播中断读取，由调用方按失败处理。
+     */
+    @Override
+    public ChatResponse chatStream(List<ChatMessage> messages, List<ToolSpec> tools,
+                                   Consumer<String> onDelta) {
+        ObjectNode body = buildBody(messages, tools, null);
+        body.put("stream", true);
+        body.putObject("stream_options").put("include_usage", true);
+
+        long start = System.currentTimeMillis();
+        log.info("LLM 流式请求 POST {}/chat/completions model={} 消息数={}",
+                baseUrl, config.getModel(), messages.size());
+        StringBuilder content = new StringBuilder();
+        Integer[] tokens = new Integer[2]; // [promptTokens, completionTokens]
+        try {
+            restClient.post()
+                    .uri("/chat/completions")
+                    .body(body)
+                    .exchange((request, response) -> {
+                        if (!response.getStatusCode().is2xxSuccessful()) {
+                            String errorBody = new String(response.getBody().readAllBytes(), StandardCharsets.UTF_8);
+                            throw new LlmException("LLM 流式调用失败: HTTP " + response.getStatusCode()
+                                    + " " + abbreviate(errorBody, 500));
+                        }
+                        try (BufferedReader reader = new BufferedReader(
+                                new InputStreamReader(response.getBody(), StandardCharsets.UTF_8))) {
+                            String line;
+                            while ((line = reader.readLine()) != null) {
+                                if (!line.startsWith("data:")) {
+                                    continue;
+                                }
+                                String payload = line.substring(5).trim();
+                                if (payload.isEmpty() || "[DONE]".equals(payload)) {
+                                    continue;
+                                }
+                                JsonNode chunk = MAPPER.readTree(payload);
+                                JsonNode delta = chunk.path("choices").path(0).path("delta").path("content");
+                                if (delta.isTextual() && !delta.asText().isEmpty()) {
+                                    onDelta.accept(delta.asText());
+                                    content.append(delta.asText());
+                                }
+                                JsonNode usage = chunk.path("usage");
+                                if (usage.isObject() && usage.path("prompt_tokens").isInt()) {
+                                    tokens[0] = usage.path("prompt_tokens").asInt();
+                                    tokens[1] = usage.path("completion_tokens").asInt();
+                                }
+                            }
+                        }
+                        return null;
+                    });
+        } catch (LlmException e) {
+            log.warn("LLM 流式调用失败 model={} {}ms: {}",
+                    config.getModel(), System.currentTimeMillis() - start, e.getMessage());
+            throw e;
+        } catch (Exception e) {
+            log.warn("LLM 流式调用异常 model={} {}ms: {}",
+                    config.getModel(), System.currentTimeMillis() - start, e.getMessage());
+            throw new LlmException("LLM 流式调用失败: " + e.getMessage(), e);
+        }
+
+        log.info("LLM 流式响应 {}ms model={} promptTokens={} completionTokens={}",
+                System.currentTimeMillis() - start, config.getModel(), tokens[0], tokens[1]);
+        return new ChatResponse(content.toString(), List.of(), tokens[0], tokens[1]);
+    }
+
+    private ObjectNode buildBody(List<ChatMessage> messages, List<ToolSpec> tools, JsonNode responseFormat) {
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("model", config.getModel());
+        body.put("temperature", temperature);
+        if (seed != null) {
+            body.put("seed", seed);
+        }
+        if (responseFormat != null) {
+            body.set("response_format", responseFormat);
+        }
+        if (config.getEnableThinking() != null) {
+            // Qwen3 混合模型的思考开关：思考 token 计入 completion 且逐字生成，
+            // 低延迟场景（规划 / 模板化回答）应关闭
+            body.put("enable_thinking", config.getEnableThinking());
+        }
+        body.set("messages", serializeMessages(messages));
+        if (tools != null && !tools.isEmpty()) {
+            body.set("tools", serializeTools(tools));
+        }
+        return body;
     }
 
     private static String abbreviate(String text, int max) {

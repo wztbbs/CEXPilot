@@ -44,6 +44,15 @@ public class AskService {
         this.llmConfig = llmConfig;
     }
 
+    /** 流式问答的事件出口：meta 在建 trace 后触发，delta 为答案增量，done 带完整结果。 */
+    public interface AskStreamListener {
+        void onMeta(String conversationId, String traceId);
+
+        void onDelta(String text);
+
+        void onDone(AskResponse response);
+    }
+
     public AskResponse ask(String conversationId, String question) {
         return ask(conversationId, question, null);
     }
@@ -55,6 +64,15 @@ public class AskService {
      * @param visitorId 访客标识（cexpilot_uid cookie），随 trace 落库用于统计；允许为 null
      */
     public AskResponse ask(String conversationId, String question, String visitorId) {
+        return ask(conversationId, question, visitorId, null);
+    }
+
+    /**
+     * @param listener 非 null 时走流式：建 trace 后立刻回调 meta，answer 阶段逐段回调 delta，
+     *                 完成后回调 done。trace 落库与非流式路径完全一致。
+     */
+    public AskResponse ask(String conversationId, String question, String visitorId,
+                           AskStreamListener listener) {
         if (question == null || question.isBlank()) {
             throw new IllegalArgumentException("question 不能为空");
         }
@@ -74,6 +92,9 @@ public class AskService {
         String traceId = UUID.randomUUID().toString();
         traceRepository.startTrace(traceId, resolvedConversationId, question,
                 llmConfig.getNormal().getModel(), runtime.promptVersion(), visitorId);
+        if (listener != null) {
+            listener.onMeta(resolvedConversationId, traceId);
+        }
 
         long start = System.currentTimeMillis();
         try {
@@ -81,7 +102,8 @@ public class AskService {
             //    记录答案、intent 归类（统计 hint）、层数、工具调用数、token 用量与成本；
             //    本次 Query 写入 conversation_query，成为后续追问的上下文。
             //    intent 归类为 UNKNOWN 的 query 落 unmatched_query，作为能力缺口数据集。
-            ExecutionResult result = runtime.execute(question, conversationContext, traceId, traceSink);
+            ExecutionResult result = runtime.execute(question, conversationContext, traceId, traceSink,
+                    listener == null ? null : listener::onDelta);
             long durationMs = System.currentTimeMillis() - start;
             double cost = computeCost(result.promptTokens(), result.completionTokens());
 
@@ -95,8 +117,12 @@ public class AskService {
             conversation.recordQuery(resolvedConversationId, question, result.answer(), traceId);
 
             // 5. evidence（工具产出的事实集）随答案一起返回，前端可展示"答案引用了哪些数据"。
-            return new AskResponse(resolvedConversationId, traceId, result.answer(), result.evidence(),
-                    result.toolCallCount(), result.steps(), durationMs);
+            AskResponse response = new AskResponse(resolvedConversationId, traceId, result.answer(),
+                    result.evidence(), result.toolCallCount(), result.steps(), durationMs);
+            if (listener != null) {
+                listener.onDone(response);
+            }
+            return response;
         } catch (Exception e) {
             // 失败同样要落 trace：失败的现场数据正是后续定位问题、固化评测 case 的原料。
             long durationMs = System.currentTimeMillis() - start;

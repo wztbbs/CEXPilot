@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Consumer;
 
 /**
  * DAG 运行时（替代原 ReAct 循环）：一次问答 = DagPlanner 合并调用（领域判断 + intent 归类
@@ -55,6 +56,15 @@ public class DagRuntime {
     }
 
     public ExecutionResult execute(String question, String conversationContext, String traceId, TraceSink sink) {
+        return execute(question, conversationContext, traceId, sink, null);
+    }
+
+    /**
+     * @param answerDelta 非 null 时 answer 阶段走流式调用，逐段回调答案增量（用于 SSE 推送）；
+     *                    trace 落库与聚合逻辑不变。
+     */
+    public ExecutionResult execute(String question, String conversationContext, String traceId,
+                                   TraceSink sink, Consumer<String> answerDelta) {
         DagPlanner.PlanOutcome outcome = planner.plan(question, conversationContext, traceId, sink);
         int totalPromptTokens = outcome.promptTokens();
         int totalCompletionTokens = outcome.completionTokens();
@@ -103,7 +113,7 @@ public class DagRuntime {
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(ChatMessage.system(systemPrompt));
         messages.add(ChatMessage.user(userContent));
-        ChatResponse answer = callAnswerLlm(messages, traceId, sink);
+        ChatResponse answer = callAnswerLlm(messages, traceId, sink, answerDelta);
         totalPromptTokens += answer.promptTokens() == null ? 0 : answer.promptTokens();
         totalCompletionTokens += answer.completionTokens() == null ? 0 : answer.completionTokens();
 
@@ -111,10 +121,13 @@ public class DagRuntime {
                 totalPromptTokens, totalCompletionTokens, outcome.intent());
     }
 
-    private ChatResponse callAnswerLlm(List<ChatMessage> messages, String traceId, TraceSink sink) {
+    private ChatResponse callAnswerLlm(List<ChatMessage> messages, String traceId, TraceSink sink,
+                                       Consumer<String> answerDelta) {
         long start = System.currentTimeMillis();
         try {
-            ChatResponse response = llm.chat(messages, null);
+            ChatResponse response = answerDelta == null
+                    ? llm.chat(messages, null)
+                    : llm.chatStream(messages, null, answerDelta);
             sink.record(TraceEvent.llmCall(traceId, "answer",
                     answerEventInput(), answerEventOutput(response.content()),
                     System.currentTimeMillis() - start,
