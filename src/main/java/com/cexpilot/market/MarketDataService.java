@@ -57,13 +57,19 @@ public class MarketDataService {
         };
     }
 
+    /** 持仓量统一为 USD 名义值：当前值与历史序列同单位，跨交易所可比较。 */
     public OpenInterestInfo openInterest(Exchange exchange, String base) {
         return switch (exchange) {
-            case BINANCE -> new OpenInterestInfo(
-                    binance.openInterest(SymbolMapper.binanceSymbol(base)), base,
-                    binance.openInterestHistory(SymbolMapper.binanceSymbol(base), "1h", 24));
+            case BINANCE -> {
+                // 币安当前值只有币数，乘最新价换算 USD；历史直接取 sumOpenInterestValue
+                String symbol = SymbolMapper.binanceSymbol(base);
+                BigDecimal oiUsd = binance.openInterest(symbol)
+                        .multiply(binance.ticker24h(symbol).lastPrice());
+                yield new OpenInterestInfo(oiUsd, "USD",
+                        binance.openInterestHistory(symbol, "1h", 24));
+            }
             case OKX -> new OpenInterestInfo(
-                    okx.openInterest(SymbolMapper.okxInstId(base)), base,
+                    okx.openInterest(SymbolMapper.okxInstId(base)), "USD",
                     okx.openInterestHistory(base, "1H", 24));
         };
     }

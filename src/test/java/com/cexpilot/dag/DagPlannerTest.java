@@ -251,4 +251,88 @@ class DagPlannerTest {
         assertEquals(2, llm.seenMessages.size()); // 首次 + 1 次重试
         assertTrue(outcome.lastError().contains("解析失败"));
     }
+
+    @Test
+    void bareNodesArraySalvagedAsPlan() {
+        // 模型丢了信封直接输出 nodes 裸数组：判断正确、包装缺失，应抢救成功且不重试
+        FakeLlmClient llm = new FakeLlmClient(respond(
+                "[{\"id\": \"n1\", \"tool\": \"echo_tool\", \"args\": {}, \"depends_on\": []}]"));
+        ListSink sink = new ListSink();
+
+        DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
+                .plan("问题", "", "trace-8", sink);
+
+        assertTrue(outcome.inDomain());
+        assertEquals("UNKNOWN", outcome.intent());
+        assertTrue(outcome.plan().isPresent());
+        assertEquals(1, outcome.plan().get().nodes().size());
+        assertEquals("echo_tool", outcome.plan().get().nodes().get(0).tool());
+        assertEquals(1, llm.seenMessages.size());
+        // PLAN trace 落的是抢救出的规范 plan，无 error
+        assertEquals("PLAN", sink.events.get(1).eventType());
+        assertNull(sink.events.get(1).error());
+        assertTrue(sink.events.get(1).outputJson().contains("\"nodes\""));
+    }
+
+    @Test
+    void objectWithPlanButNoEnvelopeSalvaged() {
+        FakeLlmClient llm = new FakeLlmClient(respond(
+                "{\"plan\": {\"nodes\": [{\"id\": \"n1\", \"tool\": \"echo_tool\", \"args\": {}}]}}"));
+        ListSink sink = new ListSink();
+
+        DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
+                .plan("问题", "", "trace-9", sink);
+
+        assertTrue(outcome.inDomain());
+        assertTrue(outcome.plan().isPresent());
+        assertEquals(1, llm.seenMessages.size());
+    }
+
+    @Test
+    void unsalvageableMissingEnvelopeTriggersRepair() {
+        // 既无信封也无可抢救的 plan → 视为格式错误走 repair，而不是误判出域
+        FakeLlmClient llm = new FakeLlmClient(
+                respond("{\"result\": \"some text\"}"),
+                respond(VALID_ENVELOPE));
+        ListSink sink = new ListSink();
+
+        DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
+                .plan("问题", "", "trace-10", sink);
+
+        assertTrue(outcome.plan().isPresent());
+        assertEquals(2, llm.seenMessages.size());
+        List<ChatMessage> secondCall = llm.seenMessages.get(1);
+        ChatMessage repair = secondCall.get(secondCall.size() - 1);
+        assertTrue(repair.content().contains("缺少信封"));
+        assertTrue(sink.events.stream()
+                .filter(e -> e.eventType().equals("PLAN"))
+                .anyMatch(e -> e.error() != null && e.error().contains("缺少信封")));
+    }
+
+    @Test
+    void emptyArrayNotSalvaged() {
+        // 空数组没有可执行的节点，不能抢救，应走 repair
+        FakeLlmClient llm = new FakeLlmClient(
+                respond("[]"),
+                respond(VALID_ENVELOPE));
+        ListSink sink = new ListSink();
+
+        DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
+                .plan("问题", "", "trace-11", sink);
+
+        assertTrue(outcome.plan().isPresent());
+        assertEquals(2, llm.seenMessages.size());
+    }
+
+    @Test
+    void plannerResponseFormatBuildsJsonSchema() {
+        DagConfig dagConfig = new DagConfig();
+        dagConfig.setPlannerResponseFormat("json_schema");
+        FakeLlmClient llm = new FakeLlmClient(respond(VALID_ENVELOPE));
+
+        DagPlanner.PlanOutcome outcome = planner(llm, dagConfig)
+                .plan("问题", "", "trace-12", new ListSink());
+
+        assertTrue(outcome.plan().isPresent());
+    }
 }

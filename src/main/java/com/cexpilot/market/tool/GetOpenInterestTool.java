@@ -29,13 +29,15 @@ public class GetOpenInterestTool extends AbstractMarketTool {
         String base = parseBase(args);
         OpenInterestInfo info = market.openInterest(exchange, base);
 
+        boolean okx = exchange == com.cexpilot.market.Exchange.OKX;
         ObjectNode facts = MAPPER.createObjectNode();
         facts.put("exchange", exchange.displayName());
         facts.put("symbol", base);
-        facts.put("open_interest", info.currentOi());
+        facts.put("open_interest", MarketCalculator.round(info.currentOi(), 2));
         facts.put("unit", info.unit());
-        facts.put("history_scope", exchange == com.cexpilot.market.Exchange.OKX
-                ? "该币种全市场SWAP汇总；不同于当前值的单合约口径" : "该永续合约");
+        // 单位已统一为 USD；OKX 历史是全市场合约汇总，与当前值的单合约口径不同
+        facts.put("history_scope", okx
+                ? "该币种全市场合约汇总；不同于当前值的单合约口径" : "该永续合约");
         facts.putArray("history_columns").add("timestamp_ms").add("open_interest");
         var changePct = MarketCalculator.oiChangePct(info.history());
         if (changePct != null) {
@@ -46,7 +48,7 @@ public class GetOpenInterestTool extends AbstractMarketTool {
         for (OpenInterestInfo.OiPoint point : info.history()) {
             ArrayNode row = history.addArray();
             row.add(point.timestamp());
-            row.add(point.oi());
+            row.add(MarketCalculator.round(point.oi(), 2));
         }
         return facts;
     }

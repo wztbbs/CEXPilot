@@ -1,5 +1,7 @@
 package com.cexpilot.dag;
 
+import com.cexpilot.intent.IntentDefinition;
+import com.cexpilot.intent.IntentRegistry;
 import com.cexpilot.llm.ChatMessage;
 import com.cexpilot.llm.ChatResponse;
 import com.cexpilot.llm.LlmClient;
@@ -24,7 +26,8 @@ import java.util.Set;
  * DAG 运行时（替代原 ReAct 循环）：一次问答 = DagPlanner 合并调用（领域判断 + intent 归类
  * + 规划）→ DagExecutor 并行执行 → 汇总 evidence → 1 次不带工具的 LLM 调用生成最终回答。
  *
- * 按计划保留回答所需明细，其余投影为摘要；所有意图使用同一事实约束模板。
+ * 按计划保留回答所需明细，其余投影为摘要；所有意图共享同一事实约束模板，
+ * 命中意图时追加该意图的 evidence_policy.rules 作为回答要求。
  * 出域直接返回边界话术；无计划时传空 FACTS 和查询缺口，禁止凭记忆降级回答。
  */
 @Component
@@ -40,12 +43,15 @@ public class DagRuntime {
     private final DagPlanner planner;
     private final DagExecutor executor;
     private final PromptStore prompts;
+    private final IntentRegistry intentRegistry;
 
-    public DagRuntime(LlmClient llm, DagPlanner planner, DagExecutor executor, PromptStore prompts) {
+    public DagRuntime(LlmClient llm, DagPlanner planner, DagExecutor executor, PromptStore prompts,
+                      IntentRegistry intentRegistry) {
         this.llm = llm;
         this.planner = planner;
         this.executor = executor;
         this.prompts = prompts;
+        this.intentRegistry = intentRegistry;
     }
 
     public ExecutionResult execute(String question, String conversationContext, String traceId, TraceSink sink) {
@@ -91,8 +97,9 @@ public class DagRuntime {
         String userContent = question + "\n\n<FACTS>\n" + facts + "\n</FACTS>\n<QUERY_STATUS>\n"
                 + queryStatus + "\n</QUERY_STATUS>";
 
-        String systemPrompt = prompts.render(ANSWER_PROMPT_NAME,
-                Map.of("conversation_context", conversationContext == null ? "" : conversationContext));
+        String systemPrompt = prompts.render(ANSWER_PROMPT_NAME, Map.of(
+                "conversation_context", conversationContext == null ? "" : conversationContext,
+                "intent_guidance", intentGuidance(outcome.intent())));
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(ChatMessage.system(systemPrompt));
         messages.add(ChatMessage.user(userContent));
@@ -119,6 +126,26 @@ public class DagRuntime {
                     System.currentTimeMillis() - start, null, null, e.getMessage()));
             throw e;
         }
+    }
+
+    /** 命中意图时，把该意图的证据规则注入回答 prompt；未命中或无规则时为空。 */
+    private String intentGuidance(String intent) {
+        IntentDefinition definition = intentRegistry.find(intent);
+        if (definition == null) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("本轮问题归类为 ").append(definition.name());
+        if (definition.description() != null && !definition.description().isBlank()) {
+            sb.append("（").append(definition.description().trim()).append("）");
+        }
+        if (!definition.evidenceRules().isEmpty()) {
+            sb.append("。该类别问题的回答要求：");
+            for (String rule : definition.evidenceRules()) {
+                sb.append("\n- ").append(rule);
+            }
+        }
+        return sb.toString();
     }
 
     private void appendEvidence(ArrayNode evidence, String nodeId, String toolName, ToolResult result) {

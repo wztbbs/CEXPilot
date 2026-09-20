@@ -2,7 +2,8 @@ name: MARKET_LOOKUP
 
 description: 查询价格、涨跌幅、成交量、资金费率或持仓量等行情事实，不要求解释原因。
 
-# 以下字段仅用于维护文档，不注入提示词、不参与运行时策略。
+# scope / planner / eval 仅用于维护文档，不参与运行时策略；
+# evidence_policy.rules 会注入回答阶段提示词，是该类问题的回答约束（改动即生效）。
 scope:
   exchanges: [binance, okx]
   market_type: perpetual

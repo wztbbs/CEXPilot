@@ -173,7 +173,7 @@ class ToolRegistryTest {
             context.refresh();
             ToolRegistry registry = context.getBean(ToolRegistry.class);
             assertEquals(9, registry.size());
-            assertEquals("okx", registry.prepareArguments("get_ticker", MAPPER.createObjectNode().put("symbol", "BTC")).path("exchange").asText());
+            assertEquals("binance", registry.prepareArguments("get_ticker", MAPPER.createObjectNode().put("symbol", "BTC")).path("exchange").asText());
             assertThrows(IllegalArgumentException.class, () -> registry.prepareArguments("get_transaction", MAPPER.createObjectNode().put("tx_hash", "0xabc")));
             assertDoesNotThrow(() -> registry.prepareArguments("get_transaction", MAPPER.createObjectNode().put("tx_hash", "0x" + "a".repeat(64))));
             assertEquals("1h", registry.prepareArguments("compare_exchanges", MAPPER.createObjectNode().put("symbol", "ETH")).path("window").asText());
@@ -182,7 +182,7 @@ class ToolRegistryTest {
     @Test
     void configuredDefaultsReachRealToolExecution() {
         MarketDataService market = mock(MarketDataService.class);
-        org.mockito.Mockito.when(market.recentTrades(com.cexpilot.market.Exchange.OKX, "BTC", 50))
+        org.mockito.Mockito.when(market.recentTrades(com.cexpilot.market.Exchange.BINANCE, "BTC", 50))
                 .thenReturn(List.of());
         var definitions = ToolDefinitionLoader.load(new DefaultResourceLoader()).stream()
                 .filter(definition -> definition.name().equals("get_recent_trades")).toList();
@@ -192,6 +192,6 @@ class ToolRegistryTest {
         ToolResult result = executor.execute(args, new ToolContext("test", null));
         assertTrue(result.ok());
         assertTrue(result.data().path("recent_trades_columns").isArray());
-        org.mockito.Mockito.verify(market).recentTrades(com.cexpilot.market.Exchange.OKX, "BTC", 50);
+        org.mockito.Mockito.verify(market).recentTrades(com.cexpilot.market.Exchange.BINANCE, "BTC", 50);
     }
 }

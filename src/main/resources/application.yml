@@ -29,7 +29,9 @@ llm:
     model: ${LLM_FLAGSHIP_MODEL:qwen-max}
     price-input-per-1k: ${LLM_FLAGSHIP_PRICE_INPUT_PER_1K:0}
     price-output-per-1k: ${LLM_FLAGSHIP_PRICE_OUTPUT_PER_1K:0}
-  temperature: 0.1
+  temperature: ${LLM_TEMPERATURE:0}
+  # 采样种子：排查/eval 需要复现输出时设置，默认不下发
+  seed: ${LLM_SEED:}
   max-steps: 4
   max-tool-calls: 8
 
@@ -38,6 +40,8 @@ dag:
   max-depth: ${DAG_MAX_DEPTH:3}
   node-timeout-ms: ${DAG_NODE_TIMEOUT_MS:30000}
   planner-max-retries: ${DAG_PLANNER_MAX_RETRIES:2}
+  # planner 结构化输出约束：留空 = 不下发；json_object / json_schema（需模型支持，上线前先实测）
+  planner-response-format: ${DAG_PLANNER_RESPONSE_FORMAT:}
   executor-threads: ${DAG_EXECUTOR_THREADS:4}
 
 exchange:

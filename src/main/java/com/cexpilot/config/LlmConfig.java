@@ -13,9 +13,11 @@ public class LlmConfig {
 
     private ModelConfig normal = new ModelConfig();
     private ModelConfig flagship = new ModelConfig();
-    private double temperature = 0.1;
+    private double temperature = 0;
     private int maxSteps = 4;
     private int maxToolCalls = 8;
+    /** 采样种子（OpenAI 兼容 seed 参数），null = 不下发。用于排查/eval 时复现输出。 */
+    private Long seed;
 
     public ModelConfig getNormal() {
         return normal;
@@ -39,6 +41,14 @@ public class LlmConfig {
 
     public void setTemperature(double temperature) {
         this.temperature = temperature;
+    }
+
+    public Long getSeed() {
+        return seed;
+    }
+
+    public void setSeed(Long seed) {
+        this.seed = seed;
     }
 
     public int getMaxSteps() {

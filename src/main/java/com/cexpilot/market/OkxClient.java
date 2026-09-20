@@ -55,7 +55,15 @@ public class OkxClient {
 
     public Ticker ticker(String instId) {
         JsonNode data = get("/api/v5/market/ticker?instId={i}", instId);
-        JsonNode item = first(data, "ticker");
+        return parseTicker(first(data, "ticker"));
+    }
+
+    /**
+     * OKX ticker 没有 USDT 成交额字段：vol24h 是张数、volCcy24h 是基础币数。
+     * 统一为币安同口径：baseVolume24h = 币数（volCcy24h），
+     * quoteVolume24h = 币数 × 最新价（USDT 估算值，24h 内价格变动会带来小误差）。
+     */
+    static Ticker parseTicker(JsonNode item) {
         BigDecimal last = decimal(item, "last");
         BigDecimal open24h = decimal(item, "open24h");
         BigDecimal changePct = BigDecimal.ZERO;
@@ -64,7 +72,8 @@ public class OkxClient {
                     .divide(open24h, 6, java.math.RoundingMode.HALF_UP)
                     .multiply(new BigDecimal("100"));
         }
-        return new Ticker(last, changePct, decimal(item, "vol24h"), decimal(item, "volCcy24h"));
+        BigDecimal volumeBase = decimal(item, "volCcy24h");
+        return new Ticker(last, changePct, volumeBase, volumeBase.multiply(last));
     }
 
     /** 资金费率 + 下次结算时间。 */
@@ -85,30 +94,31 @@ public class OkxClient {
         return rates;
     }
 
-    /** 当前持仓量，oiCcy 以基础币计（BTC）。 */
+    /** 当前持仓量（oiUsd，USD 名义值），与 rubik 历史序列同单位。 */
     public BigDecimal openInterest(String instId) {
         JsonNode data = get("/api/v5/public/open-interest?instType=SWAP&instId={i}", instId);
         JsonNode item = first(data, "open-interest");
-        String oiCcy = item.path("oiCcy").asText(null);
-        if (oiCcy != null && !oiCcy.isBlank()) {
-            return new BigDecimal(oiCcy);
-        }
-        return decimal(item, "oi");
+        // 缺 oiUsd 时宁可报错也不回退到其他单位，避免与 USD 历史序列混口径
+        return decimal(item, "oiUsd");
     }
 
     /**
-     * 持仓量历史（rubik 统计接口，按币种汇总全市场 SWAP）。
-     * 返回行格式 [ts, oi, oiCcy, ...]，取基础币计量的 oiCcy。
+     * 持仓量历史（rubik 统计接口，按币种汇总全市场合约，单位为 USD）。
+     * 返回行格式 [ts, oiUsd, volUsd]，最新在前，且数据跨度（约 30 天）远大于 limit：
+     * 必须取头部 limit 条（最新），再翻转为时间升序。
      */
     public List<OiPoint> openInterestHistory(String ccy, String period, int limit) {
         JsonNode data = get("/api/v5/rubik/stat/contracts/open-interest-volume?ccy={c}&period={p}",
                 ccy, period);
+        return parseOiHistory(data, limit);
+    }
+
+    static List<OiPoint> parseOiHistory(JsonNode data, int limit) {
         List<OiPoint> points = new ArrayList<>();
-        int from = Math.max(0, data.size() - limit);
-        for (int i = from; i < data.size(); i++) {
+        int size = Math.min(limit, data.size());
+        for (int i = size - 1; i >= 0; i--) {
             JsonNode row = data.get(i);
-            String oi = row.size() > 2 ? row.get(2).asText() : row.get(1).asText();
-            points.add(new OiPoint(row.get(0).asLong(), new BigDecimal(oi)));
+            points.add(new OiPoint(row.get(0).asLong(), new BigDecimal(row.get(1).asText())));
         }
         return points;
     }
@@ -196,7 +206,8 @@ public class OkxClient {
                     new BigDecimal(row.get(2).asText()),
                     new BigDecimal(row.get(3).asText()),
                     new BigDecimal(row.get(4).asText()),
-                    new BigDecimal(row.get(5).asText())));
+                    // OKX candles 第 5 列是张数，第 6 列才是基础币数（与币安 volume 口径一致）
+                    new BigDecimal(row.get(6).asText())));
         }
         return candles;
     }

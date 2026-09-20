@@ -2,7 +2,8 @@ name: EXCHANGE_COMPARE
 
 description: 对比同一币种在不同交易所的行情指标或走势。
 
-# 以下字段仅用于维护文档，不注入提示词、不参与运行时策略。
+# scope / planner / eval 仅用于维护文档，不参与运行时策略；
+# evidence_policy.rules 会注入回答阶段提示词，是该类问题的回答约束（改动即生效）。
 scope:
   exchanges: [binance, okx]
   market_type: perpetual

@@ -18,7 +18,7 @@ input_schema:
     exchange:
       type: string
       enum: [binance, okx]
-      default: okx
+      default: binance
       description: 交易所
     symbol:
       type: string

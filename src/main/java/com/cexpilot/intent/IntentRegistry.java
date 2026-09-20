@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 import org.yaml.snakeyaml.Yaml;
 
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,8 +17,8 @@ import java.util.Map;
  * 启动时加载 classpath:intents/*.yml 全部意图定义。
  * 文件缺失或解析失败直接启动报错（fail fast），避免路由静默失效。
  *
- * 合并调用后 intent 从「路由依据」降级为「统计 hint」：不再按 intent 过滤工具，
- * LLM 归类的 intent 名仅落库用于后续跟踪统计，命中不了记 {@link #UNKNOWN}。
+ * 合并调用后 intent 从「路由依据」降级为「统计 hint + 回答约束」：不再按 intent 过滤工具；
+ * intent 名落库用于统计，evidence_policy.rules 注入回答阶段 prompt，命中不了记 {@link #UNKNOWN}。
  */
 @Component
 public class IntentRegistry {
@@ -54,7 +55,24 @@ public class IntentRegistry {
         if (name == null || name.isBlank()) {
             throw new IllegalStateException("intent 缺少 name: " + resource.getFilename());
         }
-        return new IntentDefinition(name, description);
+        return new IntentDefinition(name, description, parseEvidenceRules(doc));
+    }
+
+    /** evidence_policy.rules：注入回答 prompt 的该类问题回答要求；缺省为空。 */
+    private static List<String> parseEvidenceRules(Map<String, Object> doc) {
+        Object policy = doc.get("evidence_policy");
+        if (!(policy instanceof Map<?, ?> policyMap)) {
+            return List.of();
+        }
+        Object rules = policyMap.get("rules");
+        if (!(rules instanceof List<?> ruleList)) {
+            return List.of();
+        }
+        List<String> result = new ArrayList<>();
+        for (Object rule : ruleList) {
+            result.add(String.valueOf(rule));
+        }
+        return result;
     }
 
     private static String asString(Object value) {

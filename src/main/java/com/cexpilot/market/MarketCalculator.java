@@ -123,6 +123,14 @@ public final class MarketCalculator {
         return new Divergence(a.changePct(), b.changePct(), diff, diff.compareTo(thresholdPct) > 0);
     }
 
+    /** 数值精度规整：HALF_UP 保留 scale 位小数，杀掉上游 API 带来的浮点噪声。 */
+    public static BigDecimal round(BigDecimal value, int scale) {
+        if (value == null) {
+            return null;
+        }
+        return value.setScale(scale, RoundingMode.HALF_UP);
+    }
+
     private static BigDecimal pctChange(BigDecimal from, BigDecimal to) {
         if (from == null || to == null || from.signum() == 0) {
             return null;

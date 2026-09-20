@@ -86,13 +86,18 @@ public class BinanceClient {
         return decimal(node, "openInterest");
     }
 
+    /** 持仓量历史，取 USD 名义值列（sumOpenInterestValue），与 OKX 历史序列同单位。 */
     public List<OiPoint> openInterestHistory(String symbol, String period, int limit) {
         JsonNode node = get("/futures/data/openInterestHist?symbol={s}&period={p}&limit={l}",
                 symbol, period, limit);
+        return parseOiHistory(node);
+    }
+
+    static List<OiPoint> parseOiHistory(JsonNode data) {
         List<OiPoint> points = new ArrayList<>();
-        for (JsonNode item : node) {
+        for (JsonNode item : data) {
             points.add(new OiPoint(item.path("timestamp").asLong(),
-                    decimal(item, "sumOpenInterest")));
+                    decimal(item, "sumOpenInterestValue")));
         }
         return points;
     }

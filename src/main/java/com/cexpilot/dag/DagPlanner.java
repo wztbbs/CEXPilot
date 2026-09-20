@@ -32,10 +32,16 @@ import java.util.Set;
  * - in_domain=false → 直接接受（reply 为产品边界话术），不 repair；
  * - in_domain=true 且 plan=null → 模型有意不规划（工具不足以回答），不 repair；
  * - in_domain=true 且 plan 非空 → LlmJson 容错解析 + PlanValidator 确定性校验，
- *   失败把错误明细追加为消息让 LLM 修复，最多重试 plannerMaxRetries 次。
+ *   失败把错误明细追加为消息让 LLM 修复，最多重试 plannerMaxRetries 次；
+ * - 信封缺失（非对象 / 没有 in_domain 字段，如直接输出 nodes 裸数组）→ 先抢救：
+ *   能解析出合法 plan 就按在域接受；救不回来视为格式错误走 repair，
+ *   绝不误判为出域（否则格式抖动会被静默吞成边界话术）。
  *
  * 每次 LLM 调用落 LLM_CALL trace（name="dag_planner"），每次生成的输出落 PLAN trace
- * （校验通过或有意不规划时 error 为 null，否则带错误明细）。
+ * （校验通过、有意不规划或抢救成功时 error 为 null，否则带错误明细）。
+ *
+ * dag.planner-response-format 配置 json_object / json_schema 时，planner 调用会下发
+ * OpenAI 兼容 response_format 约束（json_schema 强制信封结构，需模型支持）。
  */
 @Component
 public class DagPlanner {
@@ -76,6 +82,7 @@ public class DagPlanner {
     public PlanOutcome plan(String question, String conversationContext, String traceId, TraceSink sink) {
         int maxToolCalls = llmConfig.getMaxToolCalls();
         String systemPrompt = systemPrompt(conversationContext);
+        JsonNode responseFormat = plannerResponseFormat();
 
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(ChatMessage.system(systemPrompt));
@@ -86,7 +93,7 @@ public class DagPlanner {
         String lastError = null;
         int attempts = dagConfig.getPlannerMaxRetries() + 1;
         for (int attempt = 1; attempt <= attempts; attempt++) {
-            ChatResponse response = callLlm(messages, traceId, sink, attempt);
+            ChatResponse response = callLlm(messages, traceId, sink, attempt, responseFormat);
             promptTokens += response.promptTokens() == null ? 0 : response.promptTokens();
             completionTokens += response.completionTokens() == null ? 0 : response.completionTokens();
 
@@ -96,6 +103,22 @@ public class DagPlanner {
             } catch (Exception e) {
                 lastError = "输出 JSON 解析失败: " + e.getMessage();
                 sink.record(TraceEvent.plan(traceId, rawOutput(response.content()), lastError));
+                appendRepair(messages, response.content(), lastError);
+                continue;
+            }
+
+            if (!parsed.isObject() || !parsed.has("in_domain")) {
+                // 模型丢了信封（如直接输出 nodes 裸数组）：先抢救，救不回来再走 repair
+                Optional<DagPlan> salvaged = salvagePlan(parsed, maxToolCalls);
+                if (salvaged.isPresent()) {
+                    DagPlan plan = salvaged.get();
+                    sink.record(TraceEvent.plan(traceId, plan.toJson().toString(), null));
+                    return new PlanOutcome(true, IntentRegistry.UNKNOWN, null,
+                            Optional.of(plan), promptTokens, completionTokens, null);
+                }
+                lastError = "输出缺少信封：必须输出完整 JSON 对象 {\"in_domain\", \"intent\", \"reply\", \"plan\"}，"
+                        + "不要直接输出 nodes 数组";
+                sink.record(TraceEvent.plan(traceId, parsed.toString(), lastError));
                 appendRepair(messages, response.content(), lastError);
                 continue;
             }
@@ -136,6 +159,95 @@ public class DagPlanner {
                 Optional.empty(), promptTokens, completionTokens, lastError);
     }
 
+    /**
+     * 信封缺失时的抢救：裸 nodes 数组、{"plan": {...}}、{"nodes": [...]} 都视为
+     * 模型判断正确但包装丢失；内容能通过 PlanValidator 校验就接受，否则返回空走 repair。
+     */
+    private Optional<DagPlan> salvagePlan(JsonNode parsed, int maxToolCalls) {
+        JsonNode planNode = null;
+        if (parsed.isArray()) {
+            ObjectNode wrapped = MAPPER.createObjectNode();
+            wrapped.set("nodes", parsed);
+            planNode = wrapped;
+        } else if (parsed.isObject()) {
+            if (parsed.path("plan").isObject()) {
+                planNode = parsed.path("plan");
+            } else if (parsed.path("nodes").isArray()) {
+                planNode = parsed;
+            }
+        }
+        if (planNode == null) {
+            return Optional.empty();
+        }
+        try {
+            DagPlan plan = DagPlan.fromJson(planNode);
+            if (plan.nodes().isEmpty()) {
+                return Optional.empty();
+            }
+            return validator.validate(plan, null, maxToolCalls).isEmpty()
+                    ? Optional.of(plan) : Optional.empty();
+        } catch (Exception e) {
+            return Optional.empty();
+        }
+    }
+
+    /** 按 dag.planner-response-format 构造下发给 planner 调用的 response_format；空配置 = 不下发。 */
+    private JsonNode plannerResponseFormat() {
+        String format = dagConfig.getPlannerResponseFormat();
+        if (format == null || format.isBlank()) {
+            return null;
+        }
+        if ("json_object".equals(format)) {
+            ObjectNode node = MAPPER.createObjectNode();
+            node.put("type", "json_object");
+            return node;
+        }
+        if ("json_schema".equals(format)) {
+            ObjectNode node = MAPPER.createObjectNode();
+            node.put("type", "json_schema");
+            ObjectNode jsonSchema = node.putObject("json_schema");
+            jsonSchema.put("name", "dag_planner_output");
+            jsonSchema.put("strict", true);
+            jsonSchema.set("schema", plannerSchema());
+            return node;
+        }
+        throw new IllegalArgumentException(
+                "未知的 dag.planner-response-format: " + format + "（支持 json_object / json_schema / 留空）");
+    }
+
+    /**
+     * planner 输出信封的 JSON Schema。plan 不列入 required：模型判断工具不足以回答时
+     * 可以省略 plan（等价于协议里的 plan=null）；reply/intent 同理允许省略。
+     */
+    private static JsonNode plannerSchema() {
+        try {
+            return MAPPER.readTree("""
+                    {"type": "object", "additionalProperties": false,
+                     "properties": {
+                       "in_domain": {"type": "boolean"},
+                       "intent": {"type": "string"},
+                       "reply": {"type": "string"},
+                       "plan": {"type": "object", "additionalProperties": false,
+                         "properties": {"nodes": {"type": "array", "items": {
+                           "type": "object", "additionalProperties": false,
+                           "properties": {
+                             "id": {"type": "string"},
+                             "tool": {"type": "string"},
+                             "args": {"type": "object"},
+                             "depends_on": {"type": "array", "items": {"type": "string"}},
+                             "include_details": {"type": "boolean"}
+                           },
+                           "required": ["id", "tool"]
+                         }}},
+                         "required": ["nodes"]}
+                     },
+                     "required": ["in_domain"]}
+                    """);
+        } catch (Exception e) {
+            throw new IllegalStateException("planner schema 内置常量解析失败", e);
+        }
+    }
+
     private String systemPrompt(String conversationContext) {
         return prompts.render(PROMPT_NAME, Map.of(
                 "intents", renderIntentList(),
@@ -166,10 +278,11 @@ public class DagPlanner {
         messages.add(ChatMessage.user("上一次输出不合法，请修正后重新输出完整 JSON，只输出 JSON。错误明细：\n" + error));
     }
 
-    private ChatResponse callLlm(List<ChatMessage> messages, String traceId, TraceSink sink, int attempt) {
+    private ChatResponse callLlm(List<ChatMessage> messages, String traceId, TraceSink sink, int attempt,
+                                 JsonNode responseFormat) {
         long start = System.currentTimeMillis();
         try {
-            ChatResponse response = llm.chat(messages, null);
+            ChatResponse response = llm.chat(messages, null, responseFormat);
             sink.record(TraceEvent.llmCall(traceId, TRACE_NAME,
                     eventInput(attempt, messages.size()), rawOutput(response.content()),
                     System.currentTimeMillis() - start,

@@ -105,6 +105,15 @@ class MarketCalculatorTest {
         assertFalse(same.significant());
     }
 
+    @Test
+    void roundKillsFloatNoise() {
+        assertEquals(new BigDecimal("30542.5405"),
+                MarketCalculator.round(bd("30542.540500000123"), 4));
+        assertEquals(new BigDecimal("175833568.77"),
+                MarketCalculator.round(bd("175833568.7729"), 2));
+        assertNull(MarketCalculator.round(null, 4));
+    }
+
     private static BigDecimal bd(String value) {
         return new BigDecimal(value);
     }

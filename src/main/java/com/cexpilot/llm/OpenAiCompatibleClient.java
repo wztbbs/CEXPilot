@@ -29,11 +29,13 @@ public class OpenAiCompatibleClient implements LlmClient {
     private final RestClient restClient;
     private final LlmConfig.ModelConfig config;
     private final double temperature;
+    private final Long seed;
     private final String baseUrl;
 
-    public OpenAiCompatibleClient(LlmConfig.ModelConfig config, double temperature) {
+    public OpenAiCompatibleClient(LlmConfig.ModelConfig config, double temperature, Long seed) {
         this.config = config;
         this.temperature = temperature;
+        this.seed = seed;
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(Duration.ofSeconds(10));
         factory.setReadTimeout(Duration.ofSeconds(300));
@@ -52,9 +54,20 @@ public class OpenAiCompatibleClient implements LlmClient {
 
     @Override
     public ChatResponse chat(List<ChatMessage> messages, List<ToolSpec> tools) {
+        return chat(messages, tools, null);
+    }
+
+    @Override
+    public ChatResponse chat(List<ChatMessage> messages, List<ToolSpec> tools, JsonNode responseFormat) {
         ObjectNode body = MAPPER.createObjectNode();
         body.put("model", config.getModel());
         body.put("temperature", temperature);
+        if (seed != null) {
+            body.put("seed", seed);
+        }
+        if (responseFormat != null) {
+            body.set("response_format", responseFormat);
+        }
         if (config.getEnableThinking() != null) {
             // Qwen3 混合模型的思考开关：思考 token 计入 completion 且逐字生成，
             // 低延迟场景（规划 / 模板化回答）应关闭
@@ -114,10 +127,13 @@ public class OpenAiCompatibleClient implements LlmClient {
         JsonNode usage = response.path("usage");
         Integer promptTokens = usage.path("prompt_tokens").isInt() ? usage.path("prompt_tokens").asInt() : null;
         Integer completionTokens = usage.path("completion_tokens").isInt() ? usage.path("completion_tokens").asInt() : null;
+        // prompt 缓存命中量：区分上游慢是"冷缓存全量 prefill"还是"纯排队"
+        Integer cachedTokens = usage.path("prompt_tokens_details").path("cached_tokens").isInt()
+                ? usage.path("prompt_tokens_details").path("cached_tokens").asInt() : null;
 
-        log.info("LLM 响应 {}ms model={} content={} promptTokens={} completionTokens={}",
+        log.info("LLM 响应 {}ms model={} content={} promptTokens={} completionTokens={} cachedTokens={}",
                 System.currentTimeMillis() - start, config.getModel(),
-                abbreviate(content, 500), promptTokens, completionTokens);
+                abbreviate(content, 500), promptTokens, completionTokens, cachedTokens);
         return new ChatResponse(content, toolCalls, promptTokens, completionTokens);
     }
 

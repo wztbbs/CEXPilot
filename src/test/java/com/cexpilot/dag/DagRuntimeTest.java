@@ -109,7 +109,7 @@ class DagRuntimeTest {
         IntentRegistry intentRegistry = new IntentRegistry(new DefaultResourceLoader());
         DagPlanner planner = new DagPlanner(llm, registry, intentRegistry, new LlmConfig(), dagConfig,
                 prompts, new PlanValidator(registry, dagConfig));
-        return new DagRuntime(llm, planner, new DagExecutor(registry, dagConfig), prompts);
+        return new DagRuntime(llm, planner, new DagExecutor(registry, dagConfig), prompts, intentRegistry);
     }
 
     @Test
@@ -161,6 +161,9 @@ class DagRuntimeTest {
         // 所有意图使用相同的事实约束，不强制固定字数
         assertTrue(answerCall.get(0).content().contains("事实性结论只能来自 FACTS"));
         assertFalse(answerCall.get(0).content().contains("150"));
+        // 命中 MARKET_LOOKUP：该意图的 evidence_policy.rules 注入回答 prompt
+        assertTrue(answerCall.get(0).content().contains("本轮问题归类为 MARKET_LOOKUP"));
+        assertTrue(answerCall.get(0).content().contains("不允许凭记忆报价"));
     }
 
     @Test

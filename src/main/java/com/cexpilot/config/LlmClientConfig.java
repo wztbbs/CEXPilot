@@ -20,11 +20,11 @@ public class LlmClientConfig {
     @Bean(NORMAL_LLM_CLIENT)
     @Primary
     public LlmClient normalLlmClient(LlmConfig config) {
-        return new OpenAiCompatibleClient(config.getNormal(), config.getTemperature());
+        return new OpenAiCompatibleClient(config.getNormal(), config.getTemperature(), config.getSeed());
     }
 
     @Bean(FLAGSHIP_LLM_CLIENT)
     public LlmClient flagshipLlmClient(LlmConfig config) {
-        return new OpenAiCompatibleClient(config.getFlagship(), config.getTemperature());
+        return new OpenAiCompatibleClient(config.getFlagship(), config.getTemperature(), config.getSeed());
     }
 }
