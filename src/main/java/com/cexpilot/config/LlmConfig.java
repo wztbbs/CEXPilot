@@ -77,6 +77,16 @@ public class LlmConfig {
         private double priceOutputPer1k = 0;
         /** null = 不下发该参数；Qwen3 混合模型默认开思考，低延迟场景应显式设为 false。 */
         private Boolean enableThinking;
+        /** false = 关闭连接复用（每次调用重新 TLS 握手），仅用于 A/B 测量握手开销。 */
+        private boolean pooling = true;
+
+        public boolean isPooling() {
+            return pooling;
+        }
+
+        public void setPooling(boolean pooling) {
+            this.pooling = pooling;
+        }
 
         public Boolean getEnableThinking() {
             return enableThinking;

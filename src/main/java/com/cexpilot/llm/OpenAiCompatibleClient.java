@@ -10,6 +10,7 @@ import org.apache.hc.client5.http.config.ConnectionConfig;
 import org.apache.hc.client5.http.config.RequestConfig;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.classic.HttpClients;
+import org.apache.hc.client5.http.impl.DefaultClientConnectionReuseStrategy;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
 import org.apache.hc.core5.util.TimeValue;
 import org.apache.hc.core5.util.Timeout;
@@ -46,7 +47,7 @@ public class OpenAiCompatibleClient implements LlmClient {
     private final Long seed;
     private final String baseUrl;
 
-    public OpenAiCompatibleClient(LlmConfig.ModelConfig config, double temperature, Long seed) {
+    public OpenAiCompatibleClient(LlmConfig.ModelConfig config, double temperature, Long seed, boolean pooling) {
         this.config = config;
         this.temperature = temperature;
         this.seed = seed;
@@ -66,6 +67,11 @@ public class OpenAiCompatibleClient implements LlmClient {
         CloseableHttpClient httpClient = HttpClients.custom()
                 .setConnectionManager(connectionManager)
                 .setDefaultRequestConfig(requestConfig)
+                // pooling=false 只关掉连接复用，其余（超时、连接池上限、空闲驱逐）保持完全一致，
+                // 便于 A/B 时把"每次调用的 TLS 握手开销"单独隔离出来。
+                .setConnectionReuseStrategy(pooling
+                        ? DefaultClientConnectionReuseStrategy.INSTANCE
+                        : (request, response, context) -> false)
                 .evictExpiredConnections()
                 .evictIdleConnections(TimeValue.ofSeconds(30))
                 .build();

@@ -21,12 +21,15 @@ llm:
     api-key: ${LLM_NORMAL_API_KEY:}
     model: ${LLM_NORMAL_MODEL:qwen-plus}
     enable-thinking: ${LLM_NORMAL_ENABLE_THINKING:false}
+    # 连接复用开关，仅用于 A/B 测量"每次调用的 TLS 握手开销"，线上请保持 true
+    pooling: ${LLM_NORMAL_POOLING:true}
     price-input-per-1k: ${LLM_NORMAL_PRICE_INPUT_PER_1K:0}
     price-output-per-1k: ${LLM_NORMAL_PRICE_OUTPUT_PER_1K:0}
   flagship:
     base-url: ${LLM_FLAGSHIP_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
     api-key: ${LLM_FLAGSHIP_API_KEY:}
     model: ${LLM_FLAGSHIP_MODEL:qwen-max}
+    pooling: ${LLM_FLAGSHIP_POOLING:true}
     price-input-per-1k: ${LLM_FLAGSHIP_PRICE_INPUT_PER_1K:0}
     price-output-per-1k: ${LLM_FLAGSHIP_PRICE_OUTPUT_PER_1K:0}
   temperature: ${LLM_TEMPERATURE:0}
