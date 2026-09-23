@@ -25,6 +25,11 @@ class QueryCapabilityGuardTest {
                 MAPPER.createObjectNode().put("symbol", "BTC"), List.of(), false)).toList());
     }
 
+    private DagPlan planWithCount(String tool, String argName, int value) {
+        return new DagPlan(List.of(new PlanNode(tool, tool,
+                MAPPER.createObjectNode().put("symbol", "BTC").put(argName, value), List.of(), false)));
+    }
+
     @Test
     void historicalRequirementsRefusedEvenIfPlannerChoosesCurrentTicker() {
         for (String mode : List.of("calendar_window", "absolute_range", "period_comparison", "mixed", "unknown")) {
@@ -67,10 +72,39 @@ class QueryCapabilityGuardTest {
         }
         for (String tool : List.of("get_funding_rate", "get_recent_trades")) {
             assertNull(QueryCapabilityGuard.refusal("BTC 近期样本", requirements("recent_samples", null), plan(tool)), tool);
+            // 有条数诉求但工具参数未显式携带条数（漏提取）→ 拒
             assertNotNull(QueryCapabilityGuard.refusal("BTC 近期样本", requirements("recent_samples", null)
                     .put("sample_count", 10), plan(tool)), tool);
         }
         assertNull(QueryCapabilityGuard.refusal("查询这笔交易", requirements("unspecified", null), plan("get_transaction")));
+    }
+
+    @Test
+    void explicitSampleCountWithinLimitIsHonored() {
+        // 条数显式落入工具参数且自报一致 → 放行
+        assertNull(QueryCapabilityGuard.refusal("BTC 最近10期费率",
+                requirements("recent_samples", null).put("sample_count", 10),
+                planWithCount("get_funding_rate", "count", 10)));
+        assertNull(QueryCapabilityGuard.refusal("BTC 最近30笔成交",
+                requirements("recent_samples", null).put("sample_count", 30),
+                planWithCount("get_recent_trades", "limit", 30)));
+        // 问题里有条数、args 也有条数，仅 requirements 未填（复合诉求场景）→ 放行
+        assertNull(QueryCapabilityGuard.refusal("BTC 最近30笔成交",
+                requirements("recent_samples", null),
+                planWithCount("get_recent_trades", "limit", 30)));
+        // 超过上限 → 拒，文案带上限
+        String over = QueryCapabilityGuard.refusal("BTC 最近500笔成交",
+                requirements("recent_samples", null).put("sample_count", 500),
+                planWithCount("get_recent_trades", "limit", 500));
+        assertNotNull(over);
+        assertTrue(over.contains("100"), over);
+        // 自报条数与工具参数不一致 → 拒
+        assertNotNull(QueryCapabilityGuard.refusal("BTC 最近10期费率",
+                requirements("recent_samples", null).put("sample_count", 10),
+                planWithCount("get_funding_rate", "count", 20)));
+        // 条数诉求未按近期样本口径规划 → 拒
+        assertNotNull(QueryCapabilityGuard.refusal("BTC 最近10期费率",
+                requirements("current", null), planWithCount("get_funding_rate", "count", 10)));
     }
 
     @Test

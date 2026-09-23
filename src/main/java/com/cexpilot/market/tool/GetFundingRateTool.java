@@ -24,6 +24,8 @@ import java.util.List;
 @Component
 public class GetFundingRateTool extends AbstractMarketTool {
 
+    private static final int OUTPUT_RATES = 20;
+
     public GetFundingRateTool(MarketDataService market) {
         super(market);
     }
@@ -37,7 +39,9 @@ public class GetFundingRateTool extends AbstractMarketTool {
     protected JsonNode doExecute(JsonNode args) {
         var exchange = parseExchange(args);
         String base = parseBase(args);
-        FundingInfo info = market.funding(exchange, base);
+        int count = args.path("count").asInt(10);
+        boolean details = args.path("details").asBoolean(false);
+        FundingInfo info = market.funding(exchange, base, count);
 
         ObjectNode facts = MAPPER.createObjectNode();
         facts.put("exchange", exchange.displayName());
@@ -65,8 +69,15 @@ public class GetFundingRateTool extends AbstractMarketTool {
         }
         List<BigDecimal> rates = info.recentRates().stream()
                 .map(FundingInfo.RatePoint::rate).toList();
+        facts.put("requested_count", count);
+        facts.put("actual_count", rates.size());
+        if (rates.size() < count) {
+            facts.put("actual_count_note",
+                    "实际只获取到 " + rates.size() + " 期（最近期未结算跳过或合约较新），非完整 " + count + " 期");
+        }
         facts.put("trend", MarketCalculator.fundingTrend(rates));
-        facts.put("trend_method", "近10期后半段均值 vs 前半段均值，差值小于 0.005% 判为 flat；未按结算周期归一化");
+        facts.put("trend_method", "按实际取得的" + rates.size()
+                + "期后半段均值 vs 前半段均值，差值小于 0.005% 判为 flat；不足 4 期为 unknown；未按结算周期归一化");
         facts.put("recent_rates_kind", info.recentRatesKind());
         facts.putObject("units").put("current_funding_rate", "fraction")
                 .put("current_funding_rate_pct", "%").put("recent_rates", "fraction")
@@ -76,8 +87,15 @@ public class GetFundingRateTool extends AbstractMarketTool {
                 .put("snapshot_time_utc8", "yyyy-MM-dd HH:mm:ss UTC+8");
 
         facts.putArray("recent_rates_columns").add("settle_time_utc8").add("rate");
+        List<FundingInfo.RatePoint> points = info.recentRates();
+        // 明细窗口：请求 ≤20 期或 details=true 时输出全部，否则只输出最新 20 期；统计与趋势仍基于全部样本
+        int from = (count <= OUTPUT_RATES || details) ? 0 : Math.max(0, points.size() - OUTPUT_RATES);
+        if (from > 0) {
+            facts.put("recent_rates_note", "明细仅输出最新 " + OUTPUT_RATES + " 期（共 " + points.size()
+                    + " 期）；设 details=true 可输出全部");
+        }
         ArrayNode recentRates = facts.putArray("recent_rates");
-        for (FundingInfo.RatePoint point : info.recentRates()) {
+        for (FundingInfo.RatePoint point : points.subList(from, points.size())) {
             ArrayNode row = recentRates.addArray();
             row.add(point.fundingTime() > 0 ? Times.readable(point.fundingTime()) : "unknown");
             row.add(MarketCalculator.roundPlain(point.rate(), 8));

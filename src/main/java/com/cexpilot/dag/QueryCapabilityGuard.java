@@ -20,6 +20,10 @@ final class QueryCapabilityGuard {
             "get_open_interest", "compare_exchanges");
     private static final Set<String> UNVERIFIED_WINDOW_TOOLS = Set.of(
             "get_klines", "get_open_interest", "compare_exchanges");
+    /** 支持用户指定条数的近期样本工具。 */
+    private static final Set<String> SAMPLE_TOOLS = Set.of("get_funding_rate", "get_recent_trades");
+    /** 样本条数上限：两所逐笔成交与费率历史接口的公共上限。 */
+    private static final int MAX_SAMPLE_COUNT = 100;
     // 只作常见漏提取的兜底；不是通用自然语言解析器。仅在市场查询时启用。
     private static final Pattern HISTORICAL = Pattern.compile(
             "今天|今日|昨天|昨日|前天|明天|上上周|上周|本周|这周|上星期|本星期|上个月|上月|本月|这月|去年|今年|上季度|本季度|同比|环比|整点|自然[日周月年]|"
@@ -69,11 +73,12 @@ final class QueryCapabilityGuard {
                 String literal = durations.group().replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
                 if (!"rolling_window".equals(mode) || !"24h".equals(duration)
                         || !Set.of("24h", "24hour", "24hours", "24小时", "二十四小时", "1d", "1day", "1days", "1天", "一天").contains(literal)) {
-                    return "问题包含尚不支持或未可靠保留的时间跨度，暂时无法处理；不会改用默认窗口。";
+                    return "问题包含尚不支持或未可靠保留的时间跨度，暂时无法处理。";
                 }
             }
-            if (SAMPLE_COUNT.matcher(question).find()) {
-                return "目前只能提供近期样本，尚不能保证指定条数全部返回，暂时无法完成这次精确条数查询。";
+            if (SAMPLE_COUNT.matcher(question).find() && !"recent_samples".equals(mode)) {
+                // 检测到条数诉求，但 planner 未按近期样本口径规划，不能放行给不承诺条数的工具
+                return UNCONFIRMED;
             }
         }
         if (plan.nodes().stream().anyMatch(n -> n.tool() != null && UNVERIFIED_WINDOW_TOOLS.contains(n.tool()))) {
@@ -82,24 +87,48 @@ final class QueryCapabilityGuard {
         if ("rolling_window".equals(mode)) {
             if (!"24h".equals(duration) || plan.nodes().isEmpty()
                     || plan.nodes().stream().anyMatch(n -> !"get_ticker".equals(n.tool()))) {
-                return "目前只支持 Ticker 自带的滚动 24 小时统计，暂不支持所要求的时间窗口或指标；不能用最近若干条记录代替。";
+                return "目前只支持 Ticker 自带的滚动 24 小时统计，暂不支持所要求的时间窗口或指标。";
             }
         } else if (duration != null) {
             return UNCONFIRMED;
         }
         if ("recent_samples".equals(mode)) {
             if (plan.nodes().isEmpty() || plan.nodes().stream().anyMatch(n ->
-                    !Set.of("get_funding_rate", "get_recent_trades").contains(n.tool()))) {
+                    n.tool() == null || !SAMPLE_TOOLS.contains(n.tool()))) {
                 return "暂时无法按所要求的样本口径查询；最近若干条记录不代表完整时间区间。";
             }
-            // 未实现条数完备性验证；只能开放无指定条数的近期样本观察。
-            if (!count.isNull()) {
-                return "目前只能提供近期样本，尚不能保证指定条数全部返回，暂时无法完成这次精确条数查询。";
+            // 条数诉求必须显式落在工具参数里：靠默认值冒充等于漏提取
+            boolean countMentioned = !count.isNull() || SAMPLE_COUNT.matcher(question).find();
+            for (PlanNode node : plan.nodes()) {
+                JsonNode arg = node.args() == null ? null : node.args().path(countArg(node.tool()));
+                if (arg != null && arg.isIntegralNumber() && arg.canConvertToInt()) {
+                    if (arg.intValue() <= 0) {
+                        return UNCONFIRMED;
+                    }
+                    if (arg.intValue() > MAX_SAMPLE_COUNT) {
+                        return "样本条数最多支持 " + MAX_SAMPLE_COUNT + " 条，无法完成这次 "
+                                + arg.intValue() + " 条的查询；请降低条数后重试。";
+                    }
+                } else if (countMentioned) {
+                    return UNCONFIRMED;
+                }
+            }
+            // 单样本节点时交叉验证：planner 自报条数与工具参数必须一致
+            if (!count.isNull() && plan.nodes().size() == 1) {
+                JsonNode arg = plan.nodes().get(0).args().path(countArg(plan.nodes().get(0).tool()));
+                if (arg.isIntegralNumber() && arg.canConvertToInt() && arg.intValue() != count.intValue()) {
+                    return UNCONFIRMED;
+                }
             }
         } else if (!count.isNull()) {
             return UNCONFIRMED;
         }
         return null;
+    }
+
+    /** 各样本工具承载条数的参数名。 */
+    private static String countArg(String tool) {
+        return "get_recent_trades".equals(tool) ? "limit" : "count";
     }
 
     private static boolean valid(JsonNode r) {

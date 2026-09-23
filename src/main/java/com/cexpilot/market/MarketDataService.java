@@ -43,14 +43,14 @@ public class MarketDataService {
         };
     }
 
-    public FundingInfo funding(Exchange exchange, String base) {
+    public FundingInfo funding(Exchange exchange, String base, int count) {
         return switch (exchange) {
             case BINANCE -> {
                 // 当前费率取历史末条（费率与结算时间同源）；premiumIndex 只取下次结算时间和快照时间，
                 // 不拿它的 lastFundingRate 配历史时间——两者实采可能不一致（历史接口有滞后）
                 String symbol = SymbolMapper.binanceSymbol(base);
                 MarkPrice premium = binance.premiumIndex(symbol);
-                List<FundingInfo.RatePoint> history = binance.fundingRateHistory(symbol, 10);
+                List<FundingInfo.RatePoint> history = binance.fundingRateHistory(symbol, count);
                 FundingInfo.RatePoint last = history.isEmpty() ? null : history.get(history.size() - 1);
                 yield new FundingInfo(last == null ? null : last.rate(), "settled",
                         last == null ? 0 : last.fundingTime(),
@@ -63,7 +63,7 @@ public class MarketDataService {
                 FundingSnapshot snapshot = okx.fundingRate(instId);
                 yield new FundingInfo(snapshot.rate(), "predicted", snapshot.fundingTime(),
                         snapshot.fundingTime(), snapshot.nextFundingTime(), snapshot.ts(), "realized",
-                        okx.fundingRateHistory(instId, 10));
+                        okx.fundingRateHistory(instId, count));
             }
         };
     }

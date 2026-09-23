@@ -101,108 +101,125 @@ public class DagPlanner {
             promptTokens += response.promptTokens() == null ? 0 : response.promptTokens();
             completionTokens += response.completionTokens() == null ? 0 : response.completionTokens();
 
-            JsonNode parsed;
-            try {
-                parsed = LlmJson.parse(response.content());
-            } catch (Exception e) {
-                lastError = "输出 JSON 解析失败: " + e.getMessage();
-                sink.record(TraceEvent.plan(traceId, rawOutput(response.content()), lastError));
-                appendRepair(messages, response.content(), lastError);
-                continue;
+            PlanDecision decision = evaluateResponse(question, response.content(), maxToolCalls, traceId, sink);
+            if (decision.error() == null) {
+                return decision.toOutcome(promptTokens, completionTokens);
             }
-
-            if (!parsed.isObject() || !parsed.path("in_domain").isBoolean()) {
-                lastError = "输出缺少信封：必须输出完整 JSON 对象 {\"in_domain\", \"intent\", \"reply\", \"plan\"}，"
-                        + "不要直接输出 nodes 数组";
-                sink.record(TraceEvent.plan(traceId, parsed.toString(), lastError));
-                appendRepair(messages, response.content(), lastError);
-                continue;
-            }
-
-            if (!parsed.path("in_domain").asBoolean(false)) {
-                sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
-                return new PlanOutcome(false, null, textOrNull(parsed.path("reply")),
-                        Optional.empty(), promptTokens, completionTokens, null);
-            }
-
-            String intent = normalizeIntent(parsed.path("intent"));
-            String reply = textOrNull(parsed.path("reply"));
-            JsonNode planNode = parsed.path("plan");
-            // 先检查语义，即使模型选择 plan=null 也不能把能力缺口写成计算结果。
-            DagPlan capabilityPlan;
-            try {
-                capabilityPlan = planNode.isObject() ? DagPlan.fromJson(planNode) : new DagPlan(List.of());
-            } catch (Exception e) {
-                lastError = "plan 解析失败: " + e.getMessage();
-                sink.record(TraceEvent.plan(traceId, parsed.toString(), lastError));
-                appendRepair(messages, response.content(), lastError);
-                continue;
-            }
-            String refusal = QueryCapabilityGuard.refusal(question, parsed.path("query_requirements"), capabilityPlan);
-            if (refusal != null) {
-                sink.record(TraceEvent.plan(traceId, parsed.toString(), "CAPABILITY_REFUSED: " + refusal));
-                return new PlanOutcome(true, intent, refusal, Optional.empty(),
-                        promptTokens, completionTokens, null);
-            }
-            if (!planNode.isObject()) {
-                if (isReasoningDump(reply)) {
-                    // 模型把推理过程倒进 reply 且没给 plan：协议误用，按格式错误 repair，
-                    // 不能直接接受——否则推理原文会被透传成答案
-                    lastError = "reply 只能写一句要对用户说的简短话术（" + REPLY_MAX_LENGTH
-                            + " 字以内），禁止输出推理过程；问题可查询时必须输出 plan 字段";
-                    sink.record(TraceEvent.plan(traceId, parsed.toString(), lastError));
-                    appendRepair(messages, response.content(), lastError);
-                    continue;
-                }
-                // 模型有意不规划（plan=null）：工具不足以回答或需追问，不 repair
-                sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
-                return new PlanOutcome(true, intent, reply,
-                        Optional.empty(), promptTokens, completionTokens, null);
-            }
-
-            try {
-                DagPlan plan = DagPlan.fromJson(planNode);
-                if (plan.nodes().isEmpty() && reply != null && !reply.isBlank()) {
-                    if (isReasoningDump(reply)) {
-                        lastError = "reply 只能写一句要对用户说的简短话术（" + REPLY_MAX_LENGTH
-                                + " 字以内），禁止输出推理过程；问题可查询时必须输出 plan 字段";
-                        sink.record(TraceEvent.plan(traceId, parsed.toString(), lastError));
-                        appendRepair(messages, response.content(), lastError);
-                        continue;
-                    }
-                    // 空 nodes + reply：模型有意不规划（向用户追问或说明能力缺口），
-                    // 等价于 plan=null，直接接受不 repair——否则重试三次后 reply 还会被丢掉
-                    sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
-                    return new PlanOutcome(true, intent, reply,
-                            Optional.empty(), promptTokens, completionTokens, null);
-                }
-                List<String> errors = validator.validate(plan, null, maxToolCalls);
-                if (errors.isEmpty()) {
-                    sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
-                    // reply 与 plan 并存时只作查询缺口说明；推理 dump 直接丢弃
-                    // （plan 已合法，不值得为 reply 再走一轮 repair）
-                    String effectiveReply = isReasoningDump(reply) ? null : reply;
-                    return new PlanOutcome(true, intent, effectiveReply,
-                            Optional.of(plan), promptTokens, completionTokens, null);
-                }
-                lastError = "plan 校验失败: " + String.join("; ", errors);
-                if (lastError.contains("未注册的工具")) {
-                    // 常见诱因：模型把 args 胶水进 tool 字符串。给出可用工具名和格式提示
-                    StringBuilder names = new StringBuilder();
-                    registry.specs().forEach(spec -> names.append(names.isEmpty() ? "" : ", ")
-                            .append(spec.name()));
-                    lastError += "；tool 字段只能填工具名本身（可用：" + names
-                            + "），args 必须是独立的 JSON 对象字段，如 {\"tool\": \"get_ticker\", \"args\": {\"symbol\": \"BTC\"}}";
-                }
-            } catch (Exception e) {
-                lastError = "plan 解析失败: " + e.getMessage();
-            }
-            sink.record(TraceEvent.plan(traceId, parsed.toString(), lastError));
+            lastError = decision.error();
             appendRepair(messages, response.content(), lastError);
         }
         // repair 耗尽：runtime 直接返回固定失败话术，禁止继续生成无事实答案。
         return new PlanOutcome(true, IntentRegistry.UNKNOWN, null,
                 Optional.empty(), promptTokens, completionTokens, lastError);
+    }
+
+    /** 单轮判断不负责 token 累计；error 非空时由 plan 统一追加修复消息并重试。 */
+    private record PlanDecision(boolean inDomain, String intent, String reply, DagPlan plan, String error) {
+        private static PlanDecision accepted(boolean inDomain, String intent, String reply, DagPlan plan) {
+            return new PlanDecision(inDomain, intent, reply, plan, null);
+        }
+
+        private PlanOutcome toOutcome(int promptTokens, int completionTokens) {
+            return new PlanOutcome(inDomain, intent, reply, Optional.ofNullable(plan),
+                    promptTokens, completionTokens, error);
+        }
+    }
+
+    private PlanDecision evaluateResponse(String question, String content, int maxToolCalls,
+                                          String traceId, TraceSink sink) {
+        JsonNode parsed;
+        try {
+            parsed = LlmJson.parse(content);
+        } catch (Exception e) {
+            return repairDecision(traceId, sink, rawOutput(content), "输出 JSON 解析失败: " + e.getMessage());
+        }
+
+        if (!parsed.isObject() || !parsed.path("in_domain").isBoolean()) {
+            String error = "输出缺少信封：必须输出完整 JSON 对象 {\"in_domain\", \"intent\", \"reply\", \"plan\"}，"
+                    + "不要直接输出 nodes 数组";
+            return repairDecision(traceId, sink, parsed.toString(), error);
+        }
+        if (!parsed.path("in_domain").asBoolean(false)) {
+            sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
+            return PlanDecision.accepted(false, null, textOrNull(parsed.path("reply")), null);
+        }
+        return evaluateInDomainResponse(question, parsed, maxToolCalls, traceId, sink);
+    }
+
+    private PlanDecision evaluateInDomainResponse(String question, JsonNode parsed, int maxToolCalls,
+                                                  String traceId, TraceSink sink) {
+        String intent = normalizeIntent(parsed.path("intent"));
+        String reply = textOrNull(parsed.path("reply"));
+        JsonNode planNode = parsed.path("plan");
+        // 先检查语义，即使模型选择 plan=null 也不能把能力缺口写成计算结果。
+        DagPlan capabilityPlan;
+        try {
+            capabilityPlan = planNode.isObject() ? DagPlan.fromJson(planNode) : new DagPlan(List.of());
+        } catch (Exception e) {
+            return repairDecision(traceId, sink, parsed.toString(), "plan 解析失败: " + e.getMessage());
+        }
+        String refusal = QueryCapabilityGuard.refusal(question, parsed.path("query_requirements"), capabilityPlan);
+        if (refusal != null) {
+            sink.record(TraceEvent.plan(traceId, parsed.toString(), "CAPABILITY_REFUSED: " + refusal));
+            return PlanDecision.accepted(true, intent, refusal, null);
+        }
+        if (!planNode.isObject()) {
+            return evaluateReplyWithoutPlan(parsed, intent, reply, traceId, sink);
+        }
+        return validatePlan(parsed, intent, reply, maxToolCalls, traceId, sink);
+    }
+
+    private PlanDecision evaluateReplyWithoutPlan(JsonNode parsed, String intent, String reply,
+                                                  String traceId, TraceSink sink) {
+        if (isReasoningDump(reply)) {
+            // 没有 plan 时，超长 reply 按协议错误修复，不能把推理原文透传成答案。
+            String error = "reply 只能写一句要对用户说的简短话术（" + REPLY_MAX_LENGTH
+                    + " 字以内），禁止输出推理过程；问题可查询时必须输出 plan 字段";
+            return repairDecision(traceId, sink, parsed.toString(), error);
+        }
+        // plan=null 或空 nodes + 非空 reply：模型有意不规划，直接接受不 repair。
+        sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
+        return PlanDecision.accepted(true, intent, reply, null);
+    }
+
+    private PlanDecision validatePlan(JsonNode parsed, String intent, String reply, int maxToolCalls,
+                                      String traceId, TraceSink sink) {
+        String error;
+        try {
+            DagPlan plan = DagPlan.fromJson(parsed.path("plan"));
+            if (plan.nodes().isEmpty() && reply != null && !reply.isBlank()) {
+                return evaluateReplyWithoutPlan(parsed, intent, reply, traceId, sink);
+            }
+            List<String> errors = validator.validate(plan, null, maxToolCalls);
+            if (errors.isEmpty()) {
+                sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
+                // plan 已合法时，超长 reply 直接丢弃，不再为 reply 重试。
+                String effectiveReply = isReasoningDump(reply) ? null : reply;
+                return PlanDecision.accepted(true, intent, effectiveReply, plan);
+            }
+            error = planValidationError(errors);
+        } catch (Exception e) {
+            error = "plan 解析失败: " + e.getMessage();
+        }
+        return repairDecision(traceId, sink, parsed.toString(), error);
+    }
+
+    private String planValidationError(List<String> errors) {
+        String error = "plan 校验失败: " + String.join("; ", errors);
+        if (error.contains("未注册的工具")) {
+            // 常见诱因：模型把 args 胶水进 tool 字符串。给出可用工具名和格式提示。
+            StringBuilder names = new StringBuilder();
+            registry.specs().forEach(spec -> names.append(names.isEmpty() ? "" : ", ")
+                    .append(spec.name()));
+            error += "；tool 字段只能填工具名本身（可用：" + names
+                    + "），args 必须是独立的 JSON 对象字段，如 {\"tool\": \"get_ticker\", \"args\": {\"symbol\": \"BTC\"}}";
+        }
+        return error;
+    }
+
+    private PlanDecision repairDecision(String traceId, TraceSink sink, String output, String error) {
+        sink.record(TraceEvent.plan(traceId, output, error));
+        return new PlanDecision(true, null, null, null, error);
     }
 
     /** 判断 reply 是否是推理 dump：合法话术很短，超长即视为协议误用。 */
