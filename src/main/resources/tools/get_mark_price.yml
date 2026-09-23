@@ -3,10 +3,11 @@ enabled: true
 description: 查询标记价、现货指数价及基差（标记价减指数价）；资金费率请用 get_funding_rate。
 # capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
 capabilities:
-  - 查询永续合约标记价格与现货指数价格
+  - 查询永续合约标记价格与现货指数价格（保留上游原始精度，小市值币种不会被截断为 0）
   - 给出已计算的基差（标记价 - 指数价），判断合约溢价程度
 limitations:
-  - 资金费率字段仅 Binance 返回（OKX 的 mark-price 接口不含费率），查资金费率请用 get_funding_rate
+  - 资金费率字段仅 Binance 返回（OKX 的 mark-price 接口不含费率），查资金费率请用 get_funding_rate；该费率带快照采集时间（current_funding_rate_as_of），与 get_funding_rate 历史末条可能因接口滞后略有差异
+  - mark 与 index 可能来自两次请求，输出带各自来源时间与时间差（basis_time_diff_ms），时间差过大时基差仅供参考
 scope:
   exchanges: [binance, okx]
   market_type: perpetual

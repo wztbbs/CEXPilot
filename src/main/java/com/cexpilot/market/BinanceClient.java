@@ -3,6 +3,7 @@ package com.cexpilot.market;
 import com.cexpilot.config.ExchangeConfig;
 import com.cexpilot.exception.ExchangeException;
 import com.cexpilot.market.model.Candle;
+import com.cexpilot.market.model.FundingInfo.RatePoint;
 import com.cexpilot.market.model.MarkPrice;
 import com.cexpilot.market.model.OpenInterestInfo.OiPoint;
 import com.cexpilot.market.model.OrderBook;
@@ -59,24 +60,30 @@ public class BinanceClient {
                 decimal(node, "lastPrice"),
                 decimal(node, "priceChangePercent"),
                 decimal(node, "volume"),
-                decimal(node, "quoteVolume"));
+                decimal(node, "quoteVolume"),
+                false,
+                node.path("closeTime").asLong(0));
     }
 
-    /** premiumIndex 同时给出标记价格、指数价格、当期资金费率。 */
+    /** premiumIndex 同时给出标记价格、指数价格、最近一期已结算资金费率。 */
     public MarkPrice premiumIndex(String symbol) {
         JsonNode node = get("/fapi/v1/premiumIndex?symbol={s}", symbol);
+        long time = node.path("time").asLong(0);
         return new MarkPrice(
                 decimal(node, "markPrice"),
                 decimal(node, "indexPrice"),
                 decimal(node, "lastFundingRate"),
-                node.path("nextFundingTime").asLong(0));
+                node.path("nextFundingTime").asLong(0),
+                time, time);
     }
 
-    public List<BigDecimal> fundingRateHistory(String symbol, int limit) {
+    /** 历史资金费率：已结算费率，保留各期结算时间。 */
+    public List<RatePoint> fundingRateHistory(String symbol, int limit) {
         JsonNode node = get("/fapi/v1/fundingRate?symbol={s}&limit={l}", symbol, limit);
-        List<BigDecimal> rates = new ArrayList<>();
+        List<RatePoint> rates = new ArrayList<>();
         for (JsonNode item : node) {
-            rates.add(decimal(item, "fundingRate"));
+            rates.add(new RatePoint(decimal(item, "fundingRate"),
+                    item.path("fundingTime").asLong(0)));
         }
         return rates;
     }
@@ -86,7 +93,7 @@ public class BinanceClient {
         return decimal(node, "openInterest");
     }
 
-    /** 持仓量历史，取 USD 名义值列（sumOpenInterestValue），与 OKX 历史序列同单位。 */
+    /** 指定 USDT 永续合约的持仓数量历史，sumOpenInterest 单位为基础币。 */
     public List<OiPoint> openInterestHistory(String symbol, String period, int limit) {
         JsonNode node = get("/futures/data/openInterestHist?symbol={s}&period={p}&limit={l}",
                 symbol, period, limit);
@@ -97,14 +104,28 @@ public class BinanceClient {
         List<OiPoint> points = new ArrayList<>();
         for (JsonNode item : data) {
             points.add(new OiPoint(item.path("timestamp").asLong(),
-                    decimal(item, "sumOpenInterestValue")));
+                    decimal(item, "sumOpenInterest")));
         }
+        points.sort(java.util.Comparator.comparingLong(OiPoint::timestamp));
         return points;
     }
 
+    /** 币安盘口只接受 5/10/20/50 档，其余深度会被上游 400 拒绝；映射到最近的合法档位（等距取更深一档）。 */
+    public static int mapDepth(int depth) {
+        int[] validDepths = {5, 10, 20, 50};
+        int best = validDepths[0];
+        for (int valid : validDepths) {
+            if (Math.abs(valid - depth) <= Math.abs(best - depth)) {
+                best = valid;
+            }
+        }
+        return best;
+    }
+
     public OrderBook depth(String symbol, int limit) {
-        JsonNode node = get("/fapi/v1/depth?symbol={s}&limit={l}", symbol, limit);
-        return new OrderBook(parseLevels(node.path("bids")), parseLevels(node.path("asks")));
+        JsonNode node = get("/fapi/v1/depth?symbol={s}&limit={l}", symbol, mapDepth(limit));
+        return new OrderBook(parseLevels(node.path("bids")), parseLevels(node.path("asks")),
+                "base", node.path("T").asLong(node.path("E").asLong(0)));
     }
 
     public List<Trade> trades(String symbol, int limit) {
@@ -116,7 +137,8 @@ public class BinanceClient {
                     item.path("time").asLong(),
                     decimal(item, "price"),
                     decimal(item, "qty"),
-                    !item.path("isBuyerMaker").asBoolean(true)));
+                    !item.path("isBuyerMaker").asBoolean(true),
+                    "base"));
         }
         return trades;
     }

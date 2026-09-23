@@ -48,11 +48,14 @@ public class GetRecentTradesTool extends AbstractMarketTool {
             }
         }
 
-        facts.put("sample_basis", "最近N笔成交，不代表固定时间窗口；统计基于全部样本，明细最多20笔");
+        // OKX 数量是合约张数，Binance 是基础币；同一交易所内单位一致，占比不受影响
+        boolean contracts = !trades.isEmpty() && "contracts".equals(trades.get(0).qtyUnit());
+        facts.put("quantity_unit", contracts ? "contracts（合约张数，未换算为币数）" : base + "（基础币）");
+        facts.put("sample_basis", "最近N笔成交，不代表固定时间窗口；统计基于全部样本，明细为其中最新20笔");
         facts.putArray("recent_trades_columns").add("time_utc8").add("price_usdt")
-                .add("quantity").add("aggressor_side");
+                .add(contracts ? "quantity_contracts" : "quantity_" + base).add("aggressor_side");
         ArrayNode rows = facts.putArray("recent_trades");
-        trades.stream().limit(OUTPUT_TRADES).forEach(trade -> {
+        trades.stream().skip(Math.max(0, trades.size() - OUTPUT_TRADES)).forEach(trade -> {
             ArrayNode row = rows.addArray();
             row.add(Times.readable(trade.time()));
             row.add(trade.price());

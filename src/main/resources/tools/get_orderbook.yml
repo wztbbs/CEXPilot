@@ -4,10 +4,13 @@ description: 查询当前盘口前10档、买卖盘不平衡度及价差；不�
 # capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
 capabilities:
   - 获取当前盘口买卖各档位价格与挂单量（输出前 10 档）
-  - 给出已计算的前 10 档买卖盘不平衡度与买一卖一价差
+  - 给出已计算的买卖盘不平衡度与买一卖一价差
 limitations:
   - 只是当前时刻快照，不能解释过去的价格变化
   - 无论请求多深，输出最多买卖各 10 档
+  - 数量单位两所不同：OKX 是合约张数（quantity_contracts），Binance 是基础币；输出列名与 quantity_unit 标注
+  - 不平衡度按实际可用档数计算，字段名为 imbalance_topN（N 为实际档数，不足 10 档时 N < 10），并附 bid_levels / ask_levels
+  - Binance 只接受 5/10/20/50 档，其余 depth 会映射到最近的合法档位，输出 depth 为实际请求档位
 scope:
   exchanges: [binance, okx]
   market_type: perpetual

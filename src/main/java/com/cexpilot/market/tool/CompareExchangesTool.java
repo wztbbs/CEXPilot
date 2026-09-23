@@ -68,9 +68,12 @@ public class CompareExchangesTool implements AgentTool {
                 MarketCalculator.Divergence divergence = MarketCalculator.divergence(
                         binance.change, okx.change, DIVERGENCE_THRESHOLD_PCT);
                 ObjectNode div = facts.putObject("divergence");
-                div.put("diff_pct", divergence.diffPct());
-                div.put("threshold_pct", DIVERGENCE_THRESHOLD_PCT);
+                // diff 是两所涨跌幅（%）数值之差，单位为百分点
+                div.put("unit", "percentage_points");
+                div.put("diff_percentage_points", divergence.diffPct());
+                div.put("threshold_percentage_points", DIVERGENCE_THRESHOLD_PCT);
                 div.put("significant", divergence.significant());
+                div.put("significant_meaning", "diff 超过固定阈值 0.3 个百分点即为 true，是业务阈值命中，不是统计显著性检验");
             }
             return ToolResult.success(facts);
         } catch (IllegalArgumentException e) {
@@ -93,6 +96,11 @@ public class CompareExchangesTool implements AgentTool {
         ObjectNode node = MAPPER.createObjectNode();
         if (result.error != null) {
             node.put("error", result.error);
+            return node;
+        }
+        if (result.change == null) {
+            // 接口成功但窗口内无 K 线：该侧数据不足，另一侧结果仍保留
+            node.put("data_status", "数据不足：窗口内没有 K 线");
             return node;
         }
         node.put("start_price", result.change.startPrice());

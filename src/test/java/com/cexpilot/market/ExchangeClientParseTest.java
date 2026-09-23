@@ -62,19 +62,20 @@ class ExchangeClientParseTest {
 
     @Test
     void okxOiHistoryTakesNewestRowsReversedToAscending() throws Exception {
-        // rubik 返回行 [ts, oiUsd, volUsd]，最新在前，跨度远超 limit。
-        // 构造 30 条倒序数据：volUsd 用扎眼的常量，取错列会立刻暴露。
+        // 指定合约接口返回 [ts, oi(张), oiCcy(币), oiUsd]。
+        // 张数、币数和名义值使用不同数值，避免误取原接口列。
         ArrayNode data = MAPPER.createArrayNode();
         for (int i = 29; i >= 0; i--) {
             ArrayNode row = MAPPER.createArrayNode();
             row.add(1000 + i);
+            row.add("888888");
             row.add("2" + i + ".5");
             row.add("999999");
             data.add(row);
         }
         List<OpenInterestInfo.OiPoint> points = OkxClient.parseOiHistory(data, 24);
         assertEquals(24, points.size());
-        // 应取最新 24 条（ts 1006..1029）并翻转为升序，值取 oiUsd 列
+        // 应取最新 24 条（ts 1006..1029）并翻转为升序，值取 oiCcy 列
         assertEquals(1006, points.get(0).timestamp());
         assertEquals(1029, points.get(23).timestamp());
         assertEquals(new BigDecimal("26.5"), points.get(0).oi());
@@ -84,8 +85,8 @@ class ExchangeClientParseTest {
     @Test
     void okxOiHistoryLimitExceedsData() throws Exception {
         ArrayNode data = MAPPER.createArrayNode();
-        data.add(MAPPER.readTree("[\"2000\", \"31.5\", \"888\"]"));
-        data.add(MAPPER.readTree("[\"1000\", \"30.5\", \"999\"]"));
+        data.add(MAPPER.readTree("[\"2000\", \"9000\", \"31.5\", \"888\"]"));
+        data.add(MAPPER.readTree("[\"1000\", \"8000\", \"30.5\", \"999\"]"));
         List<OpenInterestInfo.OiPoint> points = OkxClient.parseOiHistory(data, 24);
         assertEquals(2, points.size());
         assertEquals(1000, points.get(0).timestamp());
@@ -93,26 +94,46 @@ class ExchangeClientParseTest {
     }
 
     @Test
-    void binanceOiHistoryTakesUsdNotional() throws Exception {
-        // openInterestHist 行同时带币数（sumOpenInterest）和 USD 名义值（sumOpenInterestValue），
-        // 统一口径要求取 USD 列
+    void binanceOiHistoryTakesBaseQuantity() throws Exception {
+        // 统一使用基础币数量，不取名义价值列。
         ArrayNode data = MAPPER.createArrayNode();
         data.add(MAPPER.readTree(
                 "{\"symbol\":\"BTCUSDT\",\"sumOpenInterest\":\"108898.706\",\"sumOpenInterestValue\":\"8829251567.32\",\"timestamp\":1726761600000}"));
         List<OpenInterestInfo.OiPoint> points = BinanceClient.parseOiHistory(data);
         assertEquals(1, points.size());
         assertEquals(1726761600000L, points.get(0).timestamp());
-        assertEquals(new BigDecimal("8829251567.32"), points.get(0).oi());
+        assertEquals(new BigDecimal("108898.706"), points.get(0).oi());
+    }
+
+    @Test
+    void binanceDepthMapsToNearestValidLevel() {
+        // 币安盘口只接受 5/10/20/50，其余深度须映射到最近合法档（等距取更深一档）
+        assertEquals(5, BinanceClient.mapDepth(5));
+        assertEquals(5, BinanceClient.mapDepth(7));
+        assertEquals(10, BinanceClient.mapDepth(8));
+        assertEquals(20, BinanceClient.mapDepth(15));
+        assertEquals(50, BinanceClient.mapDepth(50));
     }
 
     @Test
     void okxTickerConvertsContractsToCoinAndUsdt() throws Exception {
         // OKX ticker 的 vol24h 是张数、volCcy24h 是币数；张数绝不能进 base/quote 成交量
         com.fasterxml.jackson.databind.JsonNode item = MAPPER.readTree(
-                "{\"last\":\"2618.68\",\"open24h\":\"2600\",\"vol24h\":\"16115379.9\",\"volCcy24h\":\"1611537.99\"}");
+                "{\"last\":\"2618.68\",\"open24h\":\"2600\",\"vol24h\":\"16115379.9\",\"volCcy24h\":\"1611537.99\",\"ts\":\"1726761600000\"}");
         var ticker = OkxClient.parseTicker(item);
         assertEquals(new BigDecimal("1611537.99"), ticker.baseVolume24h());
-        // quote = 币数 × 最新价 = 1611537.99 × 2618.68 ≈ 42.2 亿 USDT
+        // quote = 币数 × 最新价 = 1611537.99 × 2618.68 ≈ 42.2 亿 USDT，必须带估算标志
         assertEquals(0, new BigDecimal("4220102303.6532").compareTo(ticker.quoteVolume24h()));
+        assertEquals(true, ticker.quoteVolumeEstimated());
+        assertEquals(1726761600000L, ticker.timestamp());
+    }
+
+    @Test
+    void okxTickerZeroOpen24hGivesNullChangePct() throws Exception {
+        // open24h 为 0 时涨跌幅无定义，必须返回 null 而不是伪造的 0%
+        com.fasterxml.jackson.databind.JsonNode item = MAPPER.readTree(
+                "{\"last\":\"2618.68\",\"open24h\":\"0\",\"vol24h\":\"0\",\"volCcy24h\":\"0\",\"ts\":\"1726761600000\"}");
+        var ticker = OkxClient.parseTicker(item);
+        assertEquals(null, ticker.changePct24h());
     }
 }

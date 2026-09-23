@@ -1,11 +1,15 @@
 name: get_funding_rate
 enabled: true
-description: 查询当前资金费率、下次结算时间、最近10期费率及趋势。
+description: 查询当前资金费率、下次结算时间、最近10期费率及趋势；OKX 当前费率是预测值（到结算才确定），Binance 当前费率取历史末条已结算值；快照采集时间与结算时间分开输出。
 # capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
 capabilities:
   - 查询当前资金费率（同时给出小数与百分比两种形式）与下次结算时间
-  - 给出最近 10 期历史费率序列与已计算的趋势（rising / falling / flat）
+  - 给出最近 10 期历史费率序列（含各期结算时间）与已计算的趋势（rising / falling / flat）
 limitations:
+  - 两所费率口径不同：OKX 当前费率是预测值（current_rate_kind=predicted），历史是实际结算值；Binance 当前费率取历史末条已结算值（current_rate_kind=settled），费率与结算时间同源
+  - next_funding_time 一律为下一次结算；OKX 另有 following_funding_time 表示再下一期（Binance 不提供）
+  - snapshot_time 是快照采集时间，与费率结算时间含义不同
+  - trend 仅按近 10 期后半段均值与前半段均值比较（差值 < 0.005% 判为 flat），未按结算周期归一化
   - 历史只有最近 10 期，无法分析更长周期的费率变化
   - 资金费率是情绪指标，不能单独用来预测价格方向
 scope:

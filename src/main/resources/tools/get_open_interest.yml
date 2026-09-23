@@ -1,13 +1,16 @@
 name: get_open_interest
 enabled: true
-description: 查询持仓量（USD 名义值）。open_interest 当前值取近24小时历史序列（1 小时粒度）的最新点，oi_change_24h_pct 为序列算出的 24 小时变化率，二者同口径。OKX 序列为该币种全市场合约汇总，币安为该永续合约。
+description: 查询 Binance/OKX 指定 USDT 永续合约的持仓数量，统一用基础币计量（例如 BTC），不是 USD/USDT 金额。open_interest 为 1 小时粒度历史序列的最新采样值，带 as_of_utc8，非实时快照。oi_change_pct 仅为返回样本首尾的数量变化，不代表完整 24 小时变化。时间窗口能力限制仍由规划层执行。
 # capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
 capabilities:
-  - 查询永续合约当前持仓量（USD 名义值）
-  - 给出近 24 小时持仓量历史序列与已计算的 24 小时变化百分比
+  - 两所均查询单个 USDT 永续合约，例如 BTCUSDT / BTC-USDT-SWAP
+  - 持仓数量统一使用基础币；保留原始小数精度
+  - 返回近期小时采样序列和样本首尾数量变化
 limitations:
-  - 历史固定为近 24 小时（1 小时间隔），不支持自定义时间窗口
-  - 当前值取序列最新点，比实时值最多旧 1 小时
+  - 最多请求 24 个小时采样点，不保证覆盖完整 24 小时，不支持自定义时间窗口
+  - 最新采样值不是实时值，不保证最大延迟；以 as_of_utc8 为准
+  - 历史为空时返回数据不足，两所均不回退至实时快照或估算金额
+  - 不同基础币的数量不能直接相加；跨所比较仍需验证采样时间与覆盖范围
   - 单独无法判断多空方向，需结合价格与资金费率
 scope:
   exchanges: [binance, okx]

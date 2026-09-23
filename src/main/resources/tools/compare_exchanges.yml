@@ -4,10 +4,11 @@ description: 对比 Binance 与 OKX 同币种、同窗口的涨跌幅及背离�
 # capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
 capabilities:
   - 并行对比 Binance 与 OKX 同一币种在同一窗口的价格涨跌幅
-  - 给出两所涨跌幅差值与是否显著背离（阈值 0.3%）
-  - 一所数据获取失败时返回另一所的部分结果并注明
+  - 给出两所涨跌幅差值（diff_percentage_points，单位百分点）与是否背离
+  - 一所数据获取失败或窗口内无 K 线时，该侧标注原因，另一所结果仍保留
 limitations:
   - 只对比价格变化，不对比资金费率、持仓量、盘口等其他指标
+  - significant 仅表示 diff 超过固定阈值 0.3 个百分点（业务阈值命中），不是统计显著性检验
   - 只支持 1h / 4h / 24h 三档相对窗口，无法对比指定的历史时间段
 scope:
   exchanges: [binance, okx]

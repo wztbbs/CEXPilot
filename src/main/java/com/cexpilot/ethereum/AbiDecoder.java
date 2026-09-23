@@ -1,6 +1,7 @@
 package com.cexpilot.ethereum;
 
 import java.math.BigInteger;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -45,7 +46,7 @@ public final class AbiDecoder {
             case TRANSFER -> decodeTransfer(contract, topics, data);
             case APPROVAL -> decodeApproval(contract, topics, data);
             case SWAP_V2 -> decodeSwapV2(contract, topics, data);
-            case SWAP_V3 -> decodeSwapV3(contract, data);
+            case SWAP_V3 -> decodeSwapV3(contract, topics, data);
             case WETH_DEPOSIT -> new DecodedEvent("DEPOSIT", contract,
                     HexUtils.toAddress(topics.size() > 1 ? topics.get(1) : null), null,
                     HexUtils.toBigInteger(data), Map.of());
@@ -71,45 +72,61 @@ public final class AbiDecoder {
     }
 
     private static DecodedEvent decodeApproval(String contract, List<String> topics, String data) {
+        // ERC721 的 Approval 有 4 个 topics（tokenId 在 topic3），授权对象是单个 NFT 而非 ERC20 金额
+        if (topics.size() >= 4) {
+            return new DecodedEvent("NFT_APPROVAL", contract,
+                    HexUtils.toAddress(topics.get(1)), HexUtils.toAddress(topics.get(2)),
+                    null, Map.of(
+                            "tokenId", HexUtils.toBigInteger(topics.get(3)).toString(),
+                            "approval_kind", "erc721_single_token"));
+        }
         BigInteger value = HexUtils.toBigInteger(data);
         boolean unlimited = value.equals(UINT256_MAX);
-        // ERC721 的 Approval 有 4 个 topics（tokenId 在 topic3）
-        String type = topics.size() >= 4 ? "NFT_APPROVAL" : "APPROVAL";
-        return new DecodedEvent(type, contract,
+        return new DecodedEvent("APPROVAL", contract,
                 HexUtils.toAddress(topics.size() > 1 ? topics.get(1) : null),
                 HexUtils.toAddress(topics.size() > 2 ? topics.get(2) : null),
-                topics.size() >= 4 ? null : value,
+                value,
                 unlimited ? Map.of("unlimited", "true") : Map.of());
     }
 
     private static DecodedEvent decodeSwapV2(String contract, List<String> topics, String data) {
-        // data = amount0In, amount1In, amount0Out, amount1Out（各 32 字节）
+        // data = amount0In, amount1In, amount0Out, amount1Out（各 32 字节，token0/1 原始整数）
         String hex = HexUtils.strip0x(data == null ? "" : data);
         if (hex.length() < 256) {
             return new DecodedEvent("SWAP_V2", contract, null, null, null,
                     Map.of("decode_error", "data_too_short"));
         }
-        return new DecodedEvent("SWAP_V2", contract,
-                HexUtils.toAddress(topics.size() > 1 ? topics.get(1) : null),
-                HexUtils.toAddress(topics.size() > 2 ? topics.get(2) : null),
-                null,
-                Map.of(
-                        "amount0In", HexUtils.toBigInteger("0x" + hex.substring(0, 64)).toString(),
-                        "amount1In", HexUtils.toBigInteger("0x" + hex.substring(64, 128)).toString(),
-                        "amount0Out", HexUtils.toBigInteger("0x" + hex.substring(128, 192)).toString(),
-                        "amount1Out", HexUtils.toBigInteger("0x" + hex.substring(192, 256)).toString()));
+        Map<String, String> extra = new LinkedHashMap<>();
+        putIfNotNull(extra, "sender", HexUtils.toAddress(topics.size() > 1 ? topics.get(1) : null));
+        putIfNotNull(extra, "to", HexUtils.toAddress(topics.size() > 2 ? topics.get(2) : null));
+        extra.put("amount0In", HexUtils.toBigInteger("0x" + hex.substring(0, 64)).toString());
+        extra.put("amount1In", HexUtils.toBigInteger("0x" + hex.substring(64, 128)).toString());
+        extra.put("amount0Out", HexUtils.toBigInteger("0x" + hex.substring(128, 192)).toString());
+        extra.put("amount1Out", HexUtils.toBigInteger("0x" + hex.substring(192, 256)).toString());
+        extra.put("amount_unit", "raw_integer_token0_token1");
+        return new DecodedEvent("SWAP_V2", contract, null, null, null, extra);
     }
 
-    private static DecodedEvent decodeSwapV3(String contract, String data) {
-        // data = amount0(int256), amount1(int256)，带符号
+    private static DecodedEvent decodeSwapV3(String contract, List<String> topics, String data) {
+        // data = amount0(int256), amount1(int256)，带符号；正负号是池子余额变化视角，不是用户钱包收支
         String hex = HexUtils.strip0x(data == null ? "" : data);
         if (hex.length() < 128) {
             return new DecodedEvent("SWAP_V3", contract, null, null, null,
                     Map.of("decode_error", "data_too_short"));
         }
-        return new DecodedEvent("SWAP_V3", contract, null, null, null,
-                Map.of(
-                        "amount0", HexUtils.toSignedInt256("0x" + hex.substring(0, 64)).toString(),
-                        "amount1", HexUtils.toSignedInt256("0x" + hex.substring(64, 128)).toString()));
+        Map<String, String> extra = new LinkedHashMap<>();
+        putIfNotNull(extra, "sender", HexUtils.toAddress(topics.size() > 1 ? topics.get(1) : null));
+        putIfNotNull(extra, "recipient", HexUtils.toAddress(topics.size() > 2 ? topics.get(2) : null));
+        extra.put("amount0", HexUtils.toSignedInt256("0x" + hex.substring(0, 64)).toString());
+        extra.put("amount1", HexUtils.toSignedInt256("0x" + hex.substring(64, 128)).toString());
+        extra.put("amount_unit", "raw_integer_token0_token1");
+        extra.put("sign_convention", "pool_balance_perspective");
+        return new DecodedEvent("SWAP_V3", contract, null, null, null, extra);
+    }
+
+    private static void putIfNotNull(Map<String, String> map, String key, String value) {
+        if (value != null) {
+            map.put(key, value);
+        }
     }
 }

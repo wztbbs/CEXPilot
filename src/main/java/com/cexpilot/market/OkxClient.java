@@ -3,6 +3,8 @@ package com.cexpilot.market;
 import com.cexpilot.config.ExchangeConfig;
 import com.cexpilot.exception.ExchangeException;
 import com.cexpilot.market.model.Candle;
+import com.cexpilot.market.model.FundingInfo.RatePoint;
+import com.cexpilot.market.model.FundingSnapshot;
 import com.cexpilot.market.model.MarkPrice;
 import com.cexpilot.market.model.OpenInterestInfo.OiPoint;
 import com.cexpilot.market.model.OrderBook;
@@ -61,72 +63,98 @@ public class OkxClient {
     /**
      * OKX ticker 没有 USDT 成交额字段：vol24h 是张数、volCcy24h 是基础币数。
      * 统一为币安同口径：baseVolume24h = 币数（volCcy24h），
-     * quoteVolume24h = 币数 × 最新价（USDT 估算值，24h 内价格变动会带来小误差）。
+     * quoteVolume24h = 币数 × 最新价（USDT 估算值，24h 内价格变动会带来误差，
+     * 由 quoteVolumeEstimated 显式标注）。open24h 为 0 时涨跌幅无法定义，返回 null。
      */
     static Ticker parseTicker(JsonNode item) {
         BigDecimal last = decimal(item, "last");
         BigDecimal open24h = decimal(item, "open24h");
-        BigDecimal changePct = BigDecimal.ZERO;
+        BigDecimal changePct = null;
         if (open24h.signum() > 0) {
             changePct = last.subtract(open24h)
                     .divide(open24h, 6, java.math.RoundingMode.HALF_UP)
                     .multiply(new BigDecimal("100"));
         }
         BigDecimal volumeBase = decimal(item, "volCcy24h");
-        return new Ticker(last, changePct, volumeBase, volumeBase.multiply(last));
+        return new Ticker(last, changePct, volumeBase, volumeBase.multiply(last),
+                true, item.path("ts").asLong(0));
     }
 
-    /** 资金费率 + 下次结算时间。 */
-    public MarkPrice fundingRate(String instId) {
+    /**
+     * 当前资金费率：rate 是预测费率，fundingTime 是它生效的结算时刻（即下一次结算），
+     * nextFundingTime 是再下一期预计结算时刻，ts 是快照采集时刻。
+     */
+    public FundingSnapshot fundingRate(String instId) {
         JsonNode data = get("/api/v5/public/funding-rate?instId={i}", instId);
         JsonNode item = first(data, "funding-rate");
-        return new MarkPrice(null, null, decimal(item, "fundingRate"),
-                item.path("nextFundingTime").asLong(0));
+        return new FundingSnapshot(decimal(item, "fundingRate"),
+                item.path("fundingTime").asLong(0),
+                item.path("nextFundingTime").asLong(0),
+                item.path("ts").asLong(0));
     }
 
-    public List<BigDecimal> fundingRateHistory(String instId, int limit) {
+    /** 历史费率取实际结算值 realizedRate（不是预测值 fundingRate），翻转为时间升序。 */
+    public List<RatePoint> fundingRateHistory(String instId, int limit) {
         JsonNode data = get("/api/v5/public/funding-rate-history?instId={i}&limit={l}", instId, limit);
-        List<BigDecimal> rates = new ArrayList<>();
+        List<RatePoint> rates = new ArrayList<>();
         for (JsonNode item : data) {
-            // 接口倒序返回，翻转为升序
-            rates.add(0, decimal(item, "fundingRate"));
+            // 接口倒序返回，翻转为升序；最新一期若尚未结算，realizedRate 为空，跳过
+            String realized = item.path("realizedRate").asText("");
+            if (realized.isBlank()) {
+                continue;
+            }
+            rates.add(0, new RatePoint(new BigDecimal(realized),
+                    item.path("fundingTime").asLong(0)));
         }
         return rates;
     }
 
-    /** 当前持仓量（oiUsd，USD 名义值），与 rubik 历史序列同单位。 */
+    /** 指定 USDT 永续合约的当前持仓数量，单位为基础币（oiCcy）。 */
     public BigDecimal openInterest(String instId) {
         JsonNode data = get("/api/v5/public/open-interest?instType=SWAP&instId={i}", instId);
-        JsonNode item = first(data, "open-interest");
-        // 缺 oiUsd 时宁可报错也不回退到其他单位，避免与 USD 历史序列混口径
-        return decimal(item, "oiUsd");
+        return decimal(first(data, "open-interest"), "oiCcy");
     }
 
     /**
-     * 持仓量历史（rubik 统计接口，按币种汇总全市场合约，单位为 USD）。
-     * 返回行格式 [ts, oiUsd, volUsd]，最新在前，且数据跨度（约 30 天）远大于 limit：
-     * 必须取头部 limit 条（最新），再翻转为时间升序。
+     * 指定合约的持仓量历史。官方列序为 [ts, oi(张), oiCcy(币), oiUsd(USD)]。
+     * 使用 oiCcy，与 Binance 的 sumOpenInterest 对齐；不使用按币种汇总的接口。
      */
-    public List<OiPoint> openInterestHistory(String ccy, String period, int limit) {
-        JsonNode data = get("/api/v5/rubik/stat/contracts/open-interest-volume?ccy={c}&period={p}",
-                ccy, period);
+    public List<OiPoint> openInterestHistory(String instId, String period, int limit) {
+        if (limit < 1 || limit > 100) {
+            throw new IllegalArgumentException("OKX OI 历史 limit 必须在 1..100 之间");
+        }
+        JsonNode data = get("/api/v5/rubik/stat/contracts/open-interest-history?instId={i}&period={p}&limit={l}",
+                instId, period, limit);
         return parseOiHistory(data, limit);
     }
 
     static List<OiPoint> parseOiHistory(JsonNode data, int limit) {
-        List<OiPoint> points = new ArrayList<>();
-        int size = Math.min(limit, data.size());
-        for (int i = size - 1; i >= 0; i--) {
-            JsonNode row = data.get(i);
-            points.add(new OiPoint(row.get(0).asLong(), new BigDecimal(row.get(1).asText())));
+        if (!data.isArray()) {
+            throw new ExchangeException(NAME, "持仓量历史响应必须是数组");
         }
-        return points;
+        List<OiPoint> points = new ArrayList<>();
+        for (JsonNode row : data) {
+            if (!row.isArray() || row.size() < 4) {
+                throw new ExchangeException(NAME, "持仓量历史行必须包含 [ts, oi, oiCcy, oiUsd]");
+            }
+            // 缺失或畸形字段直接失败，不能退回张数/USD 或静默跳过。
+            long timestamp = Long.parseLong(row.get(0).asText());
+            BigDecimal quantity = new BigDecimal(row.get(2).asText());
+            if (timestamp <= 0 || quantity.signum() < 0) {
+                throw new ExchangeException(NAME, "持仓量历史包含无效时间或负数量");
+            }
+            points.add(new OiPoint(timestamp, quantity));
+        }
+        points.sort(java.util.Comparator.comparingLong(OiPoint::timestamp));
+        return List.copyOf(points.subList(Math.max(0, points.size() - limit), points.size()));
     }
 
     public OrderBook orderBook(String instId, int depth) {
         JsonNode data = get("/api/v5/market/books?instId={i}&sz={d}", instId, depth);
         JsonNode item = first(data, "books");
-        return new OrderBook(parseLevels(item.path("bids")), parseLevels(item.path("asks")));
+        // OKX 盘口数量是合约张数，不是基础币数量
+        return new OrderBook(parseLevels(item.path("bids")), parseLevels(item.path("asks")),
+                "contracts", item.path("ts").asLong(0));
     }
 
     public List<Trade> trades(String instId, int limit) {
@@ -134,21 +162,25 @@ public class OkxClient {
         List<Trade> trades = new ArrayList<>();
         for (int i = data.size() - 1; i >= 0; i--) {
             JsonNode item = data.get(i);
+            // sz 是合约张数，不是基础币数量
             trades.add(new Trade(
                     item.path("ts").asLong(),
                     decimal(item, "px"),
                     decimal(item, "sz"),
-                    "buy".equalsIgnoreCase(item.path("side").asText())));
+                    "buy".equalsIgnoreCase(item.path("side").asText()),
+                    "contracts"));
         }
         return trades;
     }
 
+    /** mark 与 index 是两次顺序请求，各自保留来源时间戳，供基差处给出时间差。 */
     public MarkPrice markPrice(String instId, String indexInstId) {
         JsonNode markData = get("/api/v5/public/mark-price?instType=SWAP&instId={i}", instId);
         JsonNode markItem = first(markData, "mark-price");
         JsonNode indexData = get("/api/v5/market/index-tickers?instId={i}", indexInstId);
         JsonNode indexItem = first(indexData, "index-tickers");
-        return new MarkPrice(decimal(markItem, "markPx"), decimal(indexItem, "idxPx"), null, 0);
+        return new MarkPrice(decimal(markItem, "markPx"), decimal(indexItem, "idxPx"), null, 0,
+                markItem.path("ts").asLong(0), indexItem.path("ts").asLong(0));
     }
 
     private JsonNode get(String uri, Object... vars) {

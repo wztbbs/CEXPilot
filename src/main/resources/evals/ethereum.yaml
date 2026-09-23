@@ -23,7 +23,7 @@ cases:
     question: "这笔交易为什么失败了还扣 Gas？0x20d24607a2f465c31167ac346622692f9c6fde5bd604cb40cf6131b6b97d2705"
     expected_tools: [get_transaction]
     forbidden_tools: [get_klines]
-    required_evidence_keys: [status, fee_eth, failure_note]
+    required_evidence_keys: [status, total_fee_eth, failure_note]
   - id: eth-followup-001
     question: "这笔交易里有没有 Approval？有没有风险？"
     setup_questions:

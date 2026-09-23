@@ -1,12 +1,14 @@
 name: get_ticker
 enabled: true
-description: 查询最新成交价及滚动24小时涨跌幅、成交量（基础币）、成交额（USDT）；滚动24小时不等于当天零点至今。
+description: 查询最新成交价及滚动24小时涨跌幅、成交量（基础币）、成交额（USDT）；滚动24小时不等于当天零点至今；OKX 无官方成交额字段，其成交额为估算值（24h成交量×最新价），不能当作精确成交额使用。
 # capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
 capabilities:
   - 查询永续合约最新成交价
   - 查询交易所官方滚动 24 小时涨跌幅与成交量（含 USDT 计价成交额）
 limitations:
   - 涨跌幅是交易所官方滚动 24 小时口径，与 get_klines 的窗口涨跌幅可能略有差异
+  - OKX 不提供成交额字段，turnover_24h_usdt 为估算值（24h 基础币成交量 × 最新价），输出带 turnover_24h_usdt_estimated 标志；Binance 为接口原值
+  - 基准价（open24h）为 0 时 change_pct_24h 为 null 并附原因，不代表涨跌 0%
   - 只反映当前时刻与近 24 小时，无法回答更长时间范围的问题
 scope:
   exchanges: [binance, okx]

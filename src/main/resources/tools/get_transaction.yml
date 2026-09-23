@@ -1,15 +1,44 @@
 name: get_transaction
 enabled: true
-description: 分析以太坊主网单笔交易的状态、Gas、ERC20转账、授权风险、Swap事件及资金流；不支持其他链。
-# capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
+description: >-
+  分析以太坊主网单笔交易的状态、Gas、ERC20转账、授权、Swap事件及资金流；不支持其他链。
+  输出契约要点：status 为 success/failed/pending/unknown（unknown 表示 Byzantium 前旧收据无 status 字段）；
+  金额字段均为精确值不截断（value_wei 等原始整数与 value_eth 等精确小数字符串并列）；
+  手续费拆分为 execution_fee_eth 与 blob_fee_eth（若有），total_fee_eth 为两者之和；
+  token 转账带 amount_raw、token_decimals、metadata_status，metadata 非 ok 时 amount 缺失、
+  amount_unit=unknown_raw_integer，此时 amount_raw 只是原始整数不能当金额；
+  token 元数据按最新区块查询（token_metadata_as_of=latest），可能与历史交易当时不同；
+  fund_flow 是 partial_gross_events：由顶层 value 与已识别日志拼接的逐事件总额，非净额，不含内部调用；
+  失败交易的 value 不会记入 fund_flow（value_eth_status=attempted_but_reverted_not_transferred）；
+  approvals 描述的是日志发生时的授权变化，不代表当前权限；
+  SWAP 事件数量为 token0/token1 原始整数，V3 的 amount0/amount1 正负号是池子余额视角。
+# capabilities / limitations / scope / output 仅作维护文档；重要限制须写入 description。
 capabilities:
-  - 分析以太坊主网单笔交易的执行状态与 Gas 费用
+  - 分析以太坊主网单笔交易的执行状态与 Gas 费用（含 blob 费用拆分）
   - 识别 ERC20 转账、授权（含无限额度风险提示）、Swap 事件与资金流向
 limitations:
   - 仅支持以太坊主网，不支持其他链与 L2
   - 需要用户提供完整的交易哈希，无法按地址或时间浏览交易
+  - fund_flow 不含内部调用（internal transactions）的 ETH 转移，也不是按地址合并的净额
+  - token 元数据（symbol/decimals）按 latest 区块查询，历史交易当时的元数据可能不同
+  - Byzantium 之前的交易收据无 status 字段，执行状态只能输出 unknown
 scope:
   chain: ethereum_mainnet
+output:
+  status: success / failed / pending / unknown（unknown = 旧收据缺 status 字段）
+  block_number: 未上链（pending）时缺失，不会输出 0
+  value_wei / value_eth: 原始整数与精确小数字符串并列，永不截断；失败交易标注 value_eth_status
+  execution_fee_eth / blob_fee_eth / total_fee_eth: 执行 Gas 费、blob 费（仅 blob 交易）与总手续费
+  created_contract_address: 合约创建交易的新合约地址（此时 tx.to 保持 null）
+  events[]: type / contract / log_index / from / to 及事件特有字段
+    （TRANSFER 与 APPROVAL 带 amount_raw、token_decimals、amount、metadata_status；
+    NFT_APPROVAL 带 tokenId 与 approval_kind=erc721_single_token；
+    SWAP_V2 带 sender/to 与 amount_unit；SWAP_V3 带 sender/recipient、amount_unit、
+    sign_convention=pool_balance_perspective；未验证 WETH 合约的 Deposit/Withdrawal
+    只保留原始值与 interpretation 说明，不断言 ETH/WETH 转换）
+  fund_flow[]: token / token_address / log_index / from / to / amount_raw / amount，
+    另有 fund_flow_coverage=partial_gross_events 与 fund_flow_note 说明覆盖范围
+  approvals[]: 授权变化事件（含 risk_note），仅描述日志发生时的状态，非当前权限
 input_schema:
   type: object
   additionalProperties: false

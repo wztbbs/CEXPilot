@@ -1,13 +1,14 @@
 name: get_recent_trades
 enabled: true
-description: 查询最近N笔成交的统计与主动买入量占比，明细最多20笔；按笔数采样，不代表固定时间窗口。
+description: 查询最近N笔成交的统计与主动买入量占比，明细为其中最新20笔；按笔数采样，不代表固定时间窗口。
 # capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
 capabilities:
   - 获取最近逐笔成交记录（时间、价格、数量、主动方向）
   - 给出已计算的成交笔数、主动买入笔数与主动买入量占比
 limitations:
   - 最多取最近 100 笔，成交密集时覆盖的时间跨度可能只有几分钟
-  - 成交明细最多返回 20 条
+  - 成交明细返回样本中最新 20 条
+  - 数量单位两所不同：OKX 是合约张数（quantity_contracts），Binance 是基础币；输出列名与 quantity_unit 标注
 scope:
   exchanges: [binance, okx]
   market_type: perpetual

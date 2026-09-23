@@ -73,7 +73,7 @@ class MarketCalculatorTest {
                 List.of(new OrderBook.Level(bd("100"), bd("2")),
                         new OrderBook.Level(bd("99"), bd("3"))),
                 List.of(new OrderBook.Level(bd("101"), bd("1")),
-                        new OrderBook.Level(bd("102"), bd("1"))));
+                        new OrderBook.Level(bd("102"), bd("1"))), "base", 0);
         // 买 5 / 卖 2 = 2.5
         assertEquals(0, new BigDecimal("2.5000")
                 .compareTo(MarketCalculator.orderbookImbalance(book, 10)));
@@ -83,8 +83,8 @@ class MarketCalculatorTest {
     @Test
     void tradesSummaryBuyRatio() {
         List<Trade> trades = List.of(
-                new Trade(1, bd("100"), bd("1"), true),
-                new Trade(2, bd("100"), bd("3"), false));
+                new Trade(1, bd("100"), bd("1"), true, "base"),
+                new Trade(2, bd("100"), bd("3"), false, "base"));
         MarketCalculator.TradesSummary summary = MarketCalculator.tradesSummary(trades);
         assertEquals(2, summary.count());
         assertEquals(1, summary.buyCount());

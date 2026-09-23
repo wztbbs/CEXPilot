@@ -25,13 +25,18 @@ class HexUtilsTest {
         assertEquals("1.5", HexUtils.weiToEth(new BigInteger("1500000000000000000")));
         assertEquals("0", HexUtils.weiToEth(BigInteger.ZERO));
         assertEquals("0.00000001", HexUtils.weiToEth(new BigInteger("10000000000")));
+        // 不截断：1 wei 保留精确值，不输出 0
+        assertEquals("0.000000000000000001", HexUtils.weiToEth(BigInteger.ONE));
     }
 
     @Test
     void formatTokenAmount() {
         assertEquals("1", HexUtils.formatTokenAmount(new BigInteger("1000000"), 6));
-        assertEquals("1234.5678", HexUtils.formatTokenAmount(new BigInteger("1234567800000000000000"), 18));
-        assertEquals("1000000", HexUtils.formatTokenAmount(new BigInteger("1000000"), null));
+        // 不截断：18 位精度完整保留
+        assertEquals("1234.567890000000000123",
+                HexUtils.formatTokenAmount(new BigInteger("1234567890000000000123"), 18));
+        // decimals 未知时不能拿原始整数冒充金额
+        assertNull(HexUtils.formatTokenAmount(new BigInteger("1000000"), null));
     }
 
     @Test

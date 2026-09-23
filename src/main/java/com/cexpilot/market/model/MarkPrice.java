@@ -12,9 +12,13 @@ import java.math.BigDecimal;
  *                        例如 0.0001 表示 0.01%
  * @param nextFundingTime 下次资金费结算时间戳（毫秒），
  *                        例如 1700035200000
+ * @param markPriceTime   标记价格来源时间戳（毫秒），0 表示上游未提供
+ * @param indexPriceTime  指数价格来源时间戳（毫秒），0 表示上游未提供
  */
 public record MarkPrice(BigDecimal markPrice,
                         BigDecimal indexPrice,
                         BigDecimal fundingRate,
-                        long nextFundingTime) {
+                        long nextFundingTime,
+                        long markPriceTime,
+                        long indexPriceTime) {
 }

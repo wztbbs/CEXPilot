@@ -2,7 +2,6 @@ package com.cexpilot.ethereum;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
-import java.math.RoundingMode;
 
 /**
  * EVM 十六进制数据的确定性解析工具。
@@ -36,28 +35,20 @@ public final class HexUtils {
         return "0x" + hex.substring(hex.length() - 40).toLowerCase();
     }
 
-    /** wei -> ETH，保留 8 位有效小数。 */
+    /** wei -> ETH 精确小数字符串，不截断（1 wei 会保留为 0.000000000000000001）。 */
     public static String weiToEth(BigInteger wei) {
         if (wei == null || wei.signum() == 0) {
             return "0";
         }
-        return new BigDecimal(wei)
-                .divide(new BigDecimal("1000000000000000000"), 8, RoundingMode.DOWN)
-                .stripTrailingZeros().toPlainString();
+        return new BigDecimal(wei).movePointLeft(18).stripTrailingZeros().toPlainString();
     }
 
-    /** 按 decimals 格式化 token 数量。 */
+    /** 按 decimals 精确换算 token 数量；decimals 未知时返回 null（原整数不能冒充金额）。 */
     public static String formatTokenAmount(BigInteger raw, Integer decimals) {
-        if (raw == null) {
+        if (raw == null || decimals == null) {
             return null;
         }
-        if (decimals == null) {
-            return raw.toString();
-        }
-        return new BigDecimal(raw)
-                .movePointLeft(decimals)
-                .setScale(Math.min(decimals, 8), RoundingMode.DOWN)
-                .stripTrailingZeros().toPlainString();
+        return new BigDecimal(raw).movePointLeft(decimals).stripTrailingZeros().toPlainString();
     }
 
     /**
