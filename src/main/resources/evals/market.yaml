@@ -2,24 +2,24 @@ cases:
   # ---- price-change ----
   - id: market-price-001
     question: "BTC 最近 1 小时价格变化多少？"
-    expected_tools: [get_klines]
-    forbidden_tools: [get_transaction]
-    required_evidence_keys: [price_change]
+    expected_tools: [] # 本版本尚未开放完整窗口统计，应拒答
+    forbidden_tools: [get_ticker, get_klines, get_open_interest, compare_exchanges, get_funding_rate, get_orderbook, get_recent_trades, get_mark_price, get_transaction]
+    required_evidence_keys: []
   - id: market-price-002
     question: "ETH 最近 4 小时走势怎么样？"
-    expected_tools: [get_klines]
-    forbidden_tools: [get_transaction]
-    required_evidence_keys: [price_change]
+    expected_tools: [] # 本版本尚未开放完整窗口统计，应拒答
+    forbidden_tools: [get_ticker, get_klines, get_open_interest, compare_exchanges, get_funding_rate, get_orderbook, get_recent_trades, get_mark_price, get_transaction]
+    required_evidence_keys: []
   - id: market-price-003
-    question: "BTC 最近为什么下跌？"
-    expected_tools: [get_klines]
-    forbidden_tools: [get_transaction]
-    required_evidence_keys: [price_change]
+    question: "BTC 最近1小时为什么下跌？"
+    expected_tools: [] # 本版本尚未开放完整窗口统计，应拒答
+    forbidden_tools: [get_ticker, get_klines, get_open_interest, compare_exchanges, get_funding_rate, get_orderbook, get_recent_trades, get_mark_price, get_transaction]
+    required_evidence_keys: []
   - id: market-price-004
     question: "帮我看看 OKX 上 ETH 最近一小时的表现"
-    expected_tools: [get_klines]
-    forbidden_tools: [get_transaction]
-    required_evidence_keys: [price_change]
+    expected_tools: [] # 本版本尚未开放完整窗口统计，应拒答
+    forbidden_tools: [get_ticker, get_klines, get_open_interest, compare_exchanges, get_funding_rate, get_orderbook, get_recent_trades, get_mark_price, get_transaction]
+    required_evidence_keys: []
 
   # ---- ticker ----
   - id: market-ticker-001
@@ -28,7 +28,7 @@ cases:
     forbidden_tools: [get_transaction]
     required_evidence_keys: [last_price]
   - id: market-ticker-002
-    question: "币安上 ETH 今天涨了多少？24小时成交量多大？"
+    question: "币安上 ETH 过去24小时涨了多少？24小时成交量多大？"
     expected_tools: [get_ticker]
     forbidden_tools: [get_transaction]
     required_evidence_keys: [change_pct_24h]
@@ -48,14 +48,14 @@ cases:
   # ---- oi ----
   - id: market-oi-001
     question: "BTC 持仓量最近 24 小时有什么变化？"
-    expected_tools: [get_open_interest]
-    forbidden_tools: [get_transaction]
-    required_evidence_keys: [open_interest]
+    expected_tools: [] # 本版本尚未开放完整窗口统计，应拒答
+    forbidden_tools: [get_ticker, get_klines, get_open_interest, compare_exchanges, get_funding_rate, get_orderbook, get_recent_trades, get_mark_price, get_transaction]
+    required_evidence_keys: []
   - id: market-oi-002
     question: "币安 BTC 现在是 OI 上升但价格下跌的状态吗？这意味着什么？"
-    expected_tools: [get_open_interest, get_klines]
-    forbidden_tools: [get_transaction]
-    required_evidence_keys: [open_interest, price_change]
+    expected_tools: [] # 本版本尚未开放完整窗口统计，应拒答
+    forbidden_tools: [get_ticker, get_klines, get_open_interest, compare_exchanges, get_funding_rate, get_orderbook, get_recent_trades, get_mark_price, get_transaction]
+    required_evidence_keys: []
 
   # ---- orderbook / trades / mark ----
   - id: market-orderbook-001
@@ -77,11 +77,31 @@ cases:
   # ---- exchange-divergence ----
   - id: market-divergence-001
     question: "Binance 和 OKX 的 BTC 最近 1 小时走势有没有明显差异？"
-    expected_tools: [compare_exchanges]
-    forbidden_tools: [get_transaction]
-    required_evidence_keys: [divergence]
+    expected_tools: [] # 本版本尚未开放完整窗口统计，应拒答
+    forbidden_tools: [get_ticker, get_klines, get_open_interest, compare_exchanges, get_funding_rate, get_orderbook, get_recent_trades, get_mark_price, get_transaction]
+    required_evidence_keys: []
   - id: market-divergence-002
     question: "两个交易所的 ETH 最近 4 小时谁涨得更多？"
-    expected_tools: [compare_exchanges]
-    forbidden_tools: [get_transaction]
-    required_evidence_keys: [divergence]
+    expected_tools: [] # 本版本尚未开放完整窗口统计，应拒答
+    forbidden_tools: [get_ticker, get_klines, get_open_interest, compare_exchanges, get_funding_rate, get_orderbook, get_recent_trades, get_mark_price, get_transaction]
+    required_evidence_keys: []
+  - id: market-capability-refusal-001
+    question: "拿币安上面的 BTC-USDC 上周的总交易额，跟上上周做对比。"
+    expected_tools: []
+    forbidden_tools: [get_ticker, get_klines, get_open_interest, compare_exchanges, get_funding_rate, get_orderbook, get_recent_trades, get_mark_price, get_transaction]
+    required_evidence_keys: []
+  - id: market-capability-refusal-002
+    question: "币安 BTC 今天的成交量是多少？"
+    expected_tools: []
+    forbidden_tools: [get_ticker, get_klines, get_open_interest, compare_exchanges, get_funding_rate, get_orderbook, get_recent_trades, get_mark_price, get_transaction]
+    required_evidence_keys: []
+  - id: market-capability-refusal-003
+    question: "币安 BTC 过去24小时的资金费率总和是多少？"
+    expected_tools: []
+    forbidden_tools: [get_ticker, get_klines, get_open_interest, compare_exchanges, get_funding_rate, get_orderbook, get_recent_trades, get_mark_price, get_transaction]
+    required_evidence_keys: []
+  - id: market-capability-refusal-004
+    question: "币安 BTC-USDC 当前价格是多少？"
+    expected_tools: []
+    forbidden_tools: [get_ticker, get_klines, get_open_interest, compare_exchanges, get_funding_rate, get_orderbook, get_recent_trades, get_mark_price, get_transaction]
+    required_evidence_keys: []

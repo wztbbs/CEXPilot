@@ -13,8 +13,6 @@ import com.cexpilot.runtime.TraceSink;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -30,13 +28,12 @@ import java.util.function.Consumer;
  * 按计划保留回答所需明细，其余投影为摘要；所有意图共享同一事实约束模板，
  * 命中意图时追加该意图的 evidence_policy.rules 作为回答要求。
  * 出域直接返回边界话术；planner 有意不规划且给出 reply（追问/能力缺口）时直接透传为答案；
- * 仅当规划彻底失败（repair 耗尽）时传空 FACTS 走降级回答，禁止凭记忆降级回答。
+ * 规划失败或没有计划时也直接返回，禁止再让 Answer 用空事实生成答案。
  */
 @Component
 public class DagRuntime {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final Logger log = LoggerFactory.getLogger(DagRuntime.class);
     private static final String ANSWER_PROMPT_NAME = "agent_system";
     private static final String OUT_OF_DOMAIN_FALLBACK =
             "我只支持 web3 / 加密货币交易领域的问题，暂时无法回答其他类型的问题。";
@@ -73,18 +70,23 @@ public class DagRuntime {
         if (!outcome.inDomain()) {
             String answer = outcome.reply() == null || outcome.reply().isBlank()
                     ? OUT_OF_DOMAIN_FALLBACK : outcome.reply();
+            if (answerDelta != null) {
+                answerDelta.accept(answer);
+            }
             return new ExecutionResult(answer, MAPPER.createArrayNode(), 0, 0,
                     totalPromptTokens, totalCompletionTokens, null);
         }
 
-        // planner 有意不规划且给了面向用户的话（追问、说明能力缺口）：直接透传为答案，
-        // 不再走 answer LLM——否则会被泛化成"本轮未获取到数据"，把有用信息丢掉
-        if (outcome.plan().isEmpty() && outcome.lastError() == null
-                && outcome.reply() != null && !outcome.reply().isBlank()) {
+        // 没有获准执行的计划，就没有 Answer 调用；拒答也走同一个 SSE 返回路径。
+        if (outcome.plan().isEmpty()) {
+            String answer = outcome.lastError() != null
+                    ? "暂时无法可靠生成查询计划，本次未执行查询。请明确交易对和时间要求后重试。"
+                    : outcome.reply() != null && !outcome.reply().isBlank() ? outcome.reply()
+                    : "当前没有能够可靠回答此问题的查询计划，暂时无法处理。";
             if (answerDelta != null) {
-                answerDelta.accept(outcome.reply());
+                answerDelta.accept(answer);
             }
-            return new ExecutionResult(outcome.reply(), MAPPER.createArrayNode(), 0, 0,
+            return new ExecutionResult(answer, MAPPER.createArrayNode(), 0, 0,
                     totalPromptTokens, totalCompletionTokens, outcome.intent());
         }
 
@@ -92,34 +94,26 @@ public class DagRuntime {
         int toolCallCount = 0;
         int steps = 0;
 
-        ArrayNode facts = MAPPER.createArrayNode();
         ObjectNode queryStatus = MAPPER.createObjectNode();
         // reply 是 planner 写的查询缺口说明；模型偶尔会把推理过程倒进来，截断防污染
         if (outcome.reply() != null) {
             String missing = outcome.reply();
             queryStatus.put("missing", missing.length() <= 200 ? missing : missing.substring(0, 200));
         }
-        if (outcome.plan().isPresent()) {
-            DagPlan plan = outcome.plan().get();
-            DagExecutor.ExecutionOutcome execution = executor.execute(plan, traceId, sink);
-            steps = execution.layers();
-            for (PlanNode node : plan.nodes()) {
-                ToolResult result = execution.context().get(node.id());
-                if (result == null) {
-                    continue;
-                }
-                toolCallCount++;
-                appendEvidence(evidence, node.id(), node.tool(), result);
+        DagPlan plan = outcome.plan().orElseThrow();
+        DagExecutor.ExecutionOutcome execution = executor.execute(plan, traceId, sink);
+        steps = execution.layers();
+        for (PlanNode node : plan.nodes()) {
+            ToolResult result = execution.context().get(node.id());
+            if (result == null) {
+                continue;
             }
-            Set<String> keepDetails = plan.nodes().stream().filter(PlanNode::includeDetails)
-                    .map(PlanNode::id).collect(java.util.stream.Collectors.toSet());
-            facts = EvidenceSummarizer.summarize(evidence, keepDetails);
-        } else {
-            String reason = outcome.lastError() != null ? "查询规划失败" : "没有可执行的查询计划";
-            log.warn("traceId={} {}", traceId, reason);
-            sink.record(TraceEvent.plan(traceId, null, reason));
-            queryStatus.put("status", reason);
+            toolCallCount++;
+            appendEvidence(evidence, node.id(), node.tool(), result);
         }
+        Set<String> keepDetails = plan.nodes().stream().filter(PlanNode::includeDetails)
+                .map(PlanNode::id).collect(java.util.stream.Collectors.toSet());
+        ArrayNode facts = EvidenceSummarizer.summarize(evidence, keepDetails);
         String userContent = question + "\n\n<FACTS>\n" + facts + "\n</FACTS>\n<QUERY_STATUS>\n"
                 + queryStatus + "\n</QUERY_STATUS>";
 

@@ -8,21 +8,31 @@
 {{tools}}
 
 只输出 JSON，不要解释或代码围栏：
-{"in_domain":true,"intent":"INTENT_NAME或UNKNOWN","plan":{"nodes":[{"id":"n1","tool":"工具名","args":{},"depends_on":[],"include_details":false}]},"reply":null}
+{"in_domain":true,"intent":"INTENT_NAME或UNKNOWN","query_requirements":{"time_scope":"unspecified","duration":null,"sample_count":null,"quote_asset":null,"market_type":null},"plan":{"nodes":[{"id":"n1","tool":"工具名","args":{},"depends_on":[],"include_details":false}]},"reply":null}
+
+时间能力闸门（本版本的发布限制，优先于工具描述）：
+- 在域时 query_requirements 必填，描述用户原始诉求，结合历史消解指代；禁止从所选工具的默认参数反推或改写诉求。不需要生成开始/结束时间戳。
+- time_scope：unspecified=未指定时间；current=当前快照；recent_samples=近期若干条样本，不承诺时间跨度；rolling_window=向当前回溯的完整时长；calendar_window=今天/上周等自然周期；absolute_range=明确起止日期/时刻；period_comparison=环比/同比/上周对上上周；mixed=多种时间口径；unknown=无法可靠理解。
+- duration 只在 rolling_window 下填写，例如 1h、6h、24h、7d；其他为 null。sample_count 为用户要求的精确样本条数，没有要求则 null。
+- quote_asset 原样提取报价币（BTC-USDC → USDC），未指定为 null；market_type 为 perpetual/spot/delivery 等用户要求的市场，未指定为 null。不能把 USDC 改成 USDT、现货改成永续。
+- 当前只开放：当前快照；Ticker 自带的滚动 24h；资金费率/逐笔成交的近期样本观察（不承诺完整窗口或精确条数）；按哈希查询以太坊交易。
+- get_klines、get_open_interest、compare_exchanges 的时间覆盖尚未验证，本版本暂不使用。这些工具即使有默认 window 或名为 24h 的输出，也不证明具备完整窗口能力。
+- 自然周期、历史区间、跨期对比、其他完整时长、精确样本条数、多种时间口径或不确定诉求：plan=null，reply 简述无法处理。禁止查询一个子集后冒充完成原问题，也禁止在 reply 中直接给出统计结果。
+- “最近费率怎样”是 recent_samples；“过去 24 小时的费率”是 rolling_window，不能用最近 10 期替代。“今天”是 calendar_window，不能改成滚动 24h。
+- “拿币安 BTC-USDC 上周总交易额跟上上周对比”：time_scope=period_comparison、duration=null、quote_asset=USDC、market_type=null、sample_count=null，plan=null。
 
 规则：
 - 出域：in_domain=false，intent=UNKNOWN，plan=null；reply 用用户语言说明仅支持上述领域。
-- 在域：只查询与问题直接相关的数据。部分可回答时仍查询可用部分，reply 简述其余缺口；完全无法查询、缺少必要输入或需要向用户追问时 plan=null（nodes 为空数组等价），reply 直接写要对用户说的话（追问内容或缺口说明）。不要编造输入或用不同时间口径代替用户要求。
+- 在域：只查询与问题直接相关的数据。超出上述能力边界时整次拒答；其他不涉及时间/交易对的独立缺口可在 reply 说明。完全无法查询、缺少必要输入或需要向用户追问时 plan=null（nodes 为空数组等价），reply 直接写要对用户说的话（追问内容或缺口说明）。不要编造输入或用不同时间口径代替用户要求。
 - reply 只写一句要对用户说的简短话术（100 字以内），禁止把分析、推理过程写进 reply；不需要对用户说话时用 null。
 - args 遵循工具参数定义；币种使用基础代码（BTC / ETH）。用户指定的参数优先，其余使用 YAML 列出的默认值。
 - 节点 id 唯一（n1、n2…），总数不超过 {{max_nodes}}，依赖深度不超过 {{max_depth}}；独立查询的 depends_on=[]，禁止循环和重复同参数查询。
 - 确需使用上游输出作参数时，可用字符串引用 {{nodeId.data.字段路径}}；数组下标用数字路径。引用的节点必须列入 depends_on，只使用能确认存在的输出字段。
 - include_details 默认 false；用户明确要求历史序列、逐笔成交、盘口档位、K线明细，或回答必须用到序列时设 true，将该节点明细交给回答模块；只问当前值或已计算指标时省略此字段。
 
-示例：BTC 和 ETH 最近一小时各涨了多少？
-{"in_domain":true,"intent":"MARKET_LOOKUP","plan":{"nodes":[
-{"id":"n1","tool":"get_klines","args":{"symbol":"BTC","window":"1h"},"depends_on":[]},
-{"id":"n2","tool":"get_klines","args":{"symbol":"ETH","window":"1h"},"depends_on":[]}
+示例：币安 BTC 过去 24 小时涨跌多少？
+{"in_domain":true,"intent":"MARKET_LOOKUP","query_requirements":{"time_scope":"rolling_window","duration":"24h","sample_count":null,"quote_asset":null,"market_type":null},"plan":{"nodes":[
+{"id":"n1","tool":"get_ticker","args":{"exchange":"binance","symbol":"BTC"},"depends_on":[]}
 ]},"reply":null}
 
 <CONVERSATION_CONTEXT>

@@ -5,9 +5,9 @@ cases:
     question: "那 OKX 呢？"
     setup_questions:
       - "Binance 上 BTC 最近 1 小时怎么了？"
-    expected_tools: [get_klines]
-    forbidden_tools: [get_transaction]
-    required_evidence_keys: [price_change]
+    expected_tools: [] # 本版本尚未开放完整窗口统计，应拒答
+    forbidden_tools: [get_ticker, get_klines, get_open_interest, compare_exchanges, get_funding_rate, get_orderbook, get_recent_trades, get_mark_price, get_transaction]
+    required_evidence_keys: []
   - id: conv-symbol-001
     question: "那 ETH 呢？"
     setup_questions:
@@ -16,23 +16,23 @@ cases:
     forbidden_tools: [get_transaction]
     required_evidence_keys: [current_funding_rate]
   - id: conv-window-001
-    question: "放大到最近 24 小时看看呢？"
+    question: "放大到最近 6 小时看看呢？"
     setup_questions:
       - "BTC 最近一小时价格变化多少？"
-    expected_tools: [get_klines]
-    forbidden_tools: [get_transaction]
-    required_evidence_keys: [price_change]
+    expected_tools: [] # 本版本尚未开放完整窗口统计，应拒答
+    forbidden_tools: [get_ticker, get_klines, get_open_interest, compare_exchanges, get_funding_rate, get_orderbook, get_recent_trades, get_mark_price, get_transaction]
+    required_evidence_keys: []
   - id: conv-compare-001
     question: "那两个交易所对比一下呢？"
     setup_questions:
       - "Binance 上 BTC 最近 4 小时走势怎么样？"
-    expected_tools: [compare_exchanges]
-    forbidden_tools: [get_transaction]
-    required_evidence_keys: [divergence]
+    expected_tools: [] # 本版本尚未开放完整窗口统计，应拒答
+    forbidden_tools: [get_ticker, get_klines, get_open_interest, compare_exchanges, get_funding_rate, get_orderbook, get_recent_trades, get_mark_price, get_transaction]
+    required_evidence_keys: []
   - id: conv-oi-001
     question: "持仓量有什么变化吗？"
     setup_questions:
-      - "BTC 最近为什么下跌？"
-    expected_tools: [get_open_interest]
-    forbidden_tools: [get_transaction]
-    required_evidence_keys: [open_interest]
+      - "BTC 最近1小时为什么下跌？"
+    expected_tools: [] # 本版本尚未开放完整窗口统计，应拒答
+    forbidden_tools: [get_ticker, get_klines, get_open_interest, compare_exchanges, get_funding_rate, get_orderbook, get_recent_trades, get_mark_price, get_transaction]
+    required_evidence_keys: []

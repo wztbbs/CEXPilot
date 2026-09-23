@@ -36,12 +36,11 @@ import java.util.Set;
  *   但 reply 超长（>100 字）视为模型把推理过程倒进了 reply 的协议误用，走 repair；
  * - in_domain=true 且 plan 非空 → LlmJson 容错解析 + PlanValidator 确定性校验，
  *   失败把错误明细追加为消息让 LLM 修复，最多重试 plannerMaxRetries 次；
- * - 信封缺失（非对象 / 没有 in_domain 字段，如直接输出 nodes 裸数组）→ 先抢救：
- *   能解析出合法 plan 就按在域接受；救不回来视为格式错误走 repair，
- *   绝不误判为出域（否则格式抖动会被静默吞成边界话术）。
+ * - 信封缺失走格式修复；不再抢救裸 plan，避免绕过必需的 query_requirements。
+ * - query_requirements 由确定性能力闸门检查；能力不足直接拒答，不进行 repair。
  *
  * 每次 LLM 调用落 LLM_CALL trace（name="dag_planner"），每次生成的输出落 PLAN trace
- * （校验通过、有意不规划或抢救成功时 error 为 null，否则带错误明细）。
+ * （校验通过或有意不规划时 error 为 null，否则带错误明细）。
  *
  * dag.planner-response-format 配置 json_object / json_schema 时，planner 调用会下发
  * OpenAI 兼容 response_format 约束（json_schema 强制信封结构，需模型支持）。
@@ -112,15 +111,7 @@ public class DagPlanner {
                 continue;
             }
 
-            if (!parsed.isObject() || !parsed.has("in_domain")) {
-                // 模型丢了信封（如直接输出 nodes 裸数组）：先抢救，救不回来再走 repair
-                Optional<DagPlan> salvaged = salvagePlan(parsed, maxToolCalls);
-                if (salvaged.isPresent()) {
-                    DagPlan plan = salvaged.get();
-                    sink.record(TraceEvent.plan(traceId, plan.toJson().toString(), null));
-                    return new PlanOutcome(true, IntentRegistry.UNKNOWN, null,
-                            Optional.of(plan), promptTokens, completionTokens, null);
-                }
+            if (!parsed.isObject() || !parsed.path("in_domain").isBoolean()) {
                 lastError = "输出缺少信封：必须输出完整 JSON 对象 {\"in_domain\", \"intent\", \"reply\", \"plan\"}，"
                         + "不要直接输出 nodes 数组";
                 sink.record(TraceEvent.plan(traceId, parsed.toString(), lastError));
@@ -137,6 +128,22 @@ public class DagPlanner {
             String intent = normalizeIntent(parsed.path("intent"));
             String reply = textOrNull(parsed.path("reply"));
             JsonNode planNode = parsed.path("plan");
+            // 先检查语义，即使模型选择 plan=null 也不能把能力缺口写成计算结果。
+            DagPlan capabilityPlan;
+            try {
+                capabilityPlan = planNode.isObject() ? DagPlan.fromJson(planNode) : new DagPlan(List.of());
+            } catch (Exception e) {
+                lastError = "plan 解析失败: " + e.getMessage();
+                sink.record(TraceEvent.plan(traceId, parsed.toString(), lastError));
+                appendRepair(messages, response.content(), lastError);
+                continue;
+            }
+            String refusal = QueryCapabilityGuard.refusal(question, parsed.path("query_requirements"), capabilityPlan);
+            if (refusal != null) {
+                sink.record(TraceEvent.plan(traceId, parsed.toString(), "CAPABILITY_REFUSED: " + refusal));
+                return new PlanOutcome(true, intent, refusal, Optional.empty(),
+                        promptTokens, completionTokens, null);
+            }
             if (!planNode.isObject()) {
                 if (isReasoningDump(reply)) {
                     // 模型把推理过程倒进 reply 且没给 plan：协议误用，按格式错误 repair，
@@ -171,7 +178,7 @@ public class DagPlanner {
                 }
                 List<String> errors = validator.validate(plan, null, maxToolCalls);
                 if (errors.isEmpty()) {
-                    sink.record(TraceEvent.plan(traceId, plan.toJson().toString(), null));
+                    sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
                     // reply 与 plan 并存时只作查询缺口说明；推理 dump 直接丢弃
                     // （plan 已合法，不值得为 reply 再走一轮 repair）
                     String effectiveReply = isReasoningDump(reply) ? null : reply;
@@ -193,7 +200,7 @@ public class DagPlanner {
             sink.record(TraceEvent.plan(traceId, parsed.toString(), lastError));
             appendRepair(messages, response.content(), lastError);
         }
-        // repair 耗尽：按在域处理走降级回答，intent 记 UNKNOWN
+        // repair 耗尽：runtime 直接返回固定失败话术，禁止继续生成无事实答案。
         return new PlanOutcome(true, IntentRegistry.UNKNOWN, null,
                 Optional.empty(), promptTokens, completionTokens, lastError);
     }
@@ -201,37 +208,6 @@ public class DagPlanner {
     /** 判断 reply 是否是推理 dump：合法话术很短，超长即视为协议误用。 */
     private static boolean isReasoningDump(String reply) {
         return reply != null && reply.length() > REPLY_MAX_LENGTH;
-    }
-
-    /**
-     * 信封缺失时的抢救：裸 nodes 数组、{"plan": {...}}、{"nodes": [...]} 都视为
-     * 模型判断正确但包装丢失；内容能通过 PlanValidator 校验就接受，否则返回空走 repair。
-     */    private Optional<DagPlan> salvagePlan(JsonNode parsed, int maxToolCalls) {
-        JsonNode planNode = null;
-        if (parsed.isArray()) {
-            ObjectNode wrapped = MAPPER.createObjectNode();
-            wrapped.set("nodes", parsed);
-            planNode = wrapped;
-        } else if (parsed.isObject()) {
-            if (parsed.path("plan").isObject()) {
-                planNode = parsed.path("plan");
-            } else if (parsed.path("nodes").isArray()) {
-                planNode = parsed;
-            }
-        }
-        if (planNode == null) {
-            return Optional.empty();
-        }
-        try {
-            DagPlan plan = DagPlan.fromJson(planNode);
-            if (plan.nodes().isEmpty()) {
-                return Optional.empty();
-            }
-            return validator.validate(plan, null, maxToolCalls).isEmpty()
-                    ? Optional.of(plan) : Optional.empty();
-        } catch (Exception e) {
-            return Optional.empty();
-        }
     }
 
     /** 按 dag.planner-response-format 构造下发给 planner 调用的 response_format；空配置 = 不下发。 */
@@ -273,6 +249,15 @@ public class DagPlanner {
                        "in_domain": {"type": "boolean"},
                        "intent": {"type": "string"},
                        "reply": {"type": ["string", "null"]},
+                       "query_requirements": {"type": ["object", "null"], "additionalProperties": false,
+                         "properties": {
+                           "time_scope": {"type": "string", "enum": ["unspecified", "current", "recent_samples", "rolling_window", "calendar_window", "absolute_range", "period_comparison", "mixed", "unknown"]},
+                           "duration": {"type": ["string", "null"]},
+                           "sample_count": {"type": ["integer", "null"], "minimum": 1},
+                           "quote_asset": {"type": ["string", "null"]},
+                           "market_type": {"type": ["string", "null"]}
+                         },
+                         "required": ["time_scope", "duration", "sample_count", "quote_asset", "market_type"]},
                        "plan": {"type": ["object", "null"], "additionalProperties": false,
                          "properties": {"nodes": {"type": "array", "items": {
                            "type": "object", "additionalProperties": false,
@@ -287,7 +272,7 @@ public class DagPlanner {
                          }}},
                          "required": ["nodes"]}
                      },
-                     "required": ["in_domain"]}
+                     "required": ["in_domain", "query_requirements"]}
                     """);
             ArrayNode toolEnum = MAPPER.createArrayNode();
             registry.specs().forEach(spec -> toolEnum.add(spec.name()));
