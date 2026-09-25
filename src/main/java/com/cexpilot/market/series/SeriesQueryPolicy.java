@@ -9,7 +9,7 @@ import java.util.stream.Collectors;
 /**
  * 历史序列查询前检查「这个请求是否能满足」，依据数据源提供的能力信息，
  * 调用方不自行维护另一份交易所能力表。
- * 通过后返回对齐后的区间：COVER 口径下区间被外扩到粒度边界。
+ * 通过后返回对齐后的区间：区间未对齐粒度边界时被外扩到粒度边界。
  */
 public final class SeriesQueryPolicy {
 
@@ -17,9 +17,9 @@ public final class SeriesQueryPolicy {
     }
 
     /**
-     * @return 对齐后的查询区间（EXACT 且已对齐时与入参相同）
+     * @return 对齐后的查询区间（已对齐时与入参相同）
      */
-    public static TimeRange check(SeriesInterval interval, TimeRange range, BoundaryMode mode,
+    public static TimeRange check(SeriesInterval interval, TimeRange range,
                                   SeriesCapability capability, String exchangeDisplayName,
                                   Instant requestTime) {
         if (!capability.supportedIntervals().isEmpty()
@@ -43,20 +43,11 @@ public final class SeriesQueryPolicy {
         long endMs = range.endExclusive().toEpochMilli();
 
         TimeRange effective = range;
-        if (mode == BoundaryMode.EXACT) {
-            if (startMs % intervalMs != 0 || endMs % intervalMs != 0) {
-                throw new IllegalArgumentException(
-                        "区间边界未对齐 " + interval.code() + " 粒度边界"
-                                + "（" + range.startInclusive() + " ~ " + range.endExclusive() + "）；"
-                                + "请换用能匹配边界的更细粒度，或使用 boundary_mode=cover 允许外延覆盖");
-            }
-        } else {
-            long alignedStart = Math.floorDiv(startMs, intervalMs) * intervalMs;
-            long alignedEnd = Math.floorDiv(endMs + intervalMs - 1, intervalMs) * intervalMs;
-            if (alignedStart != startMs || alignedEnd != endMs) {
-                effective = new TimeRange(Instant.ofEpochMilli(alignedStart),
-                        Instant.ofEpochMilli(alignedEnd), range.timezone());
-            }
+        long alignedStart = Math.floorDiv(startMs, intervalMs) * intervalMs;
+        long alignedEnd = Math.floorDiv(endMs + intervalMs - 1, intervalMs) * intervalMs;
+        if (alignedStart != startMs || alignedEnd != endMs) {
+            effective = new TimeRange(Instant.ofEpochMilli(alignedStart),
+                    Instant.ofEpochMilli(alignedEnd), range.timezone());
         }
 
         long pointsNeeded = (effective.endExclusive().toEpochMilli()

@@ -3,8 +3,8 @@ package com.cexpilot.market;
 import com.cexpilot.market.model.Candle;
 import com.cexpilot.market.model.OiPoint;
 import com.cexpilot.market.model.OrderBook;
+import com.cexpilot.market.model.TakerVolumePoint;
 import com.cexpilot.market.model.Trade;
-import com.cexpilot.market.model.TradePoint;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -247,38 +247,29 @@ public final class MarketCalculator {
     }
 
     /**
-     * 区间内主动买卖流量统计。
+     * 区间内 taker 主动买卖流量统计（交易所官方 5m 统计序列求和）。
      *
      * @param buyVolumeRatio 主动买成交量占总量比例（0~1，4 位小数）；总量为 0 时为 null
      */
-    public record TradeFlowStats(long tradeCount, BigDecimal buyVolume, BigDecimal sellVolume,
-                                 BigDecimal buyQuoteVolume, BigDecimal sellQuoteVolume,
-                                 BigDecimal buyVolumeRatio) {
+    public record TakerFlowStats(BigDecimal buyVolume, BigDecimal sellVolume,
+                                 BigDecimal buyVolumeRatio, int pointCount) {
     }
 
-    /** 成交额 = Σ(价格 × 数量)；调用方负责保证序列完整（分页被中止时不得调用）。 */
-    public static TradeFlowStats tradeFlowStats(List<TradePoint> trades) {
-        if (trades == null || trades.isEmpty()) {
+    /** 调用方负责保证 5m 序列为通过覆盖核对的完整序列（分页被中止时不得调用）；空列表返回 null。 */
+    public static TakerFlowStats takerFlowStats(List<TakerVolumePoint> points) {
+        if (points == null || points.isEmpty()) {
             return null;
         }
         BigDecimal buyVolume = BigDecimal.ZERO;
         BigDecimal sellVolume = BigDecimal.ZERO;
-        BigDecimal buyQuote = BigDecimal.ZERO;
-        BigDecimal sellQuote = BigDecimal.ZERO;
-        for (TradePoint trade : trades) {
-            BigDecimal quote = trade.price().multiply(trade.qty());
-            if (trade.takerBuy()) {
-                buyVolume = buyVolume.add(trade.qty());
-                buyQuote = buyQuote.add(quote);
-            } else {
-                sellVolume = sellVolume.add(trade.qty());
-                sellQuote = sellQuote.add(quote);
-            }
+        for (TakerVolumePoint point : points) {
+            buyVolume = buyVolume.add(point.buyVolume());
+            sellVolume = sellVolume.add(point.sellVolume());
         }
         BigDecimal totalVolume = buyVolume.add(sellVolume);
         BigDecimal ratio = totalVolume.signum() == 0 ? null
                 : buyVolume.divide(totalVolume, 4, RoundingMode.HALF_UP);
-        return new TradeFlowStats(trades.size(), buyVolume, sellVolume, buyQuote, sellQuote, ratio);
+        return new TakerFlowStats(buyVolume, sellVolume, ratio, points.size());
     }
 
     private static BigDecimal avg(List<BigDecimal> values) {

@@ -83,8 +83,7 @@ class ToolRegistryTest {
             assertNull(tools);
             return new ChatResponse("{\"in_domain\":true,\"intent\":\"UNKNOWN\",\"plan\":null}", List.of(), 1, 1);
         }, registry, new IntentRegistry(loader), new LlmConfig(), new DagConfig(),
-                new PromptStore(loader), new PlanValidator(registry, new DagConfig()),
-                com.cexpilot.dag.guard.QueryCapabilityGuard.defaults());
+                new PromptStore(loader), new PlanValidator(registry, new DagConfig()));
         planner.plan("查询BTC", "", "test", event -> {});
         String prompt = seen.get(0).content();
         assertTrue(prompt.contains("sample：YAML中的新描述"));
@@ -176,7 +175,7 @@ class ToolRegistryTest {
                 new GetMarkPriceStatisticsTool(market, mock(com.cexpilot.market.markprice.MarkPriceQueryService.class)),
                 new GetOrderbookTool(market), new GetRecentTradesTool(market),
                 new GetTradeHistoryTool(market, mock(com.cexpilot.market.trade.TradeQueryService.class)),
-                new GetTradeFlowStatisticsTool(market, mock(com.cexpilot.market.trade.TradeQueryService.class)),
+                new GetTradeFlowStatisticsTool(market, mock(com.cexpilot.market.taker.TakerVolumeQueryService.class)),
                 new GetTransactionTool(mock(TxAnalysisService.class)));
         try (var context = new AnnotationConfigApplicationContext()) {
             for (AgentTool executor : executors) {

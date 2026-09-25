@@ -3,6 +3,7 @@ enabled: true
 description: >
   查询指定时间区间的成交明细（时间、价格、数量、主动方向），数量单位为基础币。
   口径逐所不同并如实标注：binance=aggTrades 聚合成交（一笔聚合可能含多笔原始成交），okx=逐笔成交。
+  本工具只返回成交明细，不计算区间买卖量或占比；主动买卖量与占比请用 get_trade_flow_statistics，成交额请用 get_market_statistics。
   时间范围用 time 对象表达（必填），4 种结构选其一：
   1) 自然周期，如昨天/上周：{"type":"calendar_period","timezone":null,"unit":"day|week|month|quarter|year","offset":-1,
      "segment":"full|early_morning|morning|afternoon|evening","extent":"full_period|to_request_time"}。

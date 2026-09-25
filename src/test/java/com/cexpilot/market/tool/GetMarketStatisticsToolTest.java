@@ -80,7 +80,7 @@ class GetMarketStatisticsToolTest {
     private static JsonNode args(String timeJson) {
         try {
             return MAPPER.readTree("{\"exchange\":\"binance\",\"symbol\":\"BTC\",\"interval\":\"5m\","
-                    + "\"boundary_mode\":\"exact\",\"time\":" + timeJson + "}");
+                    + "\"time\":" + timeJson + "}");
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }

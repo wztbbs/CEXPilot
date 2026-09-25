@@ -1,6 +1,5 @@
 package com.cexpilot.market.kline;
 
-import com.cexpilot.market.series.BoundaryMode;
 import com.cexpilot.market.Exchange;
 import com.cexpilot.market.model.Candle;
 import com.cexpilot.market.series.SeriesCoverageValidator;
@@ -47,7 +46,7 @@ public class KlineQueryService {
      */
     public KlineQueryResult query(ZoneId userZone, TimeSpec spec, Instant requestTime,
                                   Exchange exchange, String base,
-                                  CandleInterval interval, BoundaryMode boundaryMode, boolean includeUnclosed) {
+                                  CandleInterval interval, boolean includeUnclosed) {
         TimeRange range = timeRangeResolver.resolve(userZone, spec, requestTime);
         KlineSource source = sources.get(exchange);
         if (source == null) {
@@ -55,11 +54,11 @@ public class KlineQueryService {
         }
 
         KlineQueryRequest requested = new KlineQueryRequest(
-                exchange, base, interval, range, boundaryMode, includeUnclosed);
+                exchange, base, interval, range, includeUnclosed);
         TimeRange effectiveRange = SeriesQueryPolicy.check(
-                interval, range, boundaryMode, source.capability(), exchange.displayName(), requestTime);
+                interval, range, source.capability(), exchange.displayName(), requestTime);
         KlineQueryRequest effective = new KlineQueryRequest(
-                exchange, base, interval, effectiveRange, boundaryMode, includeUnclosed);
+                exchange, base, interval, effectiveRange, includeUnclosed);
 
         KlineSource.FetchResult fetch = source.fetch(effective);
         List<TimePoint> points = fetch.candles().stream()
@@ -71,8 +70,8 @@ public class KlineQueryService {
                 effectiveRange.startInclusive().toEpochMilli(),
                 effectiveRange.endExclusive().toEpochMilli(),
                 includeUnclosed, points, fetch.abortReason(), requestTime,
-                // cover 外延只是网格对齐的技术产物；beyond-now 以用户请求终点为准，
-                // 否则 to_request_time（终点=请求时刻）配 cover 会永远被判为部分覆盖
+                // 外扩只是网格对齐的技术产物；beyond-now 以用户请求终点为准，
+                // 否则 to_request_time（终点=请求时刻）会永远被判为部分覆盖
                 Math.min(effectiveRange.endExclusive().toEpochMilli(),
                         range.endExclusive().toEpochMilli()));
 

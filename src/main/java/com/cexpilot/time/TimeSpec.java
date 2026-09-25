@@ -20,6 +20,43 @@ public sealed interface TimeSpec
     /** null 表示继承请求上下文中的已确定时区。 */
     ZoneId timezone();
 
+    /** 本表达对应的 time.type。 */
+    Type type();
+
+    /**
+     * time.type 的 4 种互斥取值，LLM 输出 JSON 中的字符串与 code 一一对应。
+     * 各结构的字段约定与消解语义见对应 record 的 javadoc。
+     */
+    enum Type {
+        /** 自然周期：昨天、上周、昨天下午。对应 {@link CalendarPeriod}。 */
+        CALENDAR_PERIOD("calendar_period"),
+        /** 滚动窗口：过去 6 小时、最近 30 分钟；终点固定为 requestTime。对应 {@link RollingWindow}。 */
+        ROLLING_WINDOW("rolling_window"),
+        /** 相对日期上的明确时段：昨天 15 点到 17 点。对应 {@link RelativeDayRange}。 */
+        RELATIVE_DAY_RANGE("relative_day_range"),
+        /** 明确日期范围：9 月 1 日到 9 月 3 日。对应 {@link AbsoluteRange}。 */
+        ABSOLUTE_RANGE("absolute_range");
+
+        private final String code;
+
+        Type(String code) {
+            this.code = code;
+        }
+
+        public String code() {
+            return code;
+        }
+
+        public static Type parse(String code) {
+            for (Type type : values()) {
+                if (type.code.equals(code)) {
+                    return type;
+                }
+            }
+            throw new IllegalArgumentException("不支持的 time.type: " + code);
+        }
+    }
+
     /** 自然周期单位。week 的起始日由产品统一配置，不由 LLM 决定。 */
     enum CalendarUnit {
         DAY("day"), WEEK("week"), MONTH("month"), QUARTER("quarter"), YEAR("year");
@@ -170,6 +207,11 @@ public sealed interface TimeSpec
                 throw new IllegalArgumentException("calendar_period 的 unit/segment/extent 不能为空");
             }
         }
+
+        @Override
+        public Type type() {
+            return Type.CALENDAR_PERIOD;
+        }
     }
 
     /**
@@ -182,6 +224,11 @@ public sealed interface TimeSpec
             if (duration == null) {
                 throw new IllegalArgumentException("rolling_window 的 duration 不能为空");
             }
+        }
+
+        @Override
+        public Type type() {
+            return Type.ROLLING_WINDOW;
         }
     }
 
@@ -224,6 +271,11 @@ public sealed interface TimeSpec
                 throw new IllegalArgumentException("relative_day_range 的 start/end 不能为空");
             }
         }
+
+        @Override
+        public Type type() {
+            return Type.RELATIVE_DAY_RANGE;
+        }
     }
 
     /**
@@ -259,6 +311,11 @@ public sealed interface TimeSpec
             if (endMode == EndMode.INCLUSIVE_DATE && end.time() != null) {
                 throw new IllegalArgumentException("end_mode=inclusive_date 仅允许 end.time=null");
             }
+        }
+
+        @Override
+        public Type type() {
+            return Type.ABSOLUTE_RANGE;
         }
     }
 

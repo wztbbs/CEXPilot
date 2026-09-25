@@ -7,7 +7,6 @@ import com.cexpilot.market.Times;
 import com.cexpilot.market.markprice.MarkPriceQueryResult;
 import com.cexpilot.market.markprice.MarkPriceQueryService;
 import com.cexpilot.market.markprice.PriceType;
-import com.cexpilot.market.series.BoundaryMode;
 import com.cexpilot.time.CandleInterval;
 import com.cexpilot.time.TimeRange;
 import com.cexpilot.time.TimeSpec;
@@ -50,7 +49,6 @@ public class GetMarkPriceStatisticsTool extends AbstractMarketTool {
         PriceType priceType = PriceType.parse(args.path("price_type").asText("mark"));
         CandleInterval interval = CandleInterval.parse(args.path("interval").asText("5m"));
         TimeSpec spec = TimeSpecParser.parse(args.get("time"));
-        BoundaryMode boundaryMode = BoundaryMode.parse(args.path("boundary_mode").asText("exact"));
         boolean includeUnclosed = args.path("include_unclosed").asBoolean(false);
 
         ZoneId userZone = ctx != null && ctx.timezone() != null ? ctx.timezone() : DEFAULT_ZONE;
@@ -58,7 +56,7 @@ public class GetMarkPriceStatisticsTool extends AbstractMarketTool {
                 ? ctx.requestTime() : Instant.now();
         MarkPriceQueryResult result = markPriceQueryService.query(
                 userZone, spec, requestTime, exchange, base, priceType, interval,
-                boundaryMode, includeUnclosed);
+                includeUnclosed);
 
         TimeRange requested = result.requested();
         TimeRange effective = result.effective();
@@ -69,7 +67,6 @@ public class GetMarkPriceStatisticsTool extends AbstractMarketTool {
         facts.put("symbol", base);
         facts.put("price_type", priceType.code());
         facts.put("candle_interval", interval.code());
-        facts.put("boundary_mode", boundaryMode.code());
         facts.set("requested_range", SeriesFacts.rangeJson(requested));
         if (!effective.equals(requested)) {
             facts.set("effective_range", SeriesFacts.rangeJson(effective));

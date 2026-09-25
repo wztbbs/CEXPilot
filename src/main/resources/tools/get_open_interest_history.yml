@@ -16,7 +16,7 @@ description: >
      "start":{"year":null,"month":9,"day":1,"time":null},"end":{"year":null,"month":9,"day":3,"time":null},
      "end_mode":"inclusive_date|exclusive"}。
   timezone 均为 IANA 时区，填 null 表示继承请求时区（当前为 UTC+8）。
-  边界口径 boundary_mode：exact（默认）要求区间起止对齐采样粒度边界，未对齐会报错；cover 允许外延覆盖。
+  区间起止未对齐采样粒度边界时自动外延覆盖，并以 requested_range/effective_range 标注实际区间。
   返回的 coverage：range_complete=true 才表示区间完整覆盖；区间延伸到当前之后时数据只覆盖到 covered_until；
   closed_part_complete=false 表示有缺失采样点，missing_open_times 为缺失点的采样时间。
 # capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
@@ -26,7 +26,6 @@ capabilities:
 limitations:
   - 粒度支持 5m/15m/30m/1h/2h/4h/6h/12h/1d；单次查询上限：币安 4000 点、OKX 4000 点
   - 币安只保留最近 30 天的持仓量历史，起点超出会直接报错（OKX 不限）
-  - boundary_mode=exact 要求起止对齐粒度边界，未对齐时报错（换更细粒度或改用 cover）
   - 默认剔除当前未完结周期的采样点并标注 dropped_unclosed；include_unclosed=true 时保留并标注 contains_unclosed
 scope:
   exchanges: [binance, okx]
@@ -60,11 +59,6 @@ input_schema:
     time:
       type: object
       description: 时间范围（TimeSpec），4 种 type 结构见工具描述，字段严格校验由服务端执行
-    boundary_mode:
-      type: string
-      enum: [exact, cover]
-      default: exact
-      description: 边界口径；exact 要求对齐粒度边界，cover 允许外延覆盖
     include_unclosed:
       type: boolean
       default: false

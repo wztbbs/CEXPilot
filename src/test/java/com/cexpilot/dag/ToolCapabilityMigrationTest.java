@@ -2,7 +2,6 @@ package com.cexpilot.dag;
 
 import com.cexpilot.config.DagConfig;
 import com.cexpilot.config.LlmConfig;
-import com.cexpilot.dag.guard.QueryCapabilityGuard;
 import com.cexpilot.intent.IntentRegistry;
 import com.cexpilot.llm.*;
 import com.cexpilot.market.Exchange;
@@ -52,8 +51,7 @@ class ToolCapabilityMigrationTest {
         private final List<List<ChatMessage>> calls = new ArrayList<>();
         private JsonNode responseFormat;
         Script(String nodes) {
-            plan = "{\"in_domain\":true,\"intent\":\"MARKET_LOOKUP\",\"query_requirements\":"
-                    + "{\"requires_period_comparison\":false},\"reply\":null,\"plan\":{\"nodes\":" + nodes + "}}";
+            plan = "{\"in_domain\":true,\"intent\":\"MARKET_LOOKUP\",\"reply\":null,\"plan\":{\"nodes\":" + nodes + "}}";
         }
         @Override
         public ChatResponse chat(List<ChatMessage> messages, List<ToolSpec> tools) {
@@ -79,10 +77,10 @@ class ToolCapabilityMigrationTest {
         var prompts = new PromptStore(loader);
         var intents = new IntentRegistry(loader);
         var planner = new DagPlanner(llm, registry, intents, new LlmConfig(), config, prompts,
-                new PlanValidator(registry, config), QueryCapabilityGuard.defaults());
+                new PlanValidator(registry, config));
         var executor = new DagExecutor(registry, config);
         try {
-            return new DagRuntime(llm, planner, executor, prompts, intents).execute(
+            return new DagRuntime(llm, planner, executor, prompts, intents, Clock.fixed(NOW, ZoneOffset.UTC)).execute(
                     question, "", "migration", event -> {}, null, new RequestContext(ZoneOffset.UTC, NOW));
         } finally {
             executor.shutdown();
@@ -129,9 +127,10 @@ class ToolCapabilityMigrationTest {
         for (JsonNode item : result.evidence()) assertTrue(item.path("ok").asBoolean(), item::toString);
         assertEquals(24, result.evidence().get(0).path("data").path("candle_count").asInt());
         assertTrue(result.evidence().get(1).path("data").path("complete").asBoolean());
-        var properties = llm.responseFormat.at("/json_schema/schema/properties/query_requirements/properties");
-        assertEquals(1, properties.size());
-        assertTrue(properties.has("requires_period_comparison"));
+        var schema = llm.responseFormat.at("/json_schema/schema");
+        assertFalse(schema.path("properties").has("query_requirements"));
+        assertFalse(schema.toString().contains("requires_period_comparison"));
+        assertFalse(schema.toString().contains("include_details"));
         String prompt = llm.calls.get(0).get(0).content();
         assertFalse(prompt.contains("除 K 线/资金费率/持仓量"));
         assertFalse(prompt.contains("time_scope"));
@@ -167,8 +166,8 @@ class ToolCapabilityMigrationTest {
         when(funding.queryRecent(Exchange.BINANCE, "BTC", 50, NOW)).thenReturn(new FundingRecentResult(rates, 28_800_000L));
         var registry = registry(new GetRecentTradesTool(market), new GetFundingRateHistoryTool(market, funding));
         var llm = new Script("""
-                [{"id":"t","tool":"get_recent_trades","args":{"symbol":"BTC","limit":50,"details":true},"include_details":true},
-                 {"id":"f","tool":"get_funding_rate_history","args":{"symbol":"BTC","count":50},"include_details":true}]
+                [{"id":"t","tool":"get_recent_trades","args":{"symbol":"BTC","limit":50}},
+                 {"id":"f","tool":"get_funding_rate_history","args":{"symbol":"BTC","count":50}}]
                 """);
         var result = run(llm, registry, "列出最近 50 笔成交和最近 50 期费率明细");
         assertEquals(2, result.toolCallCount());
@@ -178,8 +177,9 @@ class ToolCapabilityMigrationTest {
         assertTrue(facts.get(0).path("data").path("sample_complete").asBoolean());
         assertTrue(facts.get(1).path("data").path("sample_complete").asBoolean());
         String prompt = llm.calls.get(0).get(0).content();
-        assertTrue(prompt.contains("get_recent_trades 还必须设置 args.details=true"));
-        assertTrue(prompt.contains("get_funding_rate_history 不添加 args.details"));
+        assertFalse(prompt.contains("include_details"));
+        assertFalse(prompt.contains("args.details"));
+        assertEquals(MAPPER.readTree(result.evidence().toString()), facts);
         assertThrows(IllegalArgumentException.class, () -> registry.prepareArguments("get_funding_rate_history",
                 MAPPER.readTree("{\"symbol\":\"BTC\",\"count\":50,\"details\":true}")));
     }
@@ -217,21 +217,17 @@ class ToolCapabilityMigrationTest {
     }
 
     @Test
-    void timeAndBoundaryErrorsAreRejectedByQueryServiceBeforeFetching() {
+    void invalidTimeSpecIsRejectedByQueryServiceBeforeFetching() {
         var source = mock(MarkPriceSource.class);
         when(source.exchange()).thenReturn(Exchange.BINANCE);
         when(source.capability()).thenReturn(new SeriesCapability(Set.of(CandleInterval.values()), 1500, 4));
         var resolver = new TimeRangeResolver(Clock.fixed(NOW, ZoneOffset.UTC));
         var tool = new GetMarkPriceHistoryTool(null, new MarkPriceQueryService(List.of(source), resolver));
-        for (String time : List.of(
-                "{\"type\":\"unsupported\"}",
-                // 过去一小时为 11:03～12:03，exact + 1h 不允许未经对齐的边界。
-                "{\"type\":\"rolling_window\",\"duration\":{\"value\":1,\"unit\":\"hour\"}}")) {
-            var llm = new Script("[{\"id\":\"p\",\"tool\":\"get_mark_price_history\",\"args\":{\"symbol\":\"BTC\",\"interval\":\"1h\",\"time\":" + time + "}}]");
-            var result = run(llm, registry(tool), "按指定时间查标记价格");
-            assertEquals(1, result.toolCallCount());
-            assertFalse(result.evidence().get(0).path("ok").asBoolean());
-        }
+        var llm = new Script("[{\"id\":\"p\",\"tool\":\"get_mark_price_history\",\"args\":{\"symbol\":\"BTC\",\"interval\":\"1h\",\"time\":"
+                + "{\"type\":\"unsupported\"}" + "}}]");
+        var result = run(llm, registry(tool), "按指定时间查标记价格");
+        assertEquals(1, result.toolCallCount());
+        assertFalse(result.evidence().get(0).path("ok").asBoolean());
         verify(source, never()).fetch(anyString(), any(), any(), anyLong(), anyLong());
     }
 

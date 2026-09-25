@@ -8,6 +8,7 @@ import com.cexpilot.market.model.MarkPrice;
 import com.cexpilot.market.model.OiPoint;
 import com.cexpilot.market.model.OpenInterestInfo;
 import com.cexpilot.market.model.OrderBook;
+import com.cexpilot.market.model.TakerVolumePoint;
 import com.cexpilot.market.model.Ticker;
 import com.cexpilot.market.model.Trade;
 import com.cexpilot.market.model.TradePoint;
@@ -137,6 +138,28 @@ public class BinanceClient {
                     decimal(item, "sumOpenInterest")));
         }
         points.sort(java.util.Comparator.comparingLong(OiPoint::timestamp));
+        return points;
+    }
+
+    /**
+     * taker 主动买卖成交量统计（takerlongshortRatio）：5m 周期，buyVol/sellVol
+     * 为基础币量，timestamp 为周期起点（毫秒），升序返回。单页上限 500 条；
+     * 只保留最近约 30 天；跨页拉取由调用方（TakerVolumeSource）负责。
+     */
+    public List<TakerVolumePoint> takerLongShortRatio(String symbol, String period,
+                                                      long startTimeMs, long endTimeMs, int limit) {
+        JsonNode node = get("/futures/data/takerlongshortRatio?symbol={s}&period={p}&startTime={st}&endTime={et}&limit={l}",
+                symbol, period, startTimeMs, endTimeMs, limit);
+        return parseTakerVolume(node);
+    }
+
+    static List<TakerVolumePoint> parseTakerVolume(JsonNode data) {
+        List<TakerVolumePoint> points = new ArrayList<>();
+        for (JsonNode item : data) {
+            points.add(new TakerVolumePoint(item.path("timestamp").asLong(),
+                    decimal(item, "buyVol"), decimal(item, "sellVol")));
+        }
+        points.sort(java.util.Comparator.comparingLong(TakerVolumePoint::timestamp));
         return points;
     }
 

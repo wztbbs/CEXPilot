@@ -2,8 +2,6 @@ package com.cexpilot.dag;
 
 import com.cexpilot.config.DagConfig;
 import com.cexpilot.config.LlmConfig;
-import com.cexpilot.dag.guard.GuardContext;
-import com.cexpilot.dag.guard.QueryCapabilityGuard;
 import com.cexpilot.intent.IntentDefinition;
 import com.cexpilot.intent.IntentRegistry;
 import com.cexpilot.llm.ChatMessage;
@@ -39,8 +37,9 @@ import java.util.Set;
  *   reply 超长（>100 字）视为模型把推理过程倒进了 reply 的协议误用，走 repair；
  * - in_domain=true 且 plan 非空 → LlmJson 容错解析 + PlanValidator 确定性校验，
  *   失败把错误明细追加为消息让 LLM 修复，最多重试 plannerMaxRetries 次；
- * - 信封缺失走格式修复；不再抢救裸 plan，避免绕过必需的 query_requirements。
- * - query_requirements 由确定性能力闸门检查；能力不足直接拒答，不进行 repair。
+ * - 信封缺失走格式修复，不抢救缺少领域判断的裸 plan。
+ * - 工具定义是能力来源；无法产出核心结果时由 planner 用 plan=null 和 reply 说明缺口。
+ *   代码检查计划结构和查询参数，不以问题类别推断是否能完成任务。
  *
  * 每次 LLM 调用落 LLM_CALL trace（name="dag_planner"），每次生成的输出落 PLAN trace
  * （校验通过或有意不规划时 error 为 null，否则带错误明细）。
@@ -64,11 +63,10 @@ public class DagPlanner {
     private final DagConfig dagConfig;
     private final PromptStore prompts;
     private final PlanValidator validator;
-    private final QueryCapabilityGuard capabilityGuard;
 
     public DagPlanner(LlmClient llm, ToolRegistry registry, IntentRegistry intentRegistry,
                       LlmConfig llmConfig, DagConfig dagConfig, PromptStore prompts,
-                      PlanValidator validator, QueryCapabilityGuard capabilityGuard) {
+                      PlanValidator validator) {
         this.llm = llm;
         this.registry = registry;
         this.intentRegistry = intentRegistry;
@@ -76,7 +74,6 @@ public class DagPlanner {
         this.dagConfig = dagConfig;
         this.prompts = prompts;
         this.validator = validator;
-        this.capabilityGuard = capabilityGuard;
     }
 
     /**
@@ -106,7 +103,7 @@ public class DagPlanner {
             promptTokens += response.promptTokens() == null ? 0 : response.promptTokens();
             completionTokens += response.completionTokens() == null ? 0 : response.completionTokens();
 
-            PlanDecision decision = evaluateResponse(question, response.content(), maxToolCalls, traceId, sink);
+            PlanDecision decision = evaluateResponse(response.content(), maxToolCalls, traceId, sink);
             if (decision.error() == null) {
                 return decision.toOutcome(promptTokens, completionTokens);
             }
@@ -130,7 +127,7 @@ public class DagPlanner {
         }
     }
 
-    private PlanDecision evaluateResponse(String question, String content, int maxToolCalls,
+    private PlanDecision evaluateResponse(String content, int maxToolCalls,
                                           String traceId, TraceSink sink) {
         JsonNode parsed;
         try {
@@ -148,20 +145,14 @@ public class DagPlanner {
             sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
             return PlanDecision.accepted(false, null, textOrNull(parsed.path("reply")), null);
         }
-        return evaluateInDomainResponse(question, parsed, maxToolCalls, traceId, sink);
+        return evaluateInDomainResponse(parsed, maxToolCalls, traceId, sink);
     }
 
-    private PlanDecision evaluateInDomainResponse(String question, JsonNode parsed, int maxToolCalls,
+    private PlanDecision evaluateInDomainResponse(JsonNode parsed, int maxToolCalls,
                                                   String traceId, TraceSink sink) {
         String intent = normalizeIntent(parsed.path("intent"));
         String reply = textOrNull(parsed.path("reply"));
         JsonNode planNode = parsed.path("plan");
-        // 只判断任务级能力；每个查询节点的时间、市场、条数由执行链路校验。
-        String refusal = capabilityGuard.refusal(GuardContext.of(parsed.path("query_requirements")));
-        if (refusal != null) {
-            sink.record(TraceEvent.plan(traceId, parsed.toString(), "CAPABILITY_REFUSED: " + refusal));
-            return PlanDecision.accepted(true, intent, refusal, null);
-        }
         if (!planNode.isObject()) {
             return evaluateReplyWithoutPlan(parsed, intent, reply, traceId, sink);
         }
@@ -171,7 +162,7 @@ public class DagPlanner {
     private PlanDecision evaluateReplyWithoutPlan(JsonNode parsed, String intent, String reply,
                                                   String traceId, TraceSink sink) {
         if (reply == null || reply.isBlank()) {
-            // 能力闸门已在此前放行，走到这里 plan 缺失且无任何话术 = 协议违约，必须 repair。
+            // plan 缺失且无任何话术 = 协议违约，必须 repair。
             String error = "缺少 plan 且未给出 reply：可查询时必须输出 plan.nodes；"
                     + "确需拒绝时必须在 reply 写明原因";
             return repairDecision(traceId, sink, parsed.toString(), error);
@@ -271,11 +262,6 @@ public class DagPlanner {
                        "in_domain": {"type": "boolean"},
                        "intent": {"type": "string"},
                        "reply": {"type": ["string", "null"]},
-                       "query_requirements": {"type": ["object", "null"], "additionalProperties": false,
-                         "properties": {
-                           "requires_period_comparison": {"type": "boolean"}
-                         },
-                         "required": ["requires_period_comparison"]},
                        "plan": {"type": ["object", "null"], "additionalProperties": false,
                          "properties": {"nodes": {"type": "array", "items": {
                            "type": "object", "additionalProperties": false,
@@ -283,14 +269,13 @@ public class DagPlanner {
                              "id": {"type": "string"},
                              "tool": {"type": "string"},
                              "args": {"type": "object"},
-                             "depends_on": {"type": "array", "items": {"type": "string"}},
-                             "include_details": {"type": "boolean"}
+                             "depends_on": {"type": "array", "items": {"type": "string"}}
                            },
                            "required": ["id", "tool", "args", "depends_on"]
                          }}},
                          "required": ["nodes"]}
                      },
-                     "required": ["in_domain", "query_requirements", "plan"]}
+                     "required": ["in_domain", "plan"]}
                     """);
             ArrayNode toolEnum = MAPPER.createArrayNode();
             registry.specs().forEach(spec -> toolEnum.add(spec.name()));

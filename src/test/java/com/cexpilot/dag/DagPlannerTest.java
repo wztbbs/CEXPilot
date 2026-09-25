@@ -94,8 +94,7 @@ class DagPlannerTest {
         return new DagPlanner(llm, registry, new IntentRegistry(new DefaultResourceLoader()),
                 new LlmConfig(), dagConfig,
                 new PromptStore(new DefaultResourceLoader()),
-                new PlanValidator(registry, dagConfig),
-                com.cexpilot.dag.guard.QueryCapabilityGuard.defaults());
+                new PlanValidator(registry, dagConfig));
     }
 
     private static ChatResponse respond(String content) {
@@ -103,7 +102,7 @@ class DagPlannerTest {
     }
 
     private static final String VALID_ENVELOPE = """
-            {"in_domain": true, "query_requirements":{"requires_period_comparison":false}, "intent": "MARKET_LOOKUP", "reply": null,
+            {"in_domain": true,  "intent": "MARKET_LOOKUP", "reply": null,
              "plan": {"nodes": [{"id": "n1", "tool": "echo_tool", "args": {}, "depends_on": []}]}}
             """;
 
@@ -150,7 +149,7 @@ class DagPlannerTest {
     @Test
     void nullPlanAcceptedAsIntentionalSkip() {
         FakeLlmClient llm = new FakeLlmClient(respond(
-                "{\"in_domain\": true, \"query_requirements\":{\"requires_period_comparison\":false}, \"intent\": \"UNKNOWN\", \"reply\": \"缺少链上持仓数据\", \"plan\": null}"));
+                "{\"in_domain\": true,  \"intent\": \"UNKNOWN\", \"reply\": \"缺少链上持仓数据\", \"plan\": null}"));
         ListSink sink = new ListSink();
 
         DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
@@ -169,7 +168,7 @@ class DagPlannerTest {
     void nullPlanWithNullReplyTriggersRepair() {
         // plan=null 且 reply 为空：既不是规划也不是话术，协议违约，必须 repair
         FakeLlmClient llm = new FakeLlmClient(
-                respond("{\"in_domain\": true, \"query_requirements\":{\"requires_period_comparison\":false},"
+                respond("{\"in_domain\": true, "
                         + " \"intent\": \"MARKET_LOOKUP\", \"reply\": null, \"plan\": null}"),
                 respond(VALID_ENVELOPE));
         ListSink sink = new ListSink();
@@ -189,7 +188,7 @@ class DagPlannerTest {
     @Test
     void fabricatedIntentFallsBackToUnknown() {
         FakeLlmClient llm = new FakeLlmClient(respond(
-                "{\"in_domain\": true, \"query_requirements\":{\"requires_period_comparison\":false}, \"intent\": \"MADE_UP\", \"reply\": null,"
+                "{\"in_domain\": true,  \"intent\": \"MADE_UP\", \"reply\": null,"
                         + " \"plan\": {\"nodes\": [{\"id\": \"n1\", \"tool\": \"echo_tool\", \"args\": {}, \"depends_on\": []}]}}"));
         ListSink sink = new ListSink();
 
@@ -203,7 +202,7 @@ class DagPlannerTest {
     @Test
     void invalidPlanRepairedWithErrorDetails() {
         FakeLlmClient llm = new FakeLlmClient(
-                respond("{\"in_domain\": true, \"query_requirements\":{\"requires_period_comparison\":false}, \"intent\": \"UNKNOWN\", \"reply\": null,"
+                respond("{\"in_domain\": true,  \"intent\": \"UNKNOWN\", \"reply\": null,"
                         + " \"plan\": {\"nodes\": [{\"id\": \"n1\", \"tool\": \"ghost\", \"args\": {}}]}}"),
                 respond(VALID_ENVELOPE));
         ListSink sink = new ListSink();
@@ -248,8 +247,7 @@ class DagPlannerTest {
         DagPlanner planner = new DagPlanner(llm, registry,
                 new IntentRegistry(new DefaultResourceLoader()), new LlmConfig(), new DagConfig(),
                 new PromptStore(new DefaultResourceLoader()),
-                new PlanValidator(registry, new DagConfig()),
-                com.cexpilot.dag.guard.QueryCapabilityGuard.defaults());
+                new PlanValidator(registry, new DagConfig()));
 
         planner.plan("问题", "", "trace-7", new ListSink());
 
@@ -281,7 +279,7 @@ class DagPlannerTest {
     }
 
     @Test
-    void barePlanCannotBypassRequirements() {
+    void barePlanCannotBypassEnvelope() {
         for (String output : List.of(
                 "[{\"id\":\"n1\",\"tool\":\"echo_tool\",\"args\":{}}]",
                 "{\"plan\":{\"nodes\":[{\"id\":\"n1\",\"tool\":\"echo_tool\",\"args\":{}}]}}")) {
@@ -335,7 +333,7 @@ class DagPlannerTest {
     void emptyNodesWithReplyAcceptedAsIntentionalSkip() {
         // 模型用 plan:{"nodes":[]} + reply 表达追问：等价于 plan=null，直接接受不 repair
         FakeLlmClient llm = new FakeLlmClient(respond(
-                "{\"in_domain\": true, \"query_requirements\":{\"requires_period_comparison\":false}, \"intent\": \"MARKET_LOOKUP\","
+                "{\"in_domain\": true,  \"intent\": \"MARKET_LOOKUP\","
                         + " \"reply\": \"请提供需要查询的币种代码\", \"plan\": {\"nodes\": []}}"));
         ListSink sink = new ListSink();
 
@@ -355,7 +353,7 @@ class DagPlannerTest {
     void emptyNodesWithoutReplyTriggersRepair() {
         // 空 nodes 且没有 reply：模型什么都没表达，仍按校验失败走 repair
         FakeLlmClient llm = new FakeLlmClient(
-                respond("{\"in_domain\": true, \"query_requirements\":{\"requires_period_comparison\":false}, \"intent\": \"MARKET_LOOKUP\","
+                respond("{\"in_domain\": true,  \"intent\": \"MARKET_LOOKUP\","
                         + " \"reply\": null, \"plan\": {\"nodes\": []}}"),
                 respond(VALID_ENVELOPE));
         ListSink sink = new ListSink();
@@ -374,7 +372,7 @@ class DagPlannerTest {
     void longReasoningReplyWithoutPlanTriggersRepair() {
         // 模型把推理过程倒进 reply 且没给 plan：协议误用，必须 repair 而不是透传
         FakeLlmClient llm = new FakeLlmClient(
-                respond("{\"in_domain\": true, \"query_requirements\":{\"requires_period_comparison\":false}, \"intent\": \"MARKET_LOOKUP\","
+                respond("{\"in_domain\": true,  \"intent\": \"MARKET_LOOKUP\","
                         + " \"reply\": \"" + "推理".repeat(60) + "\"}"),
                 respond(VALID_ENVELOPE));
         ListSink sink = new ListSink();
@@ -392,7 +390,7 @@ class DagPlannerTest {
     void longReasoningReplyWithEmptyNodesTriggersRepair() {
         // 空 nodes + 超长 reply 同理：不能透传
         FakeLlmClient llm = new FakeLlmClient(
-                respond("{\"in_domain\": true, \"query_requirements\":{\"requires_period_comparison\":false}, \"intent\": \"MARKET_LOOKUP\","
+                respond("{\"in_domain\": true,  \"intent\": \"MARKET_LOOKUP\","
                         + " \"reply\": \"" + "推理".repeat(60) + "\", \"plan\": {\"nodes\": []}}"),
                 respond(VALID_ENVELOPE));
         ListSink sink = new ListSink();
@@ -408,7 +406,7 @@ class DagPlannerTest {
     void longReasoningReplyDroppedWhenPlanValid() {
         // plan 合法但 reply 是推理 dump：直接丢弃 reply，不为它浪费 repair
         FakeLlmClient llm = new FakeLlmClient(respond(
-                "{\"in_domain\": true, \"query_requirements\":{\"requires_period_comparison\":false}, \"intent\": \"MARKET_LOOKUP\","
+                "{\"in_domain\": true,  \"intent\": \"MARKET_LOOKUP\","
                         + " \"reply\": \"" + "推理".repeat(60) + "\","
                         + " \"plan\": {\"nodes\": [{\"id\": \"n1\", \"tool\": \"echo_tool\", \"args\": {}}]}}"));
         ListSink sink = new ListSink();
@@ -443,16 +441,15 @@ class DagPlannerTest {
         ToolRegistry registry = com.cexpilot.runtime.TestTools.registry(List.of(tickerTool));
         DagConfig dagConfig = new DagConfig();
         FakeLlmClient llm = new FakeLlmClient(
-                respond("{\"in_domain\": true, \"query_requirements\":{\"requires_period_comparison\":false}, \"intent\": \"MARKET_LOOKUP\", \"reply\": null,"
+                respond("{\"in_domain\": true,  \"intent\": \"MARKET_LOOKUP\", \"reply\": null,"
                         + " \"plan\": {\"nodes\": [{\"id\": \"n1\", \"tool\": \"get_ticker\"}]}}"),
-                respond("{\"in_domain\": true, \"query_requirements\":{\"requires_period_comparison\":false}, \"intent\": \"MARKET_LOOKUP\", \"reply\": null,"
+                respond("{\"in_domain\": true,  \"intent\": \"MARKET_LOOKUP\", \"reply\": null,"
                         + " \"plan\": {\"nodes\": [{\"id\": \"n1\", \"tool\": \"get_ticker\","
                         + " \"args\": {\"symbol\": \"BTC\"}, \"depends_on\": []}]}}"));
         DagPlanner planner = new DagPlanner(llm, registry,
                 new IntentRegistry(new DefaultResourceLoader()), new LlmConfig(), dagConfig,
                 new PromptStore(new DefaultResourceLoader()),
-                new PlanValidator(registry, dagConfig),
-                com.cexpilot.dag.guard.QueryCapabilityGuard.defaults());
+                new PlanValidator(registry, dagConfig));
 
         DagPlanner.PlanOutcome outcome = planner.plan("问题", "", "trace-18", new ListSink());
 

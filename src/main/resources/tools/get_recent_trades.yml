@@ -1,13 +1,13 @@
 name: get_recent_trades
 enabled: true
-description: 查询最近N笔成交的统计与主动买入量占比，可指定笔数（1-100，默认50）；按笔数采样，不代表固定时间窗口。用户要求列出全部明细时必须设置 details=true，节点 include_details=true 只阻止后续压缩。sample_complete=false 表示未取够请求条数，不得当作完整样本。
+description: 查询最近N笔成交的统计与主动买入量占比，可指定笔数（1-100，默认50）；按笔数采样，不代表固定时间窗口。返回本次实际取得的全部成交明细，无需额外开关。sample_complete=false 表示未取够请求条数，不得当作完整样本。
 # capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
 capabilities:
   - 获取最近逐笔成交记录（时间、价格、数量、主动方向）
   - 给出已计算的成交笔数、主动买入笔数与主动买入量占比
 limitations:
   - 最多取最近 100 笔，成交密集时覆盖的时间跨度可能只有几分钟
-  - 成交明细默认返回样本中最新 20 条；请求笔数 ≤20 或 details=true 时返回全部实际样本
+  - 成交明细返回全部实际样本，条数由 limit 控制（1-100）
   - actual_count 为实际获取条数，可能少于请求条数（接口可用数据不足），输出会明确标注
   - 数量单位两所不同：OKX 是合约张数（quantity_contracts），Binance 是基础币；输出列名与 quantity_unit 标注
 scope:
@@ -40,7 +40,3 @@ input_schema:
       minimum: 1
       maximum: 100
       description: 请求成交笔数；用户指定条数时填入对应数值
-    details:
-      type: boolean
-      default: false
-      description: 是否输出全部成交明细；false 时最多输出最新 20 条

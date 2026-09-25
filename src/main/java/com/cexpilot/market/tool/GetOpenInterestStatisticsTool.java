@@ -6,7 +6,6 @@ import com.cexpilot.market.MarketDataService;
 import com.cexpilot.market.Times;
 import com.cexpilot.market.oi.OiQueryResult;
 import com.cexpilot.market.oi.OiQueryService;
-import com.cexpilot.market.series.BoundaryMode;
 import com.cexpilot.time.OiInterval;
 import com.cexpilot.time.TimeRange;
 import com.cexpilot.time.TimeSpec;
@@ -48,14 +47,13 @@ public class GetOpenInterestStatisticsTool extends AbstractMarketTool {
         String base = parseBase(args);
         OiInterval interval = OiInterval.parse(args.path("interval").asText("1h"));
         TimeSpec spec = TimeSpecParser.parse(args.get("time"));
-        BoundaryMode boundaryMode = BoundaryMode.parse(args.path("boundary_mode").asText("exact"));
         boolean includeUnclosed = args.path("include_unclosed").asBoolean(false);
 
         ZoneId userZone = ctx != null && ctx.timezone() != null ? ctx.timezone() : DEFAULT_ZONE;
         Instant requestTime = ctx != null && ctx.requestTime() != null
                 ? ctx.requestTime() : Instant.now();
         OiQueryResult result = oiQueryService.query(
-                userZone, spec, requestTime, exchange, base, interval, boundaryMode, includeUnclosed);
+                userZone, spec, requestTime, exchange, base, interval, includeUnclosed);
 
         TimeRange requested = result.requested().range();
         TimeRange effective = result.effective().range();
@@ -65,7 +63,6 @@ public class GetOpenInterestStatisticsTool extends AbstractMarketTool {
         facts.put("exchange", exchange.displayName());
         facts.put("symbol", base);
         facts.put("oi_interval", interval.code());
-        facts.put("boundary_mode", boundaryMode.code());
         facts.put("unit", base);
         facts.set("requested_range", SeriesFacts.rangeJson(requested));
         if (!effective.equals(requested)) {

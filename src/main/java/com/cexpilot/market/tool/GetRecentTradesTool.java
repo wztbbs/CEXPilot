@@ -18,8 +18,6 @@ import java.util.List;
 @Component
 public class GetRecentTradesTool extends AbstractMarketTool {
 
-    private static final int OUTPUT_TRADES = 20;
-
     public GetRecentTradesTool(MarketDataService market) {
         super(market);
     }
@@ -34,7 +32,6 @@ public class GetRecentTradesTool extends AbstractMarketTool {
         var exchange = parseExchange(args);
         String base = parseBase(args);
         int limit = SampleQueryPolicy.count(args, "limit", 50, 100);
-        boolean details = args.path("details").asBoolean(false);
         List<Trade> trades = market.recentTrades(exchange, base, limit);
 
         ObjectNode facts = MAPPER.createObjectNode();
@@ -61,12 +58,11 @@ public class GetRecentTradesTool extends AbstractMarketTool {
                     "实际只获取到 " + trades.size() + " 条（接口可用样本不足），非完整 " + limit + " 条");
         }
         facts.put("sample_basis", "最近N笔成交，不代表固定时间窗口；统计基于全部实际样本；"
-                + "明细默认输出最新20条，请求≤20条或 details=true 时输出全部");
+                + "明细返回本次实际取得的全部记录");
         facts.putArray("recent_trades_columns").add("time_utc8").add("price_usdt")
                 .add(contracts ? "quantity_contracts" : "quantity_" + base).add("aggressor_side");
         ArrayNode rows = facts.putArray("recent_trades");
-        int from = (limit <= OUTPUT_TRADES || details) ? 0 : Math.max(0, trades.size() - OUTPUT_TRADES);
-        trades.stream().skip(from).forEach(trade -> {
+        trades.forEach(trade -> {
             ArrayNode row = rows.addArray();
             row.add(Times.readable(trade.time()));
             row.add(trade.price());

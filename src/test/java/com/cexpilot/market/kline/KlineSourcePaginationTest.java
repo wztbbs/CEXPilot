@@ -2,7 +2,6 @@ package com.cexpilot.market.kline;
 
 import com.cexpilot.market.Exchange;
 import com.cexpilot.market.model.Candle;
-import com.cexpilot.market.series.BoundaryMode;
 import com.cexpilot.time.CandleInterval;
 import com.cexpilot.time.TimeRange;
 import org.junit.jupiter.api.Test;
@@ -44,7 +43,7 @@ class KlineSourcePaginationTest {
     private static KlineQueryRequest request(long startMs, long endMs) {
         return new KlineQueryRequest(Exchange.BINANCE, "BTC", CandleInterval.FIVE_MINUTES,
                 new TimeRange(Instant.ofEpochMilli(startMs), Instant.ofEpochMilli(endMs), ZoneOffset.UTC),
-                BoundaryMode.EXACT, false);
+                false);
     }
 
     @Test
@@ -98,7 +97,7 @@ class KlineSourcePaginationTest {
         }, clock);
         KlineQueryRequest okxReq = new KlineQueryRequest(Exchange.OKX, "BTC", CandleInterval.FIVE_MINUTES,
                 new TimeRange(Instant.ofEpochMilli(START), Instant.ofEpochMilli(end), ZoneOffset.UTC),
-                BoundaryMode.EXACT, false);
+                false);
         KlineSource.FetchResult result = source.fetch(okxReq);
         assertNull(result.abortReason());
         assertEquals(312, result.candles().size());
@@ -115,7 +114,7 @@ class KlineSourcePaginationTest {
                 sequence(end - 300L * FIVE_MIN_MS, limit), clock);
         KlineQueryRequest okxReq = new KlineQueryRequest(Exchange.OKX, "BTC", CandleInterval.FIVE_MINUTES,
                 new TimeRange(Instant.ofEpochMilli(START), Instant.ofEpochMilli(end), ZoneOffset.UTC),
-                BoundaryMode.EXACT, false);
+                false);
         KlineSource.FetchResult result = source.fetch(okxReq);
         assertNotNull(result.abortReason());
         assertTrue(result.abortReason().contains("游标"));
@@ -137,7 +136,7 @@ class KlineSourcePaginationTest {
         }, clock);
         KlineQueryRequest okxReq = new KlineQueryRequest(Exchange.OKX, "BTC", CandleInterval.FIVE_MINUTES,
                 new TimeRange(Instant.ofEpochMilli(START), Instant.ofEpochMilli(end), ZoneOffset.UTC),
-                BoundaryMode.EXACT, false);
+                false);
         KlineSource.FetchResult result = source.fetch(okxReq);
         assertNull(result.abortReason());
         assertEquals(List.of(true, false), endpoints); // 历史段 + 近期段各一次

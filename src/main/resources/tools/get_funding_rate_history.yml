@@ -2,6 +2,7 @@ name: get_funding_rate_history
 enabled: true
 description: >
   查询资金费率历史序列（每期保留结算时间，费率以小数表示，0.0001=0.01%）。两种模式恰好选一：
+  本工具不计算费率均值、极值或趋势；这些指标请用 get_funding_rate_statistics，不让回答模型从明细补算。
   1) time 模式：查询指定时间区间内结算的费率，带覆盖核对（coverage）——区间统计类问题优先用 get_funding_rate_statistics。
      时间范围用 time 对象表达，4 种结构选其一：
      - 自然周期，如昨天/上周：{"type":"calendar_period","timezone":null,"unit":"day|week|month|quarter|year","offset":-1,
@@ -19,7 +20,7 @@ description: >
      返回的 coverage：range_complete=true 才表示区间完整覆盖；区间延伸到当前之后时数据只覆盖到 covered_until；
      closed_part_complete=false 表示有缺失，missing_open_times 为缺失周期的开始时间。
   2) count 模式：查询最近 N 期已结算费率（count，1-100），样本语义不承诺时间跨度；
-     actual_count 可能少于请求期数，sample_complete=false 时不能当作完整样本。明细全部返回，不支持 details 参数；需要传给回答模块时设置节点 include_details=true。
+     actual_count 可能少于请求期数，sample_complete=false 时不能当作完整样本。明细全部返回并完整传给回答模块，无需额外开关。
 # capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
 capabilities:
   - time 模式：指定区间的已结算费率序列，返回覆盖核对结果 coverage 与结算周期 funding_interval_hours

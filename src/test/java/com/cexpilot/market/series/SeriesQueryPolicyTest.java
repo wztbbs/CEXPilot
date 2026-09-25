@@ -26,27 +26,19 @@ class SeriesQueryPolicyTest {
     }
 
     @Test
-    void exactAlignedPassesUnchanged() {
+    void alignedRangePassesUnchanged() {
         TimeRange r = range(0, 12 * FIVE_MIN_MS);
         assertSame(r, SeriesQueryPolicy.check(
-                CandleInterval.FIVE_MINUTES, r, BoundaryMode.EXACT, CAPABILITY, "binance", NOW));
+                CandleInterval.FIVE_MINUTES, r, CAPABILITY, "binance", NOW));
     }
 
     @Test
-    void exactUnalignedRejected() {
-        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> SeriesQueryPolicy.check(CandleInterval.FIVE_MINUTES,
-                        range(3 * 60_000L, 63 * 60_000L), BoundaryMode.EXACT, CAPABILITY, "binance", NOW));
-        assertTrue(e.getMessage().contains("未对齐"));
-    }
-
-    @Test
-    void coverWidensToIntervalBoundaries() {
+    void unalignedRangeWidensToIntervalBoundaries() {
         // [10:03, 11:03) 5m → [10:00, 11:05)，13 根
         long start = 10 * 3_600_000L + 3 * 60_000L;
         long end = 11 * 3_600_000L + 3 * 60_000L;
         TimeRange effective = SeriesQueryPolicy.check(CandleInterval.FIVE_MINUTES,
-                range(start, end), BoundaryMode.COVER, CAPABILITY, "binance", NOW);
+                range(start, end), CAPABILITY, "binance", NOW);
         assertEquals(10 * 3_600_000L, effective.startInclusive().toEpochMilli());
         assertEquals(11 * 3_600_000L + 5 * 60_000L, effective.endExclusive().toEpochMilli());
     }
@@ -56,7 +48,7 @@ class SeriesQueryPolicyTest {
         SeriesCapability fiveOnly = new SeriesCapability(Set.of(CandleInterval.FIVE_MINUTES), 1500, 4);
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> SeriesQueryPolicy.check(CandleInterval.ONE_HOUR,
-                        range(0, 3_600_000L), BoundaryMode.EXACT, fiveOnly, "okx", NOW));
+                        range(0, 3_600_000L), fiveOnly, "okx", NOW));
         assertTrue(e.getMessage().contains("不支持粒度"));
         assertTrue(e.getMessage().contains("okx"));
     }
@@ -66,7 +58,7 @@ class SeriesQueryPolicyTest {
         // 6000 根预算 = 6000 × 5m = 500h；取 600h 超出预算
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> SeriesQueryPolicy.check(CandleInterval.FIVE_MINUTES,
-                        range(0, 600L * 3_600_000L), BoundaryMode.EXACT, CAPABILITY, "binance", NOW));
+                        range(0, 600L * 3_600_000L), CAPABILITY, "binance", NOW));
         assertTrue(e.getMessage().contains("区间过长"));
     }
 
@@ -77,12 +69,12 @@ class SeriesQueryPolicyTest {
         // 起点在 40 天前，超出 30 天保留期
         TimeRange r = range(60L * 86_400_000L, 61L * 86_400_000L);
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> SeriesQueryPolicy.check(CandleInterval.ONE_HOUR, r, BoundaryMode.EXACT,
+                () -> SeriesQueryPolicy.check(CandleInterval.ONE_HOUR, r,
                         retained, "binance", NOW));
         assertTrue(e.getMessage().contains("30"));
         // 起点在保留期内 → 放行
         TimeRange ok = range(95L * 86_400_000L, 96L * 86_400_000L);
-        assertSame(ok, SeriesQueryPolicy.check(CandleInterval.ONE_HOUR, ok, BoundaryMode.EXACT,
+        assertSame(ok, SeriesQueryPolicy.check(CandleInterval.ONE_HOUR, ok,
                 retained, "binance", NOW));
     }
 }

@@ -141,6 +141,23 @@ class MarketCalculatorTest {
     }
 
     @Test
+    void takerFlowStatsAggregatesPeriodSums() {
+        List<com.cexpilot.market.model.TakerVolumePoint> points = List.of(
+                new com.cexpilot.market.model.TakerVolumePoint(1, bd("3"), bd("1")),
+                new com.cexpilot.market.model.TakerVolumePoint(2, bd("1"), bd("3")));
+        MarketCalculator.TakerFlowStats stats = MarketCalculator.takerFlowStats(points);
+        assertEquals(bd("4"), stats.buyVolume());
+        assertEquals(bd("4"), stats.sellVolume());
+        // 买占比 = 4 / 8 = 0.5
+        assertEquals(0, new BigDecimal("0.5000").compareTo(stats.buyVolumeRatio()));
+        assertEquals(2, stats.pointCount());
+        // 总量为 0 时占比无定义，返回 null
+        assertNull(MarketCalculator.takerFlowStats(List.of(
+                new com.cexpilot.market.model.TakerVolumePoint(1, bd("0"), bd("0")))).buyVolumeRatio());
+        assertNull(MarketCalculator.takerFlowStats(List.of()));
+    }
+
+    @Test
     void tradesSummaryBuyRatio() {
         List<Trade> trades = List.of(
                 new Trade(1, bd("100"), bd("1"), true, "base"),

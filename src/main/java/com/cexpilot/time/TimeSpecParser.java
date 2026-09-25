@@ -22,12 +22,11 @@ public final class TimeSpecParser {
         }
         String type = text(node, "type", true);
         ZoneId timezone = parseTimezone(node.get("timezone"));
-        return switch (type) {
-            case "calendar_period" -> parseCalendarPeriod(node, timezone);
-            case "rolling_window" -> parseRollingWindow(node, timezone);
-            case "relative_day_range" -> parseRelativeDayRange(node, timezone);
-            case "absolute_range" -> parseAbsoluteRange(node, timezone);
-            default -> throw new IllegalArgumentException("不支持的 time.type: " + type);
+        return switch (TimeSpec.Type.parse(type)) {
+            case CALENDAR_PERIOD -> parseCalendarPeriod(node, timezone);
+            case ROLLING_WINDOW -> parseRollingWindow(node, timezone);
+            case RELATIVE_DAY_RANGE -> parseRelativeDayRange(node, timezone);
+            case ABSOLUTE_RANGE -> parseAbsoluteRange(node, timezone);
         };
     }
 

@@ -9,6 +9,7 @@ import com.cexpilot.market.model.MarkPrice;
 import com.cexpilot.market.model.OiPoint;
 import com.cexpilot.market.model.OpenInterestInfo;
 import com.cexpilot.market.model.OrderBook;
+import com.cexpilot.market.model.TakerVolumePoint;
 import com.cexpilot.market.model.Ticker;
 import com.cexpilot.market.model.Trade;
 import com.cexpilot.market.model.TradePoint;
@@ -171,6 +172,44 @@ public class OkxClient {
             points.add(new OiPoint(timestamp, quantity));
         }
         points.sort(java.util.Comparator.comparingLong(OiPoint::timestamp));
+        return List.copyOf(points);
+    }
+
+    /**
+     * 合约级 taker 主动买卖成交量统计（rubik taker-volume-contract）：5m 周期，
+     * 列序为 [ts, buyVol, sellVol]，单位为合约张数（基础币换算由调用方按 ctVal 处理），
+     * begin/end 限定周期起点范围（begin 不含等值），接口倒序返回（最新在前），翻转为升序。
+     * 单页上限 100 条；跨页拉取由调用方（TakerVolumeSource）负责。
+     */
+    public List<TakerVolumePoint> takerVolumeContract(String instId, String period,
+                                                      long beginMs, long endMs, int limit) {
+        if (limit < 1 || limit > 100) {
+            throw new IllegalArgumentException("OKX taker 成交量 limit 必须在 1..100 之间");
+        }
+        JsonNode data = get("/api/v5/rubik/stat/taker-volume-contract?instId={i}&period={p}&begin={bg}&end={e}&limit={l}",
+                instId, period, beginMs, endMs, limit);
+        return parseTakerVolume(data);
+    }
+
+    static List<TakerVolumePoint> parseTakerVolume(JsonNode data) {
+        if (!data.isArray()) {
+            throw new ExchangeException(NAME, "taker 成交量响应必须是数组");
+        }
+        List<TakerVolumePoint> points = new ArrayList<>();
+        for (JsonNode row : data) {
+            if (!row.isArray() || row.size() < 3) {
+                throw new ExchangeException(NAME, "taker 成交量行必须包含 [ts, buyVol, sellVol]");
+            }
+            // 缺失或畸形字段直接失败，不能静默跳过
+            long timestamp = Long.parseLong(row.get(0).asText());
+            BigDecimal buyVolume = new BigDecimal(row.get(1).asText());
+            BigDecimal sellVolume = new BigDecimal(row.get(2).asText());
+            if (timestamp <= 0 || buyVolume.signum() < 0 || sellVolume.signum() < 0) {
+                throw new ExchangeException(NAME, "taker 成交量包含无效时间或负数量");
+            }
+            points.add(new TakerVolumePoint(timestamp, buyVolume, sellVolume));
+        }
+        points.sort(java.util.Comparator.comparingLong(TakerVolumePoint::timestamp));
         return List.copyOf(points);
     }
 

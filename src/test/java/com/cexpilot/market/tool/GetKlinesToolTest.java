@@ -1,7 +1,6 @@
 package com.cexpilot.market.tool;
 
 import com.cexpilot.market.Exchange;
-import com.cexpilot.market.series.BoundaryMode;
 import com.cexpilot.market.series.SeriesCapability;
 import com.cexpilot.market.kline.KlineQueryRequest;
 import com.cexpilot.market.kline.KlineSource;
@@ -29,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * tool 端到端（fake KlineSource + 固定 Clock）：覆盖 TimeSpec 解析、
- * cover 外扩、覆盖核对结果与 facts 结构。
+ * 区间外扩、覆盖核对结果与 facts 结构。
  */
 class GetKlinesToolTest {
 
@@ -76,10 +75,9 @@ class GetKlinesToolTest {
         return new GetKlinesTool(null, service);
     }
 
-    private static JsonNode args(String boundaryMode) {
+    private static JsonNode args() {
         try {
             return MAPPER.readTree("{\"exchange\":\"binance\",\"symbol\":\"BTC\",\"interval\":\"5m\","
-                    + "\"boundary_mode\":\"" + boundaryMode + "\","
                     + "\"time\":{\"type\":\"rolling_window\",\"timezone\":null,"
                     + "\"duration\":{\"value\":61,\"unit\":\"minute\"}}}");
         } catch (Exception e) {
@@ -88,9 +86,9 @@ class GetKlinesToolTest {
     }
 
     @Test
-    void coverModeWidensAndReportsCoverage() {
-        // [14:29, 15:30]Z 61 分钟 → cover 外扩为 [14:25, 15:30)Z，13 根；facts 按 UTC+8 渲染
-        ToolResult result = tool().execute(args("cover"), ctx(null));
+    void unalignedRangeWidensAndReportsCoverage() {
+        // [14:29, 15:30]Z 61 分钟 → 外扩为 [14:25, 15:30)Z，13 根；facts 按 UTC+8 渲染
+        ToolResult result = tool().execute(args(), ctx(null));
         assertTrue(result.ok(), () -> String.valueOf(result.error()));
         JsonNode facts = result.data();
         assertEquals("5m", facts.path("candle_interval").asText());
@@ -132,18 +130,11 @@ class GetKlinesToolTest {
         Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
         GetKlinesTool gappyTool = new GetKlinesTool(null,
                 new KlineQueryService(List.of(gappy), new TimeRangeResolver(clock)));
-        ToolResult result = gappyTool.execute(args("cover"), ctx(null));
+        ToolResult result = gappyTool.execute(args(), ctx(null));
         assertTrue(result.ok(), () -> String.valueOf(result.error()));
         assertFalse(result.data().path("coverage").path("closed_part_complete").asBoolean());
         assertEquals(1, result.data().path("coverage").path("missing_count").asInt());
         assertTrue(result.data().path("price_change").isMissingNode());
-    }
-
-    @Test
-    void exactModeRejectsUnalignedRange() {
-        ToolResult result = tool().execute(args("exact"), ctx(null));
-        assertFalse(result.ok());
-        assertTrue(result.error().contains("未对齐"), () -> result.error());
     }
 
     @Test

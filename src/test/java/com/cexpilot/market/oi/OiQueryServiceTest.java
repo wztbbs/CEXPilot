@@ -2,7 +2,6 @@ package com.cexpilot.market.oi;
 
 import com.cexpilot.market.Exchange;
 import com.cexpilot.market.model.OiPoint;
-import com.cexpilot.market.series.BoundaryMode;
 import com.cexpilot.market.series.SeriesCapability;
 import com.cexpilot.time.OiInterval;
 import com.cexpilot.time.TimeRangeResolver;
@@ -79,7 +78,7 @@ class OiQueryServiceTest {
     @Test
     void yesterdayHas24PointsComplete() {
         OiQueryResult r = service(source(-1, null)).query(ZoneOffset.UTC, spec(YESTERDAY),
-                NOW, Exchange.BINANCE, "BTC", OiInterval.ONE_HOUR, BoundaryMode.EXACT, false);
+                NOW, Exchange.BINANCE, "BTC", OiInterval.ONE_HOUR, false);
         assertEquals(24, r.points().size());
         assertTrue(r.coverage().rangeComplete());
     }
@@ -88,7 +87,7 @@ class OiQueryServiceTest {
     void missingPointDetected() {
         long skip = Instant.parse("2026-09-23T05:00:00Z").toEpochMilli();
         OiQueryResult r = service(source(skip, null)).query(ZoneOffset.UTC, spec(YESTERDAY),
-                NOW, Exchange.BINANCE, "BTC", OiInterval.ONE_HOUR, BoundaryMode.EXACT, false);
+                NOW, Exchange.BINANCE, "BTC", OiInterval.ONE_HOUR, false);
         assertFalse(r.coverage().complete());
         assertEquals(List.of(skip), r.coverage().missing());
         assertEquals(23, r.points().size());
@@ -101,7 +100,7 @@ class OiQueryServiceTest {
         OiQueryResult r = service(source(-1, null)).query(ZoneOffset.UTC,
                 spec("{\"type\":\"calendar_period\",\"timezone\":\"UTC\",\"unit\":\"day\",\"offset\":0,"
                         + "\"segment\":\"full\",\"extent\":\"full_period\"}"),
-                NOW, Exchange.BINANCE, "BTC", OiInterval.ONE_HOUR, BoundaryMode.EXACT, false);
+                NOW, Exchange.BINANCE, "BTC", OiInterval.ONE_HOUR, false);
         assertTrue(r.coverage().complete());
         assertFalse(r.coverage().rangeComplete());
         assertTrue(r.coverage().droppedUnclosed());
@@ -117,6 +116,6 @@ class OiQueryServiceTest {
         // 40 天前的查询被 30 天保留期拒绝
         assertThrows(IllegalArgumentException.class, () -> service(source(-1, 30)).query(ZoneOffset.UTC,
                 spec("{\"type\":\"rolling_window\",\"timezone\":\"UTC\",\"duration\":{\"value\":40,\"unit\":\"day\"}}"),
-                NOW, Exchange.BINANCE, "BTC", OiInterval.ONE_HOUR, BoundaryMode.EXACT, false));
+                NOW, Exchange.BINANCE, "BTC", OiInterval.ONE_HOUR, false));
     }
 }

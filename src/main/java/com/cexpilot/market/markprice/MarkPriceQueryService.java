@@ -2,7 +2,6 @@ package com.cexpilot.market.markprice;
 
 import com.cexpilot.market.Exchange;
 import com.cexpilot.market.model.Candle;
-import com.cexpilot.market.series.BoundaryMode;
 import com.cexpilot.market.series.SeriesCoverageValidator;
 import com.cexpilot.market.series.SeriesQueryPolicy;
 import com.cexpilot.market.series.SeriesValidation;
@@ -42,8 +41,7 @@ public class MarkPriceQueryService {
 
     public MarkPriceQueryResult query(ZoneId userZone, TimeSpec spec, Instant requestTime,
                                       Exchange exchange, String base, PriceType priceType,
-                                      CandleInterval interval, BoundaryMode boundaryMode,
-                                      boolean includeUnclosed) {
+                                      CandleInterval interval, boolean includeUnclosed) {
         TimeRange range = timeRangeResolver.resolve(userZone, spec, requestTime);
         MarkPriceSource source = sources.get(exchange);
         if (source == null) {
@@ -51,7 +49,7 @@ public class MarkPriceQueryService {
         }
 
         TimeRange effective = SeriesQueryPolicy.check(
-                interval, range, boundaryMode, source.capability(), exchange.displayName(), requestTime);
+                interval, range, source.capability(), exchange.displayName(), requestTime);
 
         MarkPriceSource.FetchResult fetch = source.fetch(base, priceType, interval,
                 effective.startInclusive().toEpochMilli(), effective.endExclusive().toEpochMilli());
@@ -64,8 +62,8 @@ public class MarkPriceQueryService {
                 effective.startInclusive().toEpochMilli(),
                 effective.endExclusive().toEpochMilli(),
                 includeUnclosed, points, fetch.abortReason(), requestTime,
-                // cover 外延只是网格对齐的技术产物；beyond-now 以用户请求终点为准，
-                // 否则 to_request_time（终点=请求时刻）配 cover 会永远被判为部分覆盖
+                // 外扩只是网格对齐的技术产物；beyond-now 以用户请求终点为准，
+                // 否则 to_request_time（终点=请求时刻）会永远被判为部分覆盖
                 Math.min(effective.endExclusive().toEpochMilli(),
                         range.endExclusive().toEpochMilli()));
 

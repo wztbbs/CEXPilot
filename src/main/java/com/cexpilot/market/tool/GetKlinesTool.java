@@ -6,7 +6,6 @@ import com.cexpilot.market.Times;
 import com.cexpilot.market.kline.KlineQueryResult;
 import com.cexpilot.market.kline.KlineQueryService;
 import com.cexpilot.market.model.Candle;
-import com.cexpilot.market.series.BoundaryMode;
 import com.cexpilot.time.CandleInterval;
 import com.cexpilot.time.TimeRange;
 import com.cexpilot.time.TimeSpec;
@@ -51,7 +50,6 @@ public class GetKlinesTool extends AbstractMarketTool {
         String base = parseBase(args);
         CandleInterval interval = CandleInterval.parse(args.path("interval").asText("5m"));
         TimeSpec spec = TimeSpecParser.parse(args.get("time"));
-        BoundaryMode boundaryMode = BoundaryMode.parse(args.path("boundary_mode").asText("exact"));
         boolean includeUnclosed = args.path("include_unclosed").asBoolean(false);
 
         ZoneId userZone = ctx != null && ctx.timezone() != null ? ctx.timezone() : DEFAULT_ZONE;
@@ -59,7 +57,7 @@ public class GetKlinesTool extends AbstractMarketTool {
         Instant requestTime = ctx != null && ctx.requestTime() != null
                 ? ctx.requestTime() : Instant.now();
         KlineQueryResult result = klineQueryService.query(
-                userZone, spec, requestTime, exchange, base, interval, boundaryMode, includeUnclosed);
+                userZone, spec, requestTime, exchange, base, interval, includeUnclosed);
 
         TimeRange requested = result.requested().range();
         TimeRange effective = result.effective().range();
@@ -70,7 +68,6 @@ public class GetKlinesTool extends AbstractMarketTool {
         facts.put("exchange", exchange.displayName());
         facts.put("symbol", base);
         facts.put("candle_interval", interval.code());
-        facts.put("boundary_mode", boundaryMode.code());
         facts.set("requested_range", SeriesFacts.rangeJson(requested));
         if (!effective.equals(requested)) {
             facts.set("effective_range", SeriesFacts.rangeJson(effective));

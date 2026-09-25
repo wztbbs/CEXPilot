@@ -3,6 +3,7 @@ enabled: true
 description: >
   计算指定时间区间内已结算资金费率的统计指标：均值、极值（min/max）、正负期数及趋势（rising/falling/flat/unknown），
   不返回逐期明细；需要明细请用 get_funding_rate_history。
+  本工具只计算单个交易所、单个币种、单个区间的上述指标，不产出不同查询结果之间的差值、比值、大小比较或排名。
   时间范围用 time 对象表达（必填），4 种结构选其一：
   1) 自然周期，如昨天/上周：{"type":"calendar_period","timezone":null,"unit":"day|week|month|quarter|year","offset":-1,
      "segment":"full|early_morning|morning|afternoon|evening","extent":"full_period|to_request_time"}，
@@ -18,7 +19,7 @@ description: >
   timezone 均为 IANA 时区，填 null 表示继承请求时区（当前为 UTC+8）。
   返回的 coverage 必须检查：range_complete=true 才表示区间完整覆盖，仅在此时输出 statistics；
   range_complete=false（部分覆盖/缺口/区间终点未到）时不输出 statistics（statistics_omitted 注明原因），不得凭部分数据自行编造统计指标；
-  如需「本周期截至现在」的统计，应使用 extent=to_request_time 表达（此时终点通常不对齐粒度边界，需配合 boundary_mode=cover）。
+  如需「本周期截至现在」的统计，应使用 extent=to_request_time 表达（此时终点通常不对齐粒度边界，会自动外延覆盖）。
 # capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
 capabilities:
   - 按 TimeSpec 计算区间内已结算费率的均值、极值、正负期数与趋势

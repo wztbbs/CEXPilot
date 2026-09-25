@@ -19,8 +19,7 @@ description: >
       "end":{"year":null,"month":9,"day":3,"time":null},"end_mode":"inclusive_date|exclusive"}，
      year 可省略（按最近一次该日期消解）；end_mode=inclusive_date 表示包含结束日期整天（仅允许 end.time=null）。
   timezone 均为 IANA 时区（如 Asia/Shanghai），填 null 表示继承请求时区（当前为 UTC+8）。
-  边界口径 boundary_mode：exact（默认）要求区间起止对齐粒度边界（如 5m 需对齐到 5 分钟整点），未对齐会报错；
-  cover 允许返回边界外延的 K 线用于观察走势，返回中 effective_range 为实际覆盖范围。
+  区间起止未对齐粒度边界时自动外延覆盖（如 5m 对齐到 5 分钟整点），返回中 effective_range 标注实际覆盖范围。
   返回的 coverage 必须检查：range_complete=true 才表示请求区间被完整覆盖；
   closed_part_complete=true 但 range_complete=false 表示区间延伸到当前之后（如中午查“今天全天”），
   数据只覆盖到 covered_until，回答时必须说明实际覆盖范围；
@@ -31,7 +30,6 @@ capabilities:
   - 返回覆盖核对结果 coverage（range_complete/closed_part_complete/covered_until、缺失与错位的开盘时间、未收盘状态）
 limitations:
   - 粒度仅支持 5m / 15m / 1h；单次查询上限 6000 根（5m 约 20 天，15m 约 62 天，1h 约 250 天）
-  - boundary_mode=exact 要求起止对齐粒度边界，未对齐时报错（换更细粒度或改用 cover）
   - 默认剔除未收盘的 K 线并标注 dropped_unclosed；include_unclosed=true 时保留并标注 contains_unclosed
   - 不输出区间统计指标（开高低收/涨跌幅/成交量/成交额统计走 get_market_statistics）
 scope:
@@ -66,11 +64,6 @@ input_schema:
     time:
       type: object
       description: 时间范围（TimeSpec），4 种 type 结构见工具描述，字段严格校验由服务端执行
-    boundary_mode:
-      type: string
-      enum: [exact, cover]
-      default: exact
-      description: 边界口径；exact 要求对齐粒度边界，cover 允许外延覆盖
     include_unclosed:
       type: boolean
       default: false

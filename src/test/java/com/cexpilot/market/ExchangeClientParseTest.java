@@ -158,6 +158,35 @@ class ExchangeClientParseTest {
     }
 
     @Test
+    void binanceTakerVolumeParse() throws Exception {
+        // takerlongshortRatio：buyVol/sellVol 为基础币量，timestamp 为毫秒
+        ArrayNode data = MAPPER.createArrayNode();
+        data.add(MAPPER.readTree(
+                "{\"buySellRatio\":\"0.5616\",\"sellVol\":\"113.7860\",\"buyVol\":\"63.9040\",\"timestamp\":1726761600000}"));
+        List<com.cexpilot.market.model.TakerVolumePoint> points = BinanceClient.parseTakerVolume(data);
+        assertEquals(1, points.size());
+        assertEquals(1726761600000L, points.get(0).timestamp());
+        assertEquals(new BigDecimal("63.9040"), points.get(0).buyVolume());
+        assertEquals(new BigDecimal("113.7860"), points.get(0).sellVolume());
+    }
+
+    @Test
+    void okxTakerVolumeReversedToAscending() throws Exception {
+        // taker-volume-contract：倒序返回（最新在前），列序 [ts, buyVol, sellVol]（合约张数，
+        // 张→币换算在 source 做），翻转为升序
+        ArrayNode data = MAPPER.createArrayNode();
+        data.add(MAPPER.readTree("[\"1726761900000\", \"20.5\", \"30.25\"]"));
+        data.add(MAPPER.readTree("[\"1726761600000\", \"10.5\", \"40.75\"]"));
+        List<com.cexpilot.market.model.TakerVolumePoint> points = OkxClient.parseTakerVolume(data);
+        assertEquals(2, points.size());
+        assertEquals(1726761600000L, points.get(0).timestamp());
+        assertEquals(1726761900000L, points.get(1).timestamp());
+        assertEquals(new BigDecimal("10.5"), points.get(0).buyVolume());
+        assertEquals(new BigDecimal("40.75"), points.get(0).sellVolume());
+        assertEquals(new BigDecimal("20.5"), points.get(1).buyVolume());
+    }
+
+    @Test
     void binanceAggTradesParseBuyerMakerInverted() throws Exception {
         // m=true（买方是挂单方）→ 主动方为卖方；m=false → 主动买入
         ArrayNode arr = MAPPER.createArrayNode();

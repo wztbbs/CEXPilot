@@ -74,8 +74,7 @@ class MarkPriceQueryServiceTest {
                 + "\"segment\":\"full\",\"extent\":\"full_period\"}";
         for (PriceType type : new PriceType[]{PriceType.MARK, PriceType.INDEX}) {
             MarkPriceQueryResult r = service(source(type)).query(ZoneOffset.UTC, spec(yesterday),
-                    NOW, Exchange.BINANCE, "BTC", type, CandleInterval.ONE_HOUR,
-                    com.cexpilot.market.series.BoundaryMode.EXACT, false);
+                    NOW, Exchange.BINANCE, "BTC", type, CandleInterval.ONE_HOUR, false);
             assertEquals(24, r.candles().size());
             assertTrue(r.coverage().rangeComplete());
             assertEquals(type, r.priceType());
