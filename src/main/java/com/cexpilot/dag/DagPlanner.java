@@ -33,9 +33,10 @@ import java.util.Set;
  * 与 Plan 生成。渲染 dag_planner prompt（注入对话上下文、intent 列表、全量已注册工具
  * 与规模约束），LLM 不带 tools 输出 {"in_domain", "intent", "reply", "plan"}：
  * - in_domain=false → 直接接受（reply 为产品边界话术），不 repair；
- * - in_domain=true 且 plan=null → 模型有意不规划（工具不足以回答或需追问），不 repair；
- *   plan 存在但 nodes 为空且 reply 非空时同理（模型常这么表达追问），直接接受；
- *   但 reply 超长（>100 字）视为模型把推理过程倒进了 reply 的协议误用，走 repair；
+ * - in_domain=true 且 plan=null → reply 非空时视为模型有意不规划（工具不足以回答或需追问），
+ *   不 repair；plan 存在但 nodes 为空且 reply 非空时同理（模型常这么表达追问），直接接受；
+ *   reply 为空则既不是规划也不是话术，属协议违约，走 repair；
+ *   reply 超长（>100 字）视为模型把推理过程倒进了 reply 的协议误用，走 repair；
  * - in_domain=true 且 plan 非空 → LlmJson 容错解析 + PlanValidator 确定性校验，
  *   失败把错误明细追加为消息让 LLM 修复，最多重试 plannerMaxRetries 次；
  * - 信封缺失走格式修复；不再抢救裸 plan，避免绕过必需的 query_requirements。
@@ -169,6 +170,12 @@ public class DagPlanner {
 
     private PlanDecision evaluateReplyWithoutPlan(JsonNode parsed, String intent, String reply,
                                                   String traceId, TraceSink sink) {
+        if (reply == null || reply.isBlank()) {
+            // 能力闸门已在此前放行，走到这里 plan 缺失且无任何话术 = 协议违约，必须 repair。
+            String error = "缺少 plan 且未给出 reply：可查询时必须输出 plan.nodes；"
+                    + "确需拒绝时必须在 reply 写明原因";
+            return repairDecision(traceId, sink, parsed.toString(), error);
+        }
         if (isReasoningDump(reply)) {
             // 没有 plan 时，超长 reply 按协议错误修复，不能把推理原文透传成答案。
             String error = "reply 只能写一句要对用户说的简短话术（" + REPLY_MAX_LENGTH
@@ -283,7 +290,7 @@ public class DagPlanner {
                          }}},
                          "required": ["nodes"]}
                      },
-                     "required": ["in_domain", "query_requirements"]}
+                     "required": ["in_domain", "query_requirements", "plan"]}
                     """);
             ArrayNode toolEnum = MAPPER.createArrayNode();
             registry.specs().forEach(spec -> toolEnum.add(spec.name()));

@@ -32,7 +32,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * DagPlanner 合并调用：领域判断 / intent 归类（hint）/ Plan 生成一次完成。
- * 覆盖：出域直接接受不 repair、plan=null 有意不规划不 repair、首轮合法、
+ * 覆盖：出域直接接受不 repair、plan=null+非空 reply 有意不规划不 repair、
+ * plan=null+空 reply 协议违约走 repair、首轮合法、
  * repair 后合法、重试耗尽返回 empty、编造 intent 名归一为 UNKNOWN。
  */
 class DagPlannerTest {
@@ -165,14 +166,37 @@ class DagPlannerTest {
     }
 
     @Test
+    void nullPlanWithNullReplyTriggersRepair() {
+        // plan=null 且 reply 为空：既不是规划也不是话术，协议违约，必须 repair
+        FakeLlmClient llm = new FakeLlmClient(
+                respond("{\"in_domain\": true, \"query_requirements\":{\"requires_period_comparison\":false},"
+                        + " \"intent\": \"MARKET_LOOKUP\", \"reply\": null, \"plan\": null}"),
+                respond(VALID_ENVELOPE));
+        ListSink sink = new ListSink();
+
+        DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
+                .plan("币安上的 BTC 现在多少钱？", "", "trace-20", sink);
+
+        assertTrue(outcome.plan().isPresent());
+        assertEquals(2, llm.seenMessages.size());
+        List<ChatMessage> secondCall = llm.seenMessages.get(1);
+        assertTrue(secondCall.get(secondCall.size() - 1).content().contains("缺少 plan"));
+        assertTrue(sink.events.stream()
+                .filter(e -> e.eventType().equals("PLAN"))
+                .anyMatch(e -> e.error() != null && e.error().contains("缺少 plan")));
+    }
+
+    @Test
     void fabricatedIntentFallsBackToUnknown() {
         FakeLlmClient llm = new FakeLlmClient(respond(
-                "{\"in_domain\": true, \"query_requirements\":{\"requires_period_comparison\":false}, \"intent\": \"MADE_UP\", \"reply\": null, \"plan\": null}"));
+                "{\"in_domain\": true, \"query_requirements\":{\"requires_period_comparison\":false}, \"intent\": \"MADE_UP\", \"reply\": null,"
+                        + " \"plan\": {\"nodes\": [{\"id\": \"n1\", \"tool\": \"echo_tool\", \"args\": {}, \"depends_on\": []}]}}"));
         ListSink sink = new ListSink();
 
         DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
                 .plan("问题", "", "trace-4", sink);
 
+        assertTrue(outcome.plan().isPresent());
         assertEquals("UNKNOWN", outcome.intent());
     }
 
