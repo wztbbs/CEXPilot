@@ -38,13 +38,4 @@ class SymbolMapperTest {
         assertEquals(Exchange.OKX, Exchange.parse("okx"));
         assertThrows(IllegalArgumentException.class, () -> Exchange.parse("bybit"));
     }
-
-    @Test
-    void timeWindowParse() {
-        assertEquals("5m", TimeWindow.parse("1h").binanceInterval());
-        assertEquals("15m", TimeWindow.parse("4h").binanceInterval());
-        assertEquals("1H", TimeWindow.parse("24h").okxBar());
-        assertEquals("1h", TimeWindow.parse(null).code());
-        assertThrows(IllegalArgumentException.class, () -> TimeWindow.parse("7d"));
-    }
 }

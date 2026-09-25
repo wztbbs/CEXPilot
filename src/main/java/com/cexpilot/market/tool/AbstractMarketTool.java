@@ -4,7 +4,7 @@ import com.cexpilot.exception.ExchangeException;
 import com.cexpilot.market.Exchange;
 import com.cexpilot.market.MarketDataService;
 import com.cexpilot.market.SymbolMapper;
-import com.cexpilot.market.TimeWindow;
+import com.cexpilot.market.policy.MarketScopePolicy;
 import com.cexpilot.runtime.AgentTool;
 import com.cexpilot.runtime.ToolResult;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -28,10 +28,13 @@ public abstract class AbstractMarketTool implements AgentTool {
 
     @Override
     public ToolResult execute(JsonNode args, com.cexpilot.runtime.ToolContext ctx) {
-        return guard(() -> doExecute(args));
+        return guard(() -> {
+            MarketScopePolicy.check(args);
+            return doExecute(args, ctx);
+        });
     }
 
-    protected abstract JsonNode doExecute(JsonNode args);
+    protected abstract JsonNode doExecute(JsonNode args, com.cexpilot.runtime.ToolContext ctx);
 
     protected ToolResult guard(Supplier<JsonNode> body) {
         try {
@@ -51,10 +54,6 @@ public abstract class AbstractMarketTool implements AgentTool {
 
     protected String parseBase(JsonNode args) {
         return SymbolMapper.normalize(args.path("symbol").asText(null));
-    }
-
-    protected TimeWindow parseWindow(JsonNode args) {
-        return TimeWindow.parse(args.path("window").asText());
     }
 
 }

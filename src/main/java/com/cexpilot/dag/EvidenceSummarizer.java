@@ -32,9 +32,11 @@ public final class EvidenceSummarizer {
     /** 概览回答默认省略的大明细字段；include_details=true 时保留。 */
     private static final Map<String, List<String>> DETAIL_FIELDS = Map.of(
             "get_klines", List.of("candles"),
-            "get_open_interest", List.of("open_interest_series"),
-            "get_funding_rate", List.of("recent_rates"),
-            "get_orderbook", List.of("bids", "asks"),
+            "get_funding_rate_history", List.of("rates"),
+            "get_open_interest_history", List.of("oi_series"),
+            "get_mark_price_history", List.of("candles"),
+            "get_trade_history", List.of("trades"),
+                        "get_orderbook", List.of("bids", "asks"),
             "get_recent_trades", List.of("recent_trades"));
 
     private EvidenceSummarizer() {

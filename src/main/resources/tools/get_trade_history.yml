@@ -1,0 +1,51 @@
+name: get_trade_history
+enabled: true
+description: >
+  查询指定时间区间的成交明细（时间、价格、数量、主动方向），数量单位为基础币。
+  口径逐所不同并如实标注：binance=aggTrades 聚合成交（一笔聚合可能含多笔原始成交），okx=逐笔成交。
+  时间范围用 time 对象表达（必填），4 种结构选其一：
+  1) 自然周期，如昨天/上周：{"type":"calendar_period","timezone":null,"unit":"day|week|month|quarter|year","offset":-1,
+     "segment":"full|early_morning|morning|afternoon|evening","extent":"full_period|to_request_time"}。
+  2) 滚动窗口，如过去 30 分钟：{"type":"rolling_window","timezone":null,"duration":{"value":30,"unit":"second|minute|hour|day|week"}}。
+  3) 相对日期时段，如昨天 15 点到 17 点：{"type":"relative_day_range","timezone":null,
+     "start":{"day_offset":-1,"time":"15:00:00"},"end":{"day_offset":-1,"time":"17:00:00"}}。
+  4) 明确日期范围：{"type":"absolute_range","timezone":null,"start":{"year":null,"month":9,"day":1,"time":null},
+     "end":{"year":null,"month":9,"day":3,"time":null},"end_mode":"inclusive_date|exclusive"}。
+  timezone 均为 IANA 时区，填 null 表示继承请求时区（当前为 UTC+8）。
+  逐笔成交没有预期条数：complete=true 表示区间成交全部取回；
+  complete=false 表示分页预算用尽被中止（abort_reason 有说明），结果为区间的部分数据，回答时必须说明。
+# capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
+capabilities:
+  - 按 TimeSpec 查询区间成交明细：自然周期、滚动窗口、相对日期时段、明确日期范围
+  - 逐所标注成交口径（聚合/逐笔）与完整性（complete / abort_reason）
+limitations:
+  - 单次查询上限：binance 20000 笔、okx 5000 笔，超出即中止并标注（OKX 长区间容易只覆盖后段）
+  - okx 只保留最近约 3 个月的逐笔历史，起点超出会直接报错
+  - 明细最多输出 500 行（超出给 trades_note；完整笔数以 actual_count 为准）
+scope:
+  exchanges: [binance, okx]
+  market_type: perpetual
+input_schema:
+  type: object
+  additionalProperties: false
+  required: [exchange, symbol, time]
+  properties:
+    quote_asset:
+      type: string
+      default: USDT
+      description: 用户指定的计价币，原样保留；未指定时使用 USDT，不支持的值由工具拒绝
+    market_type:
+      type: string
+      default: perpetual
+      description: 用户指定的市场（spot/perpetual/delivery 等），原样保留；未指定时使用 perpetual，不支持的值由工具拒绝
+    exchange:
+      type: string
+      enum: [binance, okx]
+      default: binance
+      description: 交易所
+    symbol:
+      type: string
+      description: 基础币代码，如 BTC / ETH
+    time:
+      type: object
+      description: 时间范围（TimeSpec），4 种 type 结构见工具描述，字段严格校验由服务端执行

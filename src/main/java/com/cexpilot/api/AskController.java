@@ -44,7 +44,7 @@ public class AskController {
         String resolvedVisitorId = newVisitor ? UUID.randomUUID().toString() : visitorId;
         try {
             AskResponse response = askService.ask(request.conversationId(), request.question(),
-                    resolvedVisitorId);
+                    resolvedVisitorId, request.timezone(), null);
             return ResponseEntity.ok()
                     .headers(headers -> {
                         if (newVisitor) {
@@ -75,7 +75,7 @@ public class AskController {
         taskExecutor.execute(() -> {
             try {
                 askService.ask(request.conversationId(), request.question(), resolvedVisitorId,
-                        new AskService.AskStreamListener() {
+                        request.timezone(), new AskService.AskStreamListener() {
                             @Override
                             public void onMeta(String conversationId, String traceId) {
                                 send(emitter, "meta",

@@ -1,0 +1,62 @@
+name: get_funding_rate_history
+enabled: true
+description: >
+  查询资金费率历史序列（每期保留结算时间，费率以小数表示，0.0001=0.01%）。两种模式恰好选一：
+  1) time 模式：查询指定时间区间内结算的费率，带覆盖核对（coverage）——区间统计类问题优先用 get_funding_rate_statistics。
+     时间范围用 time 对象表达，4 种结构选其一：
+     - 自然周期，如昨天/上周：{"type":"calendar_period","timezone":null,"unit":"day|week|month|quarter|year","offset":-1,
+       "segment":"full|early_morning|morning|afternoon|evening","extent":"full_period|to_request_time"}，
+       offset 相对当前周期（0=本周期,-1=上一周期）；非 full 的 segment 仅允许 unit=day；
+       extent=to_request_time 表示“本周期起点至现在”，仅允许 offset=0 且 segment=full。
+     - 滚动窗口，如过去 6 小时：{"type":"rolling_window","timezone":null,"duration":{"value":6,"unit":"second|minute|hour|day|week"}}，
+       结束时间固定为当前时刻。
+     - 相对日期时段，如昨天 15 点到 17 点：{"type":"relative_day_range","timezone":null,
+       "start":{"day_offset":-1,"time":"15:00:00"},"end":{"day_offset":-1,"time":"17:00:00"}}。
+     - 明确日期范围，如 9 月 1 日到 9 月 3 日：{"type":"absolute_range","timezone":null,
+       "start":{"year":null,"month":9,"day":1,"time":null},"end":{"year":null,"month":9,"day":3,"time":null},
+       "end_mode":"inclusive_date|exclusive"}。
+     timezone 均为 IANA 时区，填 null 表示继承请求时区（当前为 UTC+8）。
+     返回的 coverage：range_complete=true 才表示区间完整覆盖；区间延伸到当前之后时数据只覆盖到 covered_until；
+     closed_part_complete=false 表示有缺失，missing_open_times 为缺失周期的开始时间。
+  2) count 模式：查询最近 N 期已结算费率（count，1-100），样本语义不承诺时间跨度；
+     actual_count 可能少于请求期数，sample_complete=false 时不能当作完整样本。明细全部返回，不支持 details 参数；需要传给回答模块时设置节点 include_details=true。
+# capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
+capabilities:
+  - time 模式：指定区间的已结算费率序列，返回覆盖核对结果 coverage 与结算周期 funding_interval_hours
+  - count 模式：最近 N 期已结算费率（升序，含各期结算时间）
+limitations:
+  - 只返回已结算费率；当前未结算周期的预测费率在 get_funding_rate（快照）
+  - 结算周期因合约而异（8h/4h 等），以返回的 funding_interval_hours 为准
+  - time 模式单次查询上限：币安 10000 期、OKX 6000 期（超出报“区间过长”）
+scope:
+  exchanges: [binance, okx]
+  market_type: perpetual
+input_schema:
+  type: object
+  additionalProperties: false
+  required: [exchange, symbol]
+  properties:
+    quote_asset:
+      type: string
+      default: USDT
+      description: 用户指定的计价币，原样保留；未指定时使用 USDT，不支持的值由工具拒绝
+    market_type:
+      type: string
+      default: perpetual
+      description: 用户指定的市场（spot/perpetual/delivery 等），原样保留；未指定时使用 perpetual，不支持的值由工具拒绝
+    exchange:
+      type: string
+      enum: [binance, okx]
+      default: binance
+      description: 交易所
+    symbol:
+      type: string
+      description: 基础币代码，如 BTC / ETH
+    time:
+      type: object
+      description: 时间范围（TimeSpec），4 种 type 结构见工具描述；与 count 恰好提供一个
+    count:
+      type: integer
+      minimum: 1
+      maximum: 100
+      description: 最近 N 期已结算费率；与 time 恰好提供一个

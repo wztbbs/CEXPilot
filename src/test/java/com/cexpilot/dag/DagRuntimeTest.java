@@ -108,7 +108,8 @@ class DagRuntimeTest {
         PromptStore prompts = new PromptStore(new DefaultResourceLoader());
         IntentRegistry intentRegistry = new IntentRegistry(new DefaultResourceLoader());
         DagPlanner planner = new DagPlanner(llm, registry, intentRegistry, new LlmConfig(), dagConfig,
-                prompts, new PlanValidator(registry, dagConfig));
+                prompts, new PlanValidator(registry, dagConfig),
+                com.cexpilot.dag.guard.QueryCapabilityGuard.defaults());
         return new DagRuntime(llm, planner, new DagExecutor(registry, dagConfig), prompts, intentRegistry);
     }
 
@@ -118,7 +119,7 @@ class DagRuntimeTest {
         EchoTool toolB = new EchoTool("tool_b");
         FakeLlmClient llm = new FakeLlmClient(
                 new ChatResponse("""
-                        {"in_domain": true, "query_requirements":{"time_scope":"unspecified","duration":null,"sample_count":null,"quote_asset":null,"market_type":null}, "intent": "MARKET_LOOKUP", "reply": null,
+                        {"in_domain": true, "query_requirements":{"requires_period_comparison":false}, "intent": "MARKET_LOOKUP", "reply": null,
                          "plan": {"nodes": [
                            {"id": "n1", "tool": "tool_a", "args": {}, "depends_on": []},
                            {"id": "n2", "tool": "tool_b", "args": {"x": "{{n1.data.from}}"}, "depends_on": ["n1"]}
@@ -167,20 +168,42 @@ class DagRuntimeTest {
     }
 
     @Test
+    void klinesHistoricalPlanPassesGuardsAndExecutes() {
+        // planner → executor 接入：历史查询不再依赖全局时间分类或工具白名单
+        EchoTool klines = new EchoTool("get_klines");
+        FakeLlmClient llm = new FakeLlmClient(
+                new ChatResponse("""
+                        {"in_domain": true, "query_requirements":{"requires_period_comparison":false}, "intent": "MARKET_LOOKUP", "reply": null,
+                         "plan": {"nodes": [
+                           {"id": "n1", "tool": "get_klines", "args": {"symbol": "BTC"}, "depends_on": []}
+                         ]}}
+                        """, List.of(), 10, 5),
+                new ChatResponse("最终回答", List.of(), 20, 8));
+        ListSink sink = new ListSink();
+
+        ExecutionResult result = runtime(llm, List.of(klines), new DagConfig())
+                .execute("BTC 昨天的 K 线", "", "trace-klines", sink);
+
+        assertEquals(1, klines.calls);
+        assertEquals(1, result.toolCallCount());
+        assertEquals("最终回答", result.answer());
+    }
+
+    @Test
     void answerReceivesSummarizedFactsWithoutDetailArrays() {
         ObjectNode klineData = MAPPER.createObjectNode();
         klineData.put("symbol", "BTC");
         klineData.putObject("funding_summary").put("change_pct", 2.1);
-        ArrayNode recent_rates = klineData.putArray("recent_rates");
+        ArrayNode recent_rates = klineData.putArray("rates");
         for (int i = 0; i < 100; i++) {
             recent_rates.addArray().add(i);
         }
-        EchoTool klines = new EchoTool("get_funding_rate", klineData);
+        EchoTool klines = new EchoTool("get_funding_rate_history", klineData);
         FakeLlmClient llm = new FakeLlmClient(
                 new ChatResponse("""
-                        {"in_domain": true, "query_requirements":{"time_scope":"unspecified","duration":null,"sample_count":null,"quote_asset":null,"market_type":null}, "intent": "MARKET_ANALYSIS", "reply": null,
+                        {"in_domain": true, "query_requirements":{"requires_period_comparison":false}, "intent": "MARKET_ANALYSIS", "reply": null,
                          "plan": {"nodes": [
-                           {"id": "n1", "tool": "get_funding_rate", "args": {}, "depends_on": []}
+                           {"id": "n1", "tool": "get_funding_rate_history", "args": {}, "depends_on": []}
                          ]}}
                         """, List.of(), 10, 5),
                 new ChatResponse("概览回答", List.of(), 20, 8));
@@ -190,11 +213,11 @@ class DagRuntimeTest {
                 .execute("行情如何？", "", "trace-5", sink);
 
         // 完整 evidence（含明细）仍随结果返回
-        assertTrue(result.evidence().toString().contains("recent_rates"));
+        assertTrue(result.evidence().toString().contains("rates"));
         // answer 的 user 消息只有摘要：保留已计算指标，省略明细数组并标注
         ChatMessage user = llm.seenMessages.get(1).get(1);
         assertTrue(user.content().contains("funding_summary"));
-        assertTrue(user.content().contains("recent_rates(100条)"));
+        assertTrue(user.content().contains("rates(100条)"));
         assertFalse(user.content().contains("[0],[1]"));
         // 分析类也受事实约束，但允许用户请求的证据分析
         assertTrue(llm.seenMessages.get(1).get(0).content().contains("用户要求分析时"));
@@ -205,7 +228,7 @@ class DagRuntimeTest {
         EchoTool tool = new EchoTool("tool_a");
         FakeLlmClient llm = new FakeLlmClient(
                 new ChatResponse("""
-                        {"in_domain": true, "query_requirements":{"time_scope":"unspecified","duration":null,"sample_count":null,"quote_asset":null,"market_type":null}, "intent": "EXCHANGE_COMPARE", "reply": null,
+                        {"in_domain": true, "query_requirements":{"requires_period_comparison":false}, "intent": "EXCHANGE_COMPARE", "reply": null,
                          "plan": {"nodes": [
                            {"id": "n1", "tool": "tool_a", "args": {}, "depends_on": []}
                          ]}}
@@ -247,7 +270,7 @@ class DagRuntimeTest {
     void nullPlanWithReplyPassesThroughDirectly() {
         EchoTool tool = new EchoTool("tool_a");
         FakeLlmClient llm = new FakeLlmClient(
-                new ChatResponse("{\"in_domain\": true, \"query_requirements\":{\"time_scope\":\"unspecified\",\"duration\":null,\"sample_count\":null,\"quote_asset\":null,\"market_type\":null}, \"intent\": \"UNKNOWN\","
+                new ChatResponse("{\"in_domain\": true, \"query_requirements\":{\"requires_period_comparison\":false}, \"intent\": \"UNKNOWN\","
                         + " \"reply\": \"缺少链上持仓数据\", \"plan\": null}", List.of(), 10, 5));
         ListSink sink = new ListSink();
         List<String> deltas = new ArrayList<>();
@@ -272,7 +295,7 @@ class DagRuntimeTest {
         // D10 场景：planner 追问"请提供币种代码"（nodes 为空），reply 必须透传给用户
         EchoTool tool = new EchoTool("tool_a");
         FakeLlmClient llm = new FakeLlmClient(
-                new ChatResponse("{\"in_domain\": true, \"query_requirements\":{\"time_scope\":\"unspecified\",\"duration\":null,\"sample_count\":null,\"quote_asset\":null,\"market_type\":null}, \"intent\": \"MARKET_LOOKUP\","
+                new ChatResponse("{\"in_domain\": true, \"query_requirements\":{\"requires_period_comparison\":false}, \"intent\": \"MARKET_LOOKUP\","
                         + " \"reply\": \"请提供需要查询的币种代码（如 BTC、ETH 等）\","
                         + " \"plan\": {\"nodes\": []}}", List.of(), 10, 5));
         ListSink sink = new ListSink();
@@ -320,19 +343,19 @@ class DagRuntimeTest {
     @Test
     void requestedHistoryAndPartialQueryGapReachAnswer() {
         ObjectNode data = MAPPER.createObjectNode();
-        data.putArray("recent_rates").add(0.0001).add(0.0002);
-        EchoTool tool = new EchoTool("get_funding_rate", data);
+        data.putArray("rates").add(0.0001).add(0.0002);
+        EchoTool tool = new EchoTool("get_funding_rate_history", data);
         FakeLlmClient llm = new FakeLlmClient(
                 new ChatResponse("""
-                        {"in_domain":true,"query_requirements":{"time_scope":"recent_samples","duration":null,"sample_count":null,"quote_asset":null,"market_type":null},"intent":"MARKET_LOOKUP","reply":"仅有最近两期数据",
-                         "plan":{"nodes":[{"id":"n1","tool":"get_funding_rate","args":{},
+                        {"in_domain":true,"query_requirements":{"requires_period_comparison":false},"intent":"MARKET_LOOKUP","reply":"仅有最近两期数据",
+                         "plan":{"nodes":[{"id":"n1","tool":"get_funding_rate_history","args":{},
                          "depends_on":[],"include_details":true}]}}
                         """, List.of(), 10, 5),
                 new ChatResponse("最近两期费率", List.of(), 20, 8));
         runtime(llm, List.of(tool), new DagConfig()).execute("列出近期可获取的费率样本", "", "details", new ListSink());
         String answerInput = llm.seenMessages.get(1).get(1).content();
-        assertTrue(answerInput.contains("\"recent_rates\":[1.0E-4,2.0E-4]")
-                || answerInput.contains("\"recent_rates\":[0.0001,0.0002]"));
+        assertTrue(answerInput.contains("\"rates\":[1.0E-4,2.0E-4]")
+                || answerInput.contains("\"rates\":[0.0001,0.0002]"));
         assertTrue(answerInput.contains("仅有最近两期数据"));
         assertFalse(answerInput.contains("明细序列已省略"));
     }
@@ -343,7 +366,7 @@ class DagRuntimeTest {
         EchoTool tool = new EchoTool("tool_a");
         FakeLlmClient llm = new FakeLlmClient(
                 new ChatResponse("""
-                        {"in_domain": true, "query_requirements":{"time_scope":"unspecified","duration":null,"sample_count":null,"quote_asset":null,"market_type":null}, "intent": "MARKET_LOOKUP", "reply": null,
+                        {"in_domain": true, "query_requirements":{"requires_period_comparison":false}, "intent": "MARKET_LOOKUP", "reply": null,
                          "plan": {"nodes": [{"id": "n1", "tool": "tool_a", "args": {}, "depends_on": []}]}}
                         """, List.of(), 10, 5),
                 new ChatResponse("最终回答", List.of(), 20, 8));
@@ -362,7 +385,7 @@ class DagRuntimeTest {
         EchoTool tool = new EchoTool("tool_a");
         FakeLlmClient llm = new FakeLlmClient(
                 new ChatResponse("""
-                        {"in_domain": true, "query_requirements":{"time_scope":"unspecified","duration":null,"sample_count":null,"quote_asset":null,"market_type":null}, "intent": "MARKET_LOOKUP", "reply": null,
+                        {"in_domain": true, "query_requirements":{"requires_period_comparison":false}, "intent": "MARKET_LOOKUP", "reply": null,
                          "plan": {"nodes": [{"id": "n1", "tool": "tool_a", "args": {}, "depends_on": []}]}}
                         """, List.of(), 10, 5)) {
             @Override
@@ -385,13 +408,14 @@ class DagRuntimeTest {
         assertEquals(2, llm.seenMessages.size());
     }
     @Test
-    void unsupportedRequestRefusesBeforeToolsAndAnswerIncludingStreaming() {
+    void periodComparisonRefusesBeforeToolsAndAnswerIncludingStreaming() {
         for (String question : List.of("拿币安 BTC-USDC 上周总交易额跟上上周对比",
-                "币安 BTC 上周交易额", "币安 BTC-USDC 当前价格")) {
+                "币安 BTC 成交量同比", "BTC 本周对上周涨跌")) {
             EchoTool ticker = new EchoTool("get_ticker");
             ObjectNode envelope = MAPPER.createObjectNode().put("in_domain", true).put("intent", "MARKET_LOOKUP");
-            // 模拟模型丢掉时间和报价币，错误地规划成当前 BTC-USDT。
-            envelope.set("query_requirements", QueryCapabilityGuardTest.requirements("current", null));
+            // 即使给出取数计划，任务级比较能力未开放时仍整单拒答。
+            envelope.set("query_requirements",
+                    com.cexpilot.dag.guard.QueryCapabilityGuardTest.requirements(true));
             envelope.putObject("plan").putArray("nodes").addObject()
                     .put("id", "n1").put("tool", "get_ticker").putObject("args").put("symbol", "BTC");
             FakeLlmClient llm = new FakeLlmClient(new ChatResponse(envelope.toString(), List.of(), 10, 5));
@@ -420,7 +444,7 @@ class DagRuntimeTest {
                 """, List.of(), 10, 5));
         ExecutionResult result = runtime(llm, List.of(ticker), new DagConfig())
                 .execute("BTC 当前价格", "", "legacy", new ListSink());
-        assertEquals(QueryCapabilityGuard.UNCONFIRMED, result.answer());
+        assertEquals(com.cexpilot.dag.guard.GuardMessages.UNCONFIRMED, result.answer());
         assertEquals(0, ticker.calls);
         assertEquals(1, llm.seenMessages.size());
     }
@@ -429,7 +453,8 @@ class DagRuntimeTest {
     void supportedTickerWindowStillExecutesAndReachesAnswer() {
         EchoTool ticker = new EchoTool("get_ticker");
         ObjectNode envelope = MAPPER.createObjectNode().put("in_domain", true).put("intent", "MARKET_LOOKUP");
-        envelope.set("query_requirements", QueryCapabilityGuardTest.requirements("rolling_window", "24h"));
+        envelope.set("query_requirements",
+                com.cexpilot.dag.guard.QueryCapabilityGuardTest.requirements(false));
         envelope.putObject("plan").putArray("nodes").addObject()
                 .put("id", "n1").put("tool", "get_ticker").putObject("args").put("symbol", "BTC");
         FakeLlmClient llm = new FakeLlmClient(new ChatResponse(envelope.toString(), List.of(), 10, 5),

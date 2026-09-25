@@ -83,7 +83,8 @@ class ToolRegistryTest {
             assertNull(tools);
             return new ChatResponse("{\"in_domain\":true,\"intent\":\"UNKNOWN\",\"plan\":null}", List.of(), 1, 1);
         }, registry, new IntentRegistry(loader), new LlmConfig(), new DagConfig(),
-                new PromptStore(loader), new PlanValidator(registry, new DagConfig()));
+                new PromptStore(loader), new PlanValidator(registry, new DagConfig()),
+                com.cexpilot.dag.guard.QueryCapabilityGuard.defaults());
         planner.plan("查询BTC", "", "test", event -> {});
         String prompt = seen.get(0).content();
         assertTrue(prompt.contains("sample：YAML中的新描述"));
@@ -161,9 +162,21 @@ class ToolRegistryTest {
     @Test
     void allRealToolExecutorsBindToYamlThroughSpring() {
         MarketDataService market = mock(MarketDataService.class);
-        List<AgentTool> executors = List.of(new GetTickerTool(market), new GetKlinesTool(market),
-                new GetFundingRateTool(market), new GetOpenInterestTool(market), new GetMarkPriceTool(market),
-                new GetOrderbookTool(market), new GetRecentTradesTool(market), new CompareExchangesTool(market),
+        List<AgentTool> executors = List.of(new GetTickerTool(market),
+                new GetKlinesTool(market, mock(com.cexpilot.market.kline.KlineQueryService.class)),
+                new GetMarketStatisticsTool(market, mock(com.cexpilot.market.kline.KlineQueryService.class)),
+                new GetFundingRateTool(market),
+                new GetFundingRateHistoryTool(market, mock(com.cexpilot.market.funding.FundingQueryService.class)),
+                new GetFundingRateStatisticsTool(market, mock(com.cexpilot.market.funding.FundingQueryService.class)),
+                new GetOpenInterestTool(market),
+                new GetOpenInterestHistoryTool(market, mock(com.cexpilot.market.oi.OiQueryService.class)),
+                new GetOpenInterestStatisticsTool(market, mock(com.cexpilot.market.oi.OiQueryService.class)),
+                new GetMarkPriceTool(market),
+                new GetMarkPriceHistoryTool(market, mock(com.cexpilot.market.markprice.MarkPriceQueryService.class)),
+                new GetMarkPriceStatisticsTool(market, mock(com.cexpilot.market.markprice.MarkPriceQueryService.class)),
+                new GetOrderbookTool(market), new GetRecentTradesTool(market),
+                new GetTradeHistoryTool(market, mock(com.cexpilot.market.trade.TradeQueryService.class)),
+                new GetTradeFlowStatisticsTool(market, mock(com.cexpilot.market.trade.TradeQueryService.class)),
                 new GetTransactionTool(mock(TxAnalysisService.class)));
         try (var context = new AnnotationConfigApplicationContext()) {
             for (AgentTool executor : executors) {
@@ -172,11 +185,13 @@ class ToolRegistryTest {
             context.register(ToolRegistry.class);
             context.refresh();
             ToolRegistry registry = context.getBean(ToolRegistry.class);
-            assertEquals(9, registry.size());
+            assertEquals(17, registry.size());
             assertEquals("binance", registry.prepareArguments("get_ticker", MAPPER.createObjectNode().put("symbol", "BTC")).path("exchange").asText());
             assertThrows(IllegalArgumentException.class, () -> registry.prepareArguments("get_transaction", MAPPER.createObjectNode().put("tx_hash", "0xabc")));
             assertDoesNotThrow(() -> registry.prepareArguments("get_transaction", MAPPER.createObjectNode().put("tx_hash", "0x" + "a".repeat(64))));
-            assertEquals("1h", registry.prepareArguments("compare_exchanges", MAPPER.createObjectNode().put("symbol", "ETH")).path("window").asText());
+            // compare_exchanges 暂缓（聚合指标类待重新设计），yml 置 disabled 后不注册、不暴露
+            assertThrows(IllegalArgumentException.class,
+                    () -> registry.prepareArguments("compare_exchanges", MAPPER.createObjectNode().put("symbol", "ETH")));
         }
     }
     @Test

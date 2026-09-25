@@ -101,26 +101,26 @@ class EvidenceSummarizerTest {
     @Test
     void requestedDetailsAreKeptOnlyForSelectedNode() {
         ObjectNode data = MAPPER.createObjectNode();
-        ArrayNode rates = data.putArray("recent_rates");
+        ArrayNode rates = data.putArray("rates");
         for (int i = 0; i < 20; i++) {
             rates.add(0.0001);
         }
-        data.putArray("recent_rates_columns").add("rate_fraction");
-        ObjectNode first = entry("get_funding_rate", data);
-        ObjectNode second = entry("get_funding_rate", data);
+        data.putArray("rates_columns").add("rate_fraction");
+        ObjectNode first = entry("get_funding_rate_history", data);
+        ObjectNode second = entry("get_funding_rate_history", data);
         second.put("node_id", "n2");
         ArrayNode result = EvidenceSummarizer.summarize(evidenceOf(first, second), java.util.Set.of("n1"));
-        assertEquals(20, result.get(0).path("data").path("recent_rates").size());
-        assertFalse(result.get(1).path("data").has("recent_rates"));
-        assertTrue(result.get(0).path("data").has("recent_rates_columns"));
-        assertFalse(result.get(1).path("data").has("recent_rates_columns"));
+        assertEquals(20, result.get(0).path("data").path("rates").size());
+        assertFalse(result.get(1).path("data").has("rates"));
+        assertTrue(result.get(0).path("data").has("rates_columns"));
+        assertFalse(result.get(1).path("data").has("rates_columns"));
     }
 
     @Test
     void smallArraysAreAlwaysKept() {
         // 10 期资金费率这类小数组不占 token，不应被裁剪——否则回答模型会误以为数据缺失
         ObjectNode data = MAPPER.createObjectNode();
-        ArrayNode rates = data.putArray("recent_rates");
+        ArrayNode rates = data.putArray("rates");
         for (int i = 0; i < 10; i++) {
             rates.add(0.0001);
         }
@@ -128,7 +128,7 @@ class EvidenceSummarizerTest {
         ArrayNode summary = EvidenceSummarizer.summarize(evidenceOf(entry("get_funding_rate", data)));
 
         JsonNode projected = summary.get(0);
-        assertEquals(10, projected.path("data").path("recent_rates").size());
+        assertEquals(10, projected.path("data").path("rates").size());
         assertFalse(projected.has("note"));
     }
 
@@ -136,17 +136,17 @@ class EvidenceSummarizerTest {
     void oiSeriesUsesCurrentFieldName() {
         // OI 序列字段改名后，摘要层要认新名字（大序列仍裁剪）
         ObjectNode data = MAPPER.createObjectNode();
-        ArrayNode series = data.putArray("open_interest_series");
+        ArrayNode series = data.putArray("oi_series");
         for (int i = 0; i < 24; i++) {
             series.addArray().add("2026-09-20 00:00:00").add(1.0);
         }
-        data.putArray("open_interest_series_columns").add("time_utc8").add("open_interest");
+        data.putArray("oi_series_columns").add("time").add("open_interest");
 
-        ArrayNode summary = EvidenceSummarizer.summarize(evidenceOf(entry("get_open_interest", data)));
+        ArrayNode summary = EvidenceSummarizer.summarize(evidenceOf(entry("get_open_interest_history", data)));
 
         JsonNode projected = summary.get(0);
-        assertFalse(projected.path("data").has("open_interest_series"));
-        assertFalse(projected.path("data").has("open_interest_series_columns"));
-        assertTrue(projected.get("note").asText().contains("open_interest_series(24条)"));
+        assertFalse(projected.path("data").has("oi_series"));
+        assertFalse(projected.path("data").has("oi_series_columns"));
+        assertTrue(projected.get("note").asText().contains("oi_series(24条)"));
     }
 }

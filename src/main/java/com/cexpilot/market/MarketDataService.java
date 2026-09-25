@@ -1,7 +1,7 @@
 package com.cexpilot.market;
 
-import com.cexpilot.market.model.Candle;
 import com.cexpilot.market.model.FundingInfo;
+import com.cexpilot.market.model.FundingRatePoint;
 import com.cexpilot.market.model.FundingSnapshot;
 import com.cexpilot.market.model.MarkPrice;
 import com.cexpilot.market.model.OpenInterestInfo;
@@ -27,15 +27,6 @@ public class MarketDataService {
         this.okx = okx;
     }
 
-    public List<Candle> klines(Exchange exchange, String base, TimeWindow window) {
-        return switch (exchange) {
-            case BINANCE -> binance.klines(SymbolMapper.binanceSymbol(base),
-                    window.binanceInterval(), window.candles());
-            case OKX -> okx.candles(SymbolMapper.okxInstId(base),
-                    window.okxBar(), window.candles());
-        };
-    }
-
     public Ticker ticker(Exchange exchange, String base) {
         return switch (exchange) {
             case BINANCE -> binance.ticker24h(SymbolMapper.binanceSymbol(base));
@@ -43,18 +34,23 @@ public class MarketDataService {
         };
     }
 
-    public FundingInfo funding(Exchange exchange, String base, int count) {
+    /**
+     * 资金费率当前快照。Binance 当前费率取历史末条已结算值（费率与结算时间同源），
+     * premiumIndex 只取下次结算时间和快照时间；OKX 当前费率是预测值。
+     * 历史序列与区间统计走 FundingQueryService，不在此方法内。
+     */
+    public FundingInfo fundingSnapshot(Exchange exchange, String base) {
         return switch (exchange) {
             case BINANCE -> {
-                // 当前费率取历史末条（费率与结算时间同源）；premiumIndex 只取下次结算时间和快照时间，
-                // 不拿它的 lastFundingRate 配历史时间——两者实采可能不一致（历史接口有滞后）
                 String symbol = SymbolMapper.binanceSymbol(base);
                 MarkPrice premium = binance.premiumIndex(symbol);
-                List<FundingInfo.RatePoint> history = binance.fundingRateHistory(symbol, count);
-                FundingInfo.RatePoint last = history.isEmpty() ? null : history.get(history.size() - 1);
+                long now = System.currentTimeMillis();
+                List<FundingRatePoint> recent = binance.fundingRateHistory(
+                        symbol, now - 40 * 3_600_000L, now, 100);
+                FundingRatePoint last = recent.isEmpty() ? null : recent.get(recent.size() - 1);
                 yield new FundingInfo(last == null ? null : last.rate(), "settled",
                         last == null ? 0 : last.fundingTime(),
-                        premium.nextFundingTime(), 0, premium.markPriceTime(), "settled", history);
+                        premium.nextFundingTime(), 0, premium.markPriceTime());
             }
             case OKX -> {
                 // OKX 当前费率是预测值，下一次结算 = 该费率生效的 fundingTime；
@@ -62,22 +58,22 @@ public class MarketDataService {
                 String instId = SymbolMapper.okxInstId(base);
                 FundingSnapshot snapshot = okx.fundingRate(instId);
                 yield new FundingInfo(snapshot.rate(), "predicted", snapshot.fundingTime(),
-                        snapshot.fundingTime(), snapshot.nextFundingTime(), snapshot.ts(), "realized",
-                        okx.fundingRateHistory(instId, count));
+                        snapshot.fundingTime(), snapshot.nextFundingTime(), snapshot.ts());
             }
         };
     }
 
-    /** 两所均查询指定 USDT 永续合约，以基础币数量表达；最新值取历史末点。 */
-    public OpenInterestInfo openInterest(Exchange exchange, String base) {
+    /**
+     * 持仓量当前快照（真快照接口）：两所均以基础币数量表达，带数据时间与采集时间。
+     * 历史序列与区间统计走 OiQueryService，不在此方法内。
+     */
+    public OpenInterestInfo oiSnapshot(Exchange exchange, String base) {
         String asset = SymbolMapper.normalize(base);
-        List<OpenInterestInfo.OiPoint> history = switch (exchange) {
-            case BINANCE -> binance.openInterestHistory(SymbolMapper.binanceSymbol(asset), "1h", 24);
-            case OKX -> okx.openInterestHistory(SymbolMapper.okxInstId(asset), "1H", 24);
+        OpenInterestInfo raw = switch (exchange) {
+            case BINANCE -> binance.openInterestSnapshot(SymbolMapper.binanceSymbol(asset));
+            case OKX -> okx.openInterestSnapshot(SymbolMapper.okxInstId(asset));
         };
-        // 历史为空不拼接不同时间来源的快照，也不乘最新价估算金额。
-        BigDecimal latest = history.isEmpty() ? null : history.get(history.size() - 1).oi();
-        return new OpenInterestInfo(latest, asset, history);
+        return new OpenInterestInfo(raw.oi(), asset, raw.dataTime(), raw.snapshotTime());
     }
 
     public OrderBook orderBook(Exchange exchange, String base, int depth) {

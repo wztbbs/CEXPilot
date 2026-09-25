@@ -8,11 +8,11 @@ import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
 
-/** 当前工具使用的扁平 JSON Schema 子集：类型、枚举、默认值、范围、正则、required。 */
+/** 当前工具使用的扁平 JSON Schema 子集：类型、枚举、默认值、范围、正则、required。object 仅校验是对象，嵌套结构由执行器严格校验。 */
 public final class ToolArguments {
     private static final Set<String> ROOT_KEYS = Set.of("type", "properties", "required", "additionalProperties");
     private static final Set<String> PROPERTY_KEYS = Set.of("type", "description", "enum", "default", "minimum", "maximum", "pattern");
-    private static final Set<String> TYPES = Set.of("string", "integer", "number", "boolean");
+    private static final Set<String> TYPES = Set.of("string", "integer", "number", "boolean", "object");
     private static final Pattern REF = Pattern.compile("\\{\\{[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)*}}");
 
     private ToolArguments() {}
@@ -117,6 +117,7 @@ public final class ToolArguments {
             case "integer" -> value.isIntegralNumber();
             case "number" -> value.isNumber();
             case "boolean" -> value.isBoolean();
+            case "object" -> value.isObject();
             default -> false;
         };
     }

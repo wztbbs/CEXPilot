@@ -2,6 +2,8 @@ package com.cexpilot.dag;
 
 import com.cexpilot.config.DagConfig;
 import com.cexpilot.config.LlmConfig;
+import com.cexpilot.dag.guard.GuardContext;
+import com.cexpilot.dag.guard.QueryCapabilityGuard;
 import com.cexpilot.intent.IntentDefinition;
 import com.cexpilot.intent.IntentRegistry;
 import com.cexpilot.llm.ChatMessage;
@@ -61,10 +63,11 @@ public class DagPlanner {
     private final DagConfig dagConfig;
     private final PromptStore prompts;
     private final PlanValidator validator;
+    private final QueryCapabilityGuard capabilityGuard;
 
     public DagPlanner(LlmClient llm, ToolRegistry registry, IntentRegistry intentRegistry,
                       LlmConfig llmConfig, DagConfig dagConfig, PromptStore prompts,
-                      PlanValidator validator) {
+                      PlanValidator validator, QueryCapabilityGuard capabilityGuard) {
         this.llm = llm;
         this.registry = registry;
         this.intentRegistry = intentRegistry;
@@ -72,6 +75,7 @@ public class DagPlanner {
         this.dagConfig = dagConfig;
         this.prompts = prompts;
         this.validator = validator;
+        this.capabilityGuard = capabilityGuard;
     }
 
     /**
@@ -151,14 +155,8 @@ public class DagPlanner {
         String intent = normalizeIntent(parsed.path("intent"));
         String reply = textOrNull(parsed.path("reply"));
         JsonNode planNode = parsed.path("plan");
-        // 先检查语义，即使模型选择 plan=null 也不能把能力缺口写成计算结果。
-        DagPlan capabilityPlan;
-        try {
-            capabilityPlan = planNode.isObject() ? DagPlan.fromJson(planNode) : new DagPlan(List.of());
-        } catch (Exception e) {
-            return repairDecision(traceId, sink, parsed.toString(), "plan 解析失败: " + e.getMessage());
-        }
-        String refusal = QueryCapabilityGuard.refusal(question, parsed.path("query_requirements"), capabilityPlan);
+        // 只判断任务级能力；每个查询节点的时间、市场、条数由执行链路校验。
+        String refusal = capabilityGuard.refusal(GuardContext.of(parsed.path("query_requirements")));
         if (refusal != null) {
             sink.record(TraceEvent.plan(traceId, parsed.toString(), "CAPABILITY_REFUSED: " + refusal));
             return PlanDecision.accepted(true, intent, refusal, null);
@@ -268,13 +266,9 @@ public class DagPlanner {
                        "reply": {"type": ["string", "null"]},
                        "query_requirements": {"type": ["object", "null"], "additionalProperties": false,
                          "properties": {
-                           "time_scope": {"type": "string", "enum": ["unspecified", "current", "recent_samples", "rolling_window", "calendar_window", "absolute_range", "period_comparison", "mixed", "unknown"]},
-                           "duration": {"type": ["string", "null"]},
-                           "sample_count": {"type": ["integer", "null"], "minimum": 1},
-                           "quote_asset": {"type": ["string", "null"]},
-                           "market_type": {"type": ["string", "null"]}
+                           "requires_period_comparison": {"type": "boolean"}
                          },
-                         "required": ["time_scope", "duration", "sample_count", "quote_asset", "market_type"]},
+                         "required": ["requires_period_comparison"]},
                        "plan": {"type": ["object", "null"], "additionalProperties": false,
                          "properties": {"nodes": {"type": "array", "items": {
                            "type": "object", "additionalProperties": false,

@@ -1,5 +1,6 @@
 name: compare_exchanges
-enabled: true
+# 暂缓：聚合指标类 tool 待重新设计（见 CompareExchangesTool.java 顶部注释），恢复时改回 true
+enabled: false
 description: 对比 Binance 与 OKX 同币种、同窗口的涨跌幅及背离指标；不比较资金费率或持仓量。
 # capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
 capabilities:
@@ -18,6 +19,14 @@ input_schema:
   additionalProperties: false
   required: [symbol]
   properties:
+    quote_asset:
+      type: string
+      default: USDT
+      description: 用户指定的计价币，原样保留；未指定时使用 USDT，不支持的值由工具拒绝
+    market_type:
+      type: string
+      default: perpetual
+      description: 用户指定的市场（spot/perpetual/delivery 等），原样保留；未指定时使用 perpetual，不支持的值由工具拒绝
     symbol:
       type: string
       description: 基础币代码，如 BTC / ETH

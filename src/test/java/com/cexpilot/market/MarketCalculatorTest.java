@@ -1,7 +1,7 @@
 package com.cexpilot.market;
 
 import com.cexpilot.market.model.Candle;
-import com.cexpilot.market.model.OpenInterestInfo.OiPoint;
+import com.cexpilot.market.model.OiPoint;
 import com.cexpilot.market.model.OrderBook;
 import com.cexpilot.market.model.Trade;
 import org.junit.jupiter.api.Test;
@@ -41,6 +41,31 @@ class MarketCalculatorTest {
     }
 
     @Test
+    void rangeStatsAggregatesWholeRange() {
+        List<Candle> candles = List.of(
+                new Candle(1, new BigDecimal("100"), new BigDecimal("105"), new BigDecimal("99"),
+                        new BigDecimal("104"), new BigDecimal("2"), new BigDecimal("200"), null),
+                new Candle(2, new BigDecimal("104"), new BigDecimal("110"), new BigDecimal("103"),
+                        new BigDecimal("108"), new BigDecimal("3"), new BigDecimal("310"), null));
+        MarketCalculator.RangeStats stats = MarketCalculator.rangeStats(candles);
+        assertEquals(new BigDecimal("100"), stats.open());
+        assertEquals(new BigDecimal("108"), stats.close());
+        assertEquals(new BigDecimal("110"), stats.high());
+        assertEquals(new BigDecimal("99"), stats.low());
+        assertEquals(new BigDecimal("8.0000"), stats.changePct());
+        assertEquals(new BigDecimal("5"), stats.volume());
+        assertEquals(new BigDecimal("510"), stats.quoteVolume());
+        assertEquals(2, stats.candleCount());
+        // 任一根缺成交额时合计为 null，不输出无法证明的成交额
+        List<Candle> missingQuote = List.of(
+                candle(1, "100", "105", "99", "104"),
+                new Candle(2, new BigDecimal("104"), new BigDecimal("110"), new BigDecimal("103"),
+                        new BigDecimal("108"), new BigDecimal("3"), new BigDecimal("310"), null));
+        assertNull(MarketCalculator.rangeStats(missingQuote).quoteVolume());
+        assertNull(MarketCalculator.rangeStats(List.of()));
+    }
+
+    @Test
     void fundingTrendRisingFallingFlat() {
         List<BigDecimal> rising = List.of(
                 bd("0.0001"), bd("0.0001"), bd("0.0002"), bd("0.0003"));
@@ -55,6 +80,41 @@ class MarketCalculatorTest {
         assertEquals("flat", MarketCalculator.fundingTrend(flat));
 
         assertEquals("unknown", MarketCalculator.fundingTrend(List.of(bd("0.0001"))));
+    }
+
+    @Test
+    void fundingStatsAggregatesSettledRates() {
+        List<BigDecimal> rates = List.of(bd("0.0001"), bd("-0.0002"), bd("0.0003"), bd("0"));
+        MarketCalculator.FundingStats stats = MarketCalculator.fundingStats(rates);
+        // mean = 0.0002 / 4 = 0.00005
+        assertEquals(0, new BigDecimal("0.0000500000").compareTo(stats.mean()));
+        assertEquals(bd("-0.0002"), stats.min());
+        assertEquals(bd("0.0003"), stats.max());
+        assertEquals(2, stats.positiveCount());
+        assertEquals(1, stats.negativeCount());
+        assertEquals(1, stats.zeroCount());
+        assertEquals(4, stats.periodCount());
+        assertEquals("rising", stats.trend());
+        assertNull(MarketCalculator.fundingStats(List.of()));
+    }
+
+    @Test
+    void oiStatsFromSamplePoints() {
+        List<OiPoint> points = List.of(
+                new OiPoint(1, bd("1000")),
+                new OiPoint(2, bd("1200")),
+                new OiPoint(3, bd("900")));
+        MarketCalculator.OiStats stats = MarketCalculator.oiStats(points);
+        assertEquals(bd("1000"), stats.startOi());
+        assertEquals(bd("900"), stats.endOi());
+        assertEquals(bd("-100"), stats.change());
+        assertEquals(new BigDecimal("-10.0000"), stats.changePct());
+        assertEquals(bd("1200"), stats.maxOi());
+        assertEquals(2, stats.maxTime());
+        assertEquals(bd("900"), stats.minOi());
+        assertEquals(3, stats.minTime());
+        assertEquals(3, stats.pointCount());
+        assertNull(MarketCalculator.oiStats(List.of()));
     }
 
     @Test

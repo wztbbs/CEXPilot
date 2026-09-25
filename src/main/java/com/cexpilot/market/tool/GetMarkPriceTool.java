@@ -27,7 +27,7 @@ public class GetMarkPriceTool extends AbstractMarketTool {
     }
 
     @Override
-    protected JsonNode doExecute(JsonNode args) {
+    protected JsonNode doExecute(JsonNode args, com.cexpilot.runtime.ToolContext ctx) {
         var exchange = parseExchange(args);
         String base = parseBase(args);
         MarkPrice markPrice = market.markPrice(exchange, base);
@@ -59,10 +59,11 @@ public class GetMarkPriceTool extends AbstractMarketTool {
             // stripTrailingZeros 后转 plain，避免 Jackson 按 toString 序列化出科学计数
             facts.put("current_funding_rate_pct", new BigDecimal(markPrice.fundingRate()
                     .multiply(new BigDecimal("100")).stripTrailingZeros().toPlainString()));
-            // Binance premiumIndex 的 lastFundingRate 是快照报告的最近一期已结算费率；
-            // 结算时间以 get_funding_rate 的 recent_rates 末条为准（历史接口可能滞后于快照）
+            // Binance premiumIndex 的 lastFundingRate 是快照接口报告的费率，与历史接口的
+            // 最近已结算值可能存在滞后差异（实测两者会不一致），不能标为 settled；
+            // 已结算费率以 get_funding_rate（历史末条）为准
             if (exchange == Exchange.BINANCE) {
-                facts.put("current_funding_rate_kind", "settled");
+                facts.put("current_funding_rate_kind", "snapshot_reported");
                 if (markPrice.markPriceTime() > 0) {
                     facts.put("current_funding_rate_as_of_utc8",
                             Times.readable(markPrice.markPriceTime()));

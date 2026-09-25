@@ -2,6 +2,7 @@ package com.cexpilot.dag;
 
 import com.cexpilot.config.DagConfig;
 import com.cexpilot.runtime.AgentTool;
+import com.cexpilot.runtime.RequestContext;
 import com.cexpilot.runtime.ToolContext;
 import com.cexpilot.runtime.ToolRegistry;
 import com.cexpilot.runtime.ToolResult;
@@ -67,12 +68,21 @@ public class DagExecutor {
     }
 
     public ExecutionOutcome execute(DagPlan plan, String traceId, TraceSink sink) {
+        return execute(plan, traceId, sink, null);
+    }
+
+    /**
+     * @param requestContext 请求时间上下文（用户时区 + 固定 requestTime），随 ToolContext
+     *                       传给每个工具节点；null 表示未携带
+     */
+    public ExecutionOutcome execute(DagPlan plan, String traceId, TraceSink sink,
+                                    RequestContext requestContext) {
         DagContext ctx = new DagContext();
         List<List<PlanNode>> levels = topoLevels(plan);
         for (List<PlanNode> level : levels) {
             List<Future<NodeOutcome>> futures = new ArrayList<>();
             for (PlanNode node : level) {
-                futures.add(pool.submit(() -> runNode(node, ctx, traceId)));
+                futures.add(pool.submit(() -> runNode(node, ctx, traceId, requestContext)));
             }
             for (int i = 0; i < level.size(); i++) {
                 collect(level.get(i), futures.get(i), ctx, traceId, sink);
@@ -82,7 +92,8 @@ public class DagExecutor {
     }
 
     /** 工作线程：依赖检查 → 引用解析 → 工具执行；一切异常转为 ToolResult.failure。 */
-    private NodeOutcome runNode(PlanNode node, DagContext ctx, String traceId) {
+    private NodeOutcome runNode(PlanNode node, DagContext ctx, String traceId,
+                                RequestContext requestContext) {
         long start = System.currentTimeMillis();
         for (String dep : node.dependsOn()) {
             ToolResult depResult = ctx.get(dep);
@@ -97,7 +108,9 @@ public class DagExecutor {
         try {
             resolvedArgs = registry.prepareArguments(node.tool(), ReferenceResolver.resolve(node.args(), ctx));
             AgentTool tool = registry.get(node.tool());
-            result = tool.execute(resolvedArgs, new ToolContext(traceId, null));
+            result = tool.execute(resolvedArgs, new ToolContext(traceId, null,
+                    requestContext == null ? null : requestContext.userZone(),
+                    requestContext == null ? null : requestContext.requestTime()));
         } catch (Exception e) {
             log.warn("节点 {} 工具 {} 执行异常: {}", node.id(), node.tool(), e.getMessage());
             return new NodeOutcome(ToolResult.failure("工具执行异常: " + e.getMessage()),

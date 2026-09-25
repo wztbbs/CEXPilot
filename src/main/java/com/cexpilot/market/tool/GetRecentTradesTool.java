@@ -4,6 +4,7 @@ import com.cexpilot.market.MarketCalculator;
 import com.cexpilot.market.MarketDataService;
 import com.cexpilot.market.Times;
 import com.cexpilot.market.model.Trade;
+import com.cexpilot.market.policy.SampleQueryPolicy;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -29,10 +30,10 @@ public class GetRecentTradesTool extends AbstractMarketTool {
     }
 
     @Override
-    protected JsonNode doExecute(JsonNode args) {
+    protected JsonNode doExecute(JsonNode args, com.cexpilot.runtime.ToolContext ctx) {
         var exchange = parseExchange(args);
         String base = parseBase(args);
-        int limit = args.path("limit").asInt(50);
+        int limit = SampleQueryPolicy.count(args, "limit", 50, 100);
         boolean details = args.path("details").asBoolean(false);
         List<Trade> trades = market.recentTrades(exchange, base, limit);
 
@@ -54,6 +55,7 @@ public class GetRecentTradesTool extends AbstractMarketTool {
         facts.put("quantity_unit", contracts ? "contracts（合约张数，未换算为币数）" : base + "（基础币）");
         facts.put("requested_count", limit);
         facts.put("actual_count", trades.size());
+        facts.put("sample_complete", trades.size() == limit);
         if (trades.size() < limit) {
             facts.put("actual_count_note",
                     "实际只获取到 " + trades.size() + " 条（接口可用样本不足），非完整 " + limit + " 条");

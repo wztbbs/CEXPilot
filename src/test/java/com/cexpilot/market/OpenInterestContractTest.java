@@ -19,35 +19,19 @@ class OpenInterestContractTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Test
-    void bothExchangesQuerySinglePerpetualAndReturnCoinQuantity() throws Exception {
-        check(false);
-    }
-
-    @Test
-    void emptyHistoryNeverFallsBackToOtherScopeOrEstimatedValue() throws Exception {
-        check(true);
-    }
-
-    private void check(boolean empty) throws Exception {
+    void snapshotUsesRealSnapshotEndpointsWithUnitAndDataTime() throws Exception {
         List<String> requests = java.util.Collections.synchronizedList(new ArrayList<>());
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", request -> {
+            String body = switch (request.getRequestURI().getPath()) {
+                case "/fapi/v1/openInterest" ->
+                        "{\"openInterest\":\"104091.102\",\"symbol\":\"BTCUSDT\",\"time\":1726765200000}";
+                case "/api/v5/public/open-interest" -> """
+                        {"code":"0","data":[{"instType":"SWAP","instId":"BTC-USDT-SWAP","oi":"2962556","oiCcy":"29645.9406","oiUsd":"2496890807","ts":"1726765200000"}]}
+                        """;
+                default -> "{\"code\":\"1\",\"msg\":\"unexpected endpoint\"}";
+            };
             requests.add(request.getRequestURI().toString());
-            String body;
-            if (request.getRequestURI().getPath().equals("/api/v5/rubik/stat/contracts/open-interest-history")) {
-                body = empty ? "{\"code\":\"0\",\"data\":[]}" : """
-                        {"code":"0","data":[
-                          ["1726765200000","9999","0.000123456789","987654321"],
-                          ["1726761600000","8888","0.000100000001","123456789"]]}
-                        """;
-            } else if (request.getRequestURI().getPath().equals("/futures/data/openInterestHist")) {
-                body = empty ? "[]" : """
-                        [{"timestamp":1726761600000,"sumOpenInterest":"0.000100000001","sumOpenInterestValue":"123456789"},
-                         {"timestamp":1726765200000,"sumOpenInterest":"0.000123456789","sumOpenInterestValue":"987654321"}]
-                        """;
-            } else {
-                body = "{\"code\":\"1\",\"msg\":\"unexpected endpoint\"}";
-            }
             byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
             request.getResponseHeaders().set("Content-Type", "application/json");
             request.sendResponseHeaders(200, bytes.length);
@@ -66,24 +50,19 @@ class OpenInterestContractTest {
                 assertTrue(result.ok(), result.error());
                 var facts = result.data();
                 assertEquals("BTC", facts.path("unit").asText());
-                assertEquals("该永续合约（1 小时粒度）", facts.path("series_scope").asText());
                 assertEquals(exchange.equals("okx") ? "BTC-USDT-SWAP" : "BTCUSDT", facts.path("instrument").asText());
-                assertEquals("unverified", facts.path("window_coverage").asText());
-                assertFalse(facts.has("oi_change_24h_pct"));
-                if (empty) {
-                    assertFalse(facts.has("open_interest"));
-                    assertFalse(facts.has("oi_change_pct"));
-                    assertTrue(facts.path("data_status").asText().contains("数据不足"));
-                } else {
-                    assertEquals(new BigDecimal("0.000123456789"), facts.path("open_interest").decimalValue());
-                    assertEquals(new BigDecimal("0.000100000001"), facts.path("open_interest_series").get(0).get(1).decimalValue());
-                    assertEquals(Times.readable(1726765200000L), facts.path("as_of_utc8").asText());
-                    assertTrue(facts.has("oi_change_pct"));
-                }
+                assertEquals(Times.readable(1726765200000L), facts.path("data_time_utc8").asText());
+                assertEquals(new BigDecimal(exchange.equals("okx") ? "29645.9406" : "104091.102"),
+                        facts.path("open_interest").decimalValue());
+                assertTrue(facts.has("snapshot_time_utc8"));
+                // 快照不再夹带历史序列与变化统计
+                assertFalse(facts.has("open_interest_series"));
+                assertFalse(facts.has("oi_change_pct"));
+                assertFalse(facts.has("window_coverage"));
             }
             assertEquals(List.of(
-                    "/futures/data/openInterestHist?symbol=BTCUSDT&period=1h&limit=24",
-                    "/api/v5/rubik/stat/contracts/open-interest-history?instId=BTC-USDT-SWAP&period=1H&limit=24"), requests);
+                    "/fapi/v1/openInterest?symbol=BTCUSDT",
+                    "/api/v5/public/open-interest?instType=SWAP&instId=BTC-USDT-SWAP"), requests);
         } finally {
             server.stop(0);
         }
@@ -92,18 +71,19 @@ class OpenInterestContractTest {
     @Test
     void oldAggregateShapeAndMissingCoinQuantityAreRejected() throws Exception {
         for (String row : List.of("[\"1000\",\"30\",\"999\"]", "[\"1000\",\"30\",null,\"999\"]")) {
-            assertThrows(RuntimeException.class, () -> OkxClient.parseOiHistory(MAPPER.readTree("[" + row + "]"), 24));
+            assertThrows(RuntimeException.class, () -> OkxClient.parseOiHistory(MAPPER.readTree("[" + row + "]")));
         }
         assertThrows(RuntimeException.class, () -> BinanceClient.parseOiHistory(
                 MAPPER.readTree("[{\"timestamp\":1000,\"sumOpenInterestValue\":\"999\"}]")));
     }
 
     @Test
-    void ascendingResponseStillSelectsNewestSamples() throws Exception {
+    void historyParsedAscendingWithCoinQuantity() throws Exception {
         var points = OkxClient.parseOiHistory(MAPPER.readTree("""
                 [["1000","10","0.1","5000"],["2000","20","0.2","10000"],["3000","30","0.3","15000"]]
-                """), 2);
-        assertEquals(List.of(2000L, 3000L), points.stream().map(p -> p.timestamp()).toList());
-        assertEquals(new BigDecimal("0.3"), points.get(1).oi());
+                """));
+        // 解析保留全部行并按时间升序；分页与截断归 OiSource 负责
+        assertEquals(List.of(1000L, 2000L, 3000L), points.stream().map(p -> p.timestamp()).toList());
+        assertEquals(new BigDecimal("0.3"), points.get(2).oi());
     }
 }

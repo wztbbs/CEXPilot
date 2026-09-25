@@ -1,0 +1,52 @@
+name: get_trade_flow_statistics
+enabled: true
+description: >
+  计算指定时间区间的成交流量统计：主动买/卖成交量、成交额（USDT）及主动买占比。
+  笔数口径逐所不同：binance=聚合成交笔数（一笔聚合可能含多笔原始成交），okx=逐笔成交笔数，不可跨所比较。
+  不返回逐笔明细，需要明细请用 get_trade_history。
+  时间范围用 time 对象表达（必填），4 种结构选其一：
+  1) 自然周期，如昨天/上周：{"type":"calendar_period","timezone":null,"unit":"day|week|month|quarter|year","offset":-1,
+     "segment":"full|early_morning|morning|afternoon|evening","extent":"full_period|to_request_time"}。
+  2) 滚动窗口，如过去 30 分钟：{"type":"rolling_window","timezone":null,"duration":{"value":30,"unit":"second|minute|hour|day|week"}}。
+  3) 相对日期时段，如昨天 15 点到 17 点：{"type":"relative_day_range","timezone":null,
+     "start":{"day_offset":-1,"time":"15:00:00"},"end":{"day_offset":-1,"time":"17:00:00"}}。
+  4) 明确日期范围：{"type":"absolute_range","timezone":null,"start":{"year":null,"month":9,"day":1,"time":null},
+     "end":{"year":null,"month":9,"day":3,"time":null},"end_mode":"inclusive_date|exclusive"}。
+  timezone 均为 IANA 时区，填 null 表示继承请求时区（当前为 UTC+8）。
+  返回的 complete 必须检查：complete=true 才输出 statistics（actual_range 为首末笔成交时间）；
+  complete=false 表示分页被中止、数据不完整，不输出 statistics，不得凭部分数据自行估算区间流量。
+# capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
+capabilities:
+  - 按 TimeSpec 计算区间主动买卖成交量/成交额及占比
+  - 数据完整时输出 statistics，并标注 actual_range（首末笔成交时间）
+limitations:
+  - 单次查询上限：binance 20000 笔、okx 5000 笔；OKX 长区间容易不完整
+  - okx 只保留最近约 3 个月的逐笔历史
+  - 笔数口径逐所不同（聚合/逐笔），占比可比、笔数不可跨所比
+scope:
+  exchanges: [binance, okx]
+  market_type: perpetual
+input_schema:
+  type: object
+  additionalProperties: false
+  required: [exchange, symbol, time]
+  properties:
+    quote_asset:
+      type: string
+      default: USDT
+      description: 用户指定的计价币，原样保留；未指定时使用 USDT，不支持的值由工具拒绝
+    market_type:
+      type: string
+      default: perpetual
+      description: 用户指定的市场（spot/perpetual/delivery 等），原样保留；未指定时使用 perpetual，不支持的值由工具拒绝
+    exchange:
+      type: string
+      enum: [binance, okx]
+      default: binance
+      description: 交易所
+    symbol:
+      type: string
+      description: 基础币代码，如 BTC / ETH
+    time:
+      type: object
+      description: 时间范围（TimeSpec），4 种 type 结构见工具描述，字段严格校验由服务端执行

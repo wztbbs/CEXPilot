@@ -21,7 +21,7 @@ public class GetTickerTool extends AbstractMarketTool {
     }
 
     @Override
-    protected JsonNode doExecute(JsonNode args) {
+    protected JsonNode doExecute(JsonNode args, com.cexpilot.runtime.ToolContext ctx) {
         var exchange = parseExchange(args);
         String base = parseBase(args);
         Ticker ticker = market.ticker(exchange, base);

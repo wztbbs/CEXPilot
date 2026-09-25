@@ -10,3 +10,10 @@ spring:
 logging:
   level:
     com.cexpilot: debug
+
+# 测试环境经 nginx 代理访问交易所公共行情（本机直连不通时也能测试）
+exchange:
+  binance:
+    base-url: http://43.160.213.63:18080
+  okx:
+    base-url: http://43.160.213.63:18081

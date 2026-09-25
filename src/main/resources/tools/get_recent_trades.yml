@@ -1,6 +1,6 @@
 name: get_recent_trades
 enabled: true
-description: 查询最近N笔成交的统计与主动买入量占比，可指定笔数（1-100，默认50）；按笔数采样，不代表固定时间窗口。
+description: 查询最近N笔成交的统计与主动买入量占比，可指定笔数（1-100，默认50）；按笔数采样，不代表固定时间窗口。用户要求列出全部明细时必须设置 details=true，节点 include_details=true 只阻止后续压缩。sample_complete=false 表示未取够请求条数，不得当作完整样本。
 # capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
 capabilities:
   - 获取最近逐笔成交记录（时间、价格、数量、主动方向）
@@ -18,6 +18,14 @@ input_schema:
   additionalProperties: false
   required: [exchange, symbol]
   properties:
+    quote_asset:
+      type: string
+      default: USDT
+      description: 用户指定的计价币，原样保留；未指定时使用 USDT，不支持的值由工具拒绝
+    market_type:
+      type: string
+      default: perpetual
+      description: 用户指定的市场（spot/perpetual/delivery 等），原样保留；未指定时使用 perpetual，不支持的值由工具拒绝
     exchange:
       type: string
       enum: [binance, okx]

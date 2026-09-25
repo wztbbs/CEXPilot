@@ -7,6 +7,7 @@ import com.cexpilot.llm.ChatResponse;
 import com.cexpilot.llm.LlmClient;
 import com.cexpilot.prompt.PromptStore;
 import com.cexpilot.runtime.ExecutionResult;
+import com.cexpilot.runtime.RequestContext;
 import com.cexpilot.runtime.ToolResult;
 import com.cexpilot.runtime.TraceEvent;
 import com.cexpilot.runtime.TraceSink;
@@ -54,7 +55,7 @@ public class DagRuntime {
     }
 
     public ExecutionResult execute(String question, String conversationContext, String traceId, TraceSink sink) {
-        return execute(question, conversationContext, traceId, sink, null);
+        return execute(question, conversationContext, traceId, sink, null, null);
     }
 
     /**
@@ -63,6 +64,16 @@ public class DagRuntime {
      */
     public ExecutionResult execute(String question, String conversationContext, String traceId,
                                    TraceSink sink, Consumer<String> answerDelta) {
+        return execute(question, conversationContext, traceId, sink, answerDelta, null);
+    }
+
+    /**
+     * @param requestContext 请求时间上下文（用户时区 + 固定 requestTime），随 ToolContext
+     *                       传给每个工具节点；null 表示未携带
+     */
+    public ExecutionResult execute(String question, String conversationContext, String traceId,
+                                   TraceSink sink, Consumer<String> answerDelta,
+                                   RequestContext requestContext) {
         DagPlanner.PlanOutcome outcome = planner.plan(question, conversationContext, traceId, sink);
         int totalPromptTokens = outcome.promptTokens();
         int totalCompletionTokens = outcome.completionTokens();
@@ -101,7 +112,7 @@ public class DagRuntime {
             queryStatus.put("missing", missing.length() <= 200 ? missing : missing.substring(0, 200));
         }
         DagPlan plan = outcome.plan().orElseThrow();
-        DagExecutor.ExecutionOutcome execution = executor.execute(plan, traceId, sink);
+        DagExecutor.ExecutionOutcome execution = executor.execute(plan, traceId, sink, requestContext);
         steps = execution.layers();
         for (PlanNode node : plan.nodes()) {
             ToolResult result = execution.context().get(node.id());

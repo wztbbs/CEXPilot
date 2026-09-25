@@ -6,12 +6,16 @@ import com.cexpilot.dag.DagRuntime;
 import com.cexpilot.intent.IntentRegistry;
 import com.cexpilot.intent.UnmatchedQueryRepository;
 import com.cexpilot.runtime.ExecutionResult;
+import com.cexpilot.runtime.RequestContext;
 import com.cexpilot.trace.DbTraceSink;
 import com.cexpilot.trace.TraceRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.time.Clock;
+import java.time.DateTimeException;
+import java.time.ZoneId;
 import java.util.UUID;
 
 /**
@@ -29,19 +33,22 @@ public class AskService {
     private final TraceRepository traceRepository;
     private final DbTraceSink traceSink;
     private final LlmConfig llmConfig;
+    private final Clock clock;
 
     public AskService(ConversationService conversation,
                       DagRuntime runtime,
                       UnmatchedQueryRepository unmatchedQueryRepository,
                       TraceRepository traceRepository,
                       DbTraceSink traceSink,
-                      LlmConfig llmConfig) {
+                      LlmConfig llmConfig,
+                      Clock clock) {
         this.conversation = conversation;
         this.runtime = runtime;
         this.unmatchedQueryRepository = unmatchedQueryRepository;
         this.traceRepository = traceRepository;
         this.traceSink = traceSink;
         this.llmConfig = llmConfig;
+        this.clock = clock;
     }
 
     /** 流式问答的事件出口：meta 在建 trace 后触发，delta 为答案增量，done 带完整结果。 */
@@ -54,7 +61,7 @@ public class AskService {
     }
 
     public AskResponse ask(String conversationId, String question) {
-        return ask(conversationId, question, null);
+        return ask(conversationId, question, null, null, null);
     }
 
     /**
@@ -64,7 +71,7 @@ public class AskService {
      * @param visitorId 访客标识（cexpilot_uid cookie），随 trace 落库用于统计；允许为 null
      */
     public AskResponse ask(String conversationId, String question, String visitorId) {
-        return ask(conversationId, question, visitorId, null);
+        return ask(conversationId, question, visitorId, null, null);
     }
 
     /**
@@ -73,9 +80,21 @@ public class AskService {
      */
     public AskResponse ask(String conversationId, String question, String visitorId,
                            AskStreamListener listener) {
+        return ask(conversationId, question, visitorId, null, listener);
+    }
+
+    /**
+     * @param timezone 请求携带的 IANA 时区（如 Asia/Shanghai），作为时间消解的请求上下文；
+     *                 null 或空表示未携带，由各工具按默认口径回落
+     */
+    public AskResponse ask(String conversationId, String question, String visitorId, String timezone,
+                           AskStreamListener listener) {
         if (question == null || question.isBlank()) {
             throw new IllegalArgumentException("question 不能为空");
         }
+        // 请求开始即固定时间基准：同一次问答里所有工具节点共用同一个“现在”，
+        // 不允许各环节各自读取时钟（跨午夜会导致“昨天”在不同节点变成不同日期）
+        RequestContext requestContext = new RequestContext(parseZone(timezone), clock.instant());
 
         // 1. 落定对话：conversationId 为空则新建对话；不为空则沿用（多轮追问的载体）。
         //    对话只保留最近几个 Query，不做长期记忆。
@@ -103,7 +122,7 @@ public class AskService {
             //    本次 Query 写入 conversation_query，成为后续追问的上下文。
             //    intent 归类为 UNKNOWN 的 query 落 unmatched_query，作为能力缺口数据集。
             ExecutionResult result = runtime.execute(question, conversationContext, traceId, traceSink,
-                    listener == null ? null : listener::onDelta);
+                    listener == null ? null : listener::onDelta, requestContext);
             long durationMs = System.currentTimeMillis() - start;
             double cost = computeCost(result.promptTokens(), result.completionTokens());
 
@@ -137,5 +156,16 @@ public class AskService {
     private double computeCost(int promptTokens, int completionTokens) {
         return promptTokens / 1000.0 * llmConfig.getNormal().getPriceInputPer1k()
                 + completionTokens / 1000.0 * llmConfig.getNormal().getPriceOutputPer1k();
+    }
+
+    private static ZoneId parseZone(String timezone) {
+        if (timezone == null || timezone.isBlank()) {
+            return null;
+        }
+        try {
+            return ZoneId.of(timezone.trim());
+        } catch (DateTimeException e) {
+            throw new IllegalArgumentException("非法的 timezone（需为 IANA 时区，如 Asia/Shanghai）: " + timezone);
+        }
     }
 }

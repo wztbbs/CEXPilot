@@ -260,7 +260,11 @@
     fetch('/api/ask/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conversationId: conversationId, question: question })
+      body: JSON.stringify({
+        conversationId: conversationId,
+        question: question,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || null
+      })
     })
       .then(function (res) {
         if (!res.ok || !res.body) {

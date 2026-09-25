@@ -18,6 +18,14 @@ input_schema:
   additionalProperties: false
   required: [exchange, symbol]
   properties:
+    quote_asset:
+      type: string
+      default: USDT
+      description: 用户指定的计价币，原样保留；未指定时使用 USDT，不支持的值由工具拒绝
+    market_type:
+      type: string
+      default: perpetual
+      description: 用户指定的市场（spot/perpetual/delivery 等），原样保留；未指定时使用 perpetual，不支持的值由工具拒绝
     exchange:
       type: string
       enum: [binance, okx]

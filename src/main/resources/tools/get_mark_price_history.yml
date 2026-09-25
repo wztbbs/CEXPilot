@@ -1,0 +1,76 @@
+name: get_mark_price_history
+enabled: true
+description: >
+  查询指定时间范围、指定粒度的标记价格或指数价格 K 线序列（开高低收，无成交量），不输出区间统计；
+  需要涨跌幅/最高/最低统计请用 get_mark_price_statistics。price_type：mark=标记价格（默认），index=指数价格。
+  时间范围用 time 对象表达，4 种结构选其一：
+  1) 自然周期，如昨天/上周：{"type":"calendar_period","timezone":null,"unit":"day|week|month|quarter|year","offset":-1,
+     "segment":"full|early_morning|morning|afternoon|evening","extent":"full_period|to_request_time"}，
+     offset 相对当前周期（0=本周期,-1=上一周期）；非 full 的 segment 仅允许 unit=day；
+     extent=to_request_time 表示“本周期起点至现在”，仅允许 offset=0 且 segment=full。
+  2) 滚动窗口，如过去 6 小时：{"type":"rolling_window","timezone":null,"duration":{"value":6,"unit":"second|minute|hour|day|week"}}，
+     结束时间固定为当前时刻，不按整点取整。
+  3) 相对日期时段，如昨天 15 点到 17 点：{"type":"relative_day_range","timezone":null,
+     "start":{"day_offset":-1,"time":"15:00:00"},"end":{"day_offset":-1,"time":"17:00:00"}}。
+  4) 明确日期范围，如 9 月 1 日到 9 月 3 日：{"type":"absolute_range","timezone":null,
+     "start":{"year":null,"month":9,"day":1,"time":null},"end":{"year":null,"month":9,"day":3,"time":null},
+     "end_mode":"inclusive_date|exclusive"}。
+  timezone 均为 IANA 时区，填 null 表示继承请求时区（当前为 UTC+8）。
+  边界口径 boundary_mode：exact（默认）要求区间起止对齐粒度边界，未对齐会报错；cover 允许外延覆盖。
+  返回的 coverage：range_complete=true 才表示区间完整覆盖；区间延伸到当前之后时数据只覆盖到 covered_until；
+  closed_part_complete=false 表示有缺失/错位，missing_open_times 为缺失的开盘时间。
+# capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
+capabilities:
+  - 按 TimeSpec 查询标记/指数价格历史：自然周期、滚动窗口、相对日期时段、明确日期范围
+  - 返回覆盖核对结果 coverage 与逐根 K 线（开高低收）
+limitations:
+  - 粒度仅支持 5m / 15m / 1h；单次查询上限 6000 根
+  - 价格 K 线不含成交量（接口本身不提供）
+  - boundary_mode=exact 要求起止对齐粒度边界，未对齐时报错
+  - 默认剔除未收盘 K 线并标注 dropped_unclosed；include_unclosed=true 时保留并标注 contains_unclosed
+scope:
+  exchanges: [binance, okx]
+  market_type: perpetual
+input_schema:
+  type: object
+  additionalProperties: false
+  required: [exchange, symbol, time]
+  properties:
+    quote_asset:
+      type: string
+      default: USDT
+      description: 用户指定的计价币，原样保留；未指定时使用 USDT，不支持的值由工具拒绝
+    market_type:
+      type: string
+      default: perpetual
+      description: 用户指定的市场（spot/perpetual/delivery 等），原样保留；未指定时使用 perpetual，不支持的值由工具拒绝
+    exchange:
+      type: string
+      enum: [binance, okx]
+      default: binance
+      description: 交易所
+    symbol:
+      type: string
+      description: 基础币代码，如 BTC / ETH
+    price_type:
+      type: string
+      enum: [mark, index]
+      default: mark
+      description: mark=标记价格，index=指数价格
+    interval:
+      type: string
+      enum: [5m, 15m, 1h]
+      default: 5m
+      description: K 线粒度
+    time:
+      type: object
+      description: 时间范围（TimeSpec），4 种 type 结构见工具描述，字段严格校验由服务端执行
+    boundary_mode:
+      type: string
+      enum: [exact, cover]
+      default: exact
+      description: 边界口径；exact 要求对齐粒度边界，cover 允许外延覆盖
+    include_unclosed:
+      type: boolean
+      default: false
+      description: 是否包含尚未收盘的 K 线；false 时剔除并标注 dropped_unclosed
