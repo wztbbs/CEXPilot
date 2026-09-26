@@ -88,6 +88,8 @@ class MarketCalculatorTest {
         MarketCalculator.FundingStats stats = MarketCalculator.fundingStats(rates);
         // mean = 0.0002 / 4 = 0.00005
         assertEquals(0, new BigDecimal("0.0000500000").compareTo(stats.mean()));
+        // sum = 0.0001 - 0.0002 + 0.0003 + 0 = 0.0002
+        assertEquals(0, new BigDecimal("0.0002").compareTo(stats.sum()));
         assertEquals(bd("-0.0002"), stats.min());
         assertEquals(bd("0.0003"), stats.max());
         assertEquals(2, stats.positiveCount());

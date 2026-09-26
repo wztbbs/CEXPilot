@@ -20,7 +20,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 
 /**
- * 资金费率区间统计（聚合指标类）：区间内已结算费率的均值、极值、正负期数及趋势。
+ * 资金费率区间统计（聚合指标类）：区间内已结算费率的均值、累计（sum）、极值、正负期数及趋势。
  * 数据通过 FundingQueryService 获取（含覆盖核对），统计计算走 MarketCalculator；
  * 区间未完整覆盖（coverage.range_complete=false）时不输出 statistics，避免部分数据伪装成完整区间结果。
  */
@@ -67,6 +67,7 @@ public class GetFundingRateStatisticsTool extends AbstractMarketTool {
         if (stats != null) {
             ObjectNode node = facts.putObject("statistics");
             node.put("mean", MarketCalculator.roundPlain(stats.mean(), 8));
+            node.put("sum", MarketCalculator.roundPlain(stats.sum(), 8));
             node.put("min", MarketCalculator.roundPlain(stats.min(), 8));
             node.put("max", MarketCalculator.roundPlain(stats.max(), 8));
             node.put("positive_count", stats.positiveCount());

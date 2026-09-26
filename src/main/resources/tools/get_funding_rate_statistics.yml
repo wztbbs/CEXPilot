@@ -1,8 +1,10 @@
 name: get_funding_rate_statistics
 enabled: true
 description: >
-  计算指定时间区间内已结算资金费率的统计指标：均值、极值（min/max）、正负期数及趋势（rising/falling/flat/unknown），
+  计算指定时间区间内已结算资金费率的统计指标：均值、累计（sum）、极值（min/max）、正负期数及趋势（rising/falling/flat/unknown），
   不返回逐期明细；需要明细请用 get_funding_rate_history。
+  sum 为结算时刻落在区间内的已结算费率直接求和（小数形式），等于该区间实际资金费现金流：
+  正数表示多头净付费给空头；资金费在结算时刻全额收付，不按持仓时长分摊。
   本工具只计算单个交易所、单个币种、单个区间的上述指标，不产出不同查询结果之间的差值、比值、大小比较或排名。
   时间范围用 time 对象表达（必填），4 种结构选其一：
   1) 自然周期，如昨天/上周：{"type":"calendar_period","timezone":null,"unit":"day|week|month|quarter|year","offset":-1,
@@ -22,7 +24,7 @@ description: >
   如需「本周期截至现在」的统计，应使用 extent=to_request_time 表达（此时终点通常不对齐粒度边界，会自动外延覆盖）。
 # capabilities / limitations / scope 仅作维护文档；重要限制须写入 description。
 capabilities:
-  - 按 TimeSpec 计算区间内已结算费率的均值、极值、正负期数与趋势
+  - 按 TimeSpec 计算区间内已结算费率的均值、累计（sum）、极值、正负期数与趋势
   - 区间完整覆盖（range_complete=true）时输出 statistics，并标注实际计算范围 actual_range
   - 返回覆盖核对结果 coverage 与结算周期 funding_interval_hours
 limitations:

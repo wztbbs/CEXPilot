@@ -3,6 +3,7 @@ package com.cexpilot.market.kline;
 import com.cexpilot.market.Exchange;
 import com.cexpilot.market.model.Candle;
 import com.cexpilot.market.series.SeriesCoverageValidator;
+import com.cexpilot.market.series.CandleIntervalSelector;
 import com.cexpilot.market.series.SeriesQueryPolicy;
 import com.cexpilot.market.series.SeriesValidation;
 import com.cexpilot.market.series.TimePoint;
@@ -43,6 +44,7 @@ public class KlineQueryService {
      * @param userZone    请求上下文时区；spec 自带 timezone 时优先
      * @param spec        LLM 解析出的时间表达
      * @param requestTime 本次请求固定的时间基准，时间消解与未收盘判定共用
+     * @param interval 显式粒度；null 时根据解析后的区间和数据源预算自动选择
      */
     public KlineQueryResult query(ZoneId userZone, TimeSpec spec, Instant requestTime,
                                   Exchange exchange, String base,
@@ -53,6 +55,7 @@ public class KlineQueryService {
             throw new IllegalArgumentException("交易所暂无 K 线数据源: " + exchange.displayName());
         }
 
+        interval = CandleIntervalSelector.select(interval, range, source.capability());
         KlineQueryRequest requested = new KlineQueryRequest(
                 exchange, base, interval, range, includeUnclosed);
         TimeRange effectiveRange = SeriesQueryPolicy.check(

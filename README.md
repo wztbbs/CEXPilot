@@ -120,3 +120,7 @@ mvn clean test   # 单元与配置集成测试，不调用外部 LLM、交易所
 第二次调用统一使用 `prompts/agent_system.txt`，仅根据 query 和本轮 FACTS 回答。历史只用于消解指代。无计划时直接返回缺口说明或追问，不调用回答模型；查询失败和单侧数据缺失同样需要明确说明。工具返回的完整 evidence 直接作为 FACTS，不再按数组长度裁剪明细。各工具自身的查询预算和返回上限仍然适用。
 
 Answer 的 `TIME_CONTEXT` 与工具共用请求开始时固定的时间基准，包含 UTC 时刻、请求时区及当地日期时间；未提供用户时区时采用 UTC+8，并标注为默认值。单个查询显式指定的时区仍以工具返回区间为准。回答阶段不重新计算“昨天”，也不凭模型记忆判断当前日期；时间合法性、覆盖及未收盘状态依据工具结果说明。Answer trace 同时记录这份时间上下文，便于复查跨时区、跨午夜问题。
+
+`get_klines`、`get_market_statistics`、`get_mark_price_history`、`get_mark_price_statistics` 共用缺省粒度策略：用户指定 `interval` 时遵守，未指定时省略参数（不填写 `auto`），由 QueryService 在时间解析后选择。按数据源支持的粒度从细到粗检查对齐后的根数，优先选择不超过 1500 根且不超过总预算的粒度；都超过目标时使用最粗可用粒度，仍需通过总预算和保留期校验。结果的 `candle_interval` 是实际粒度，`interval_source` 标注 automatic/explicit；实际截止时间以 `coverage.covered_until` 和统计的 `actual_range` 为准，不能将最近已收盘数据说成实时结果。同范围、同边界的完整 OHLC 聚合不会因较细粒度而更精确，但粒度影响走势细节和边界贴合程度。OI 等瞬时采样工具不套用此规则。
+
+主动买卖成交量（taker）查询中，Source 在计算范围两端各多取一个 5m 周期，并在分页交界保留重叠、按周期起点去重；外扩受请求时间和历史保留期限制。QueryService 使用公共 `SeriesRangeFilter` 裁回 `effectiveRange`，再调用覆盖校验器，区间内的错位、缺口及分页中止仍会抑制统计输出。扩大取数不会扩大统计范围，也不会把余量计入预期条数；分页页数预算不变，重叠会占用部分容量。其他数据源尚未迁移到这套外扩取数流程。

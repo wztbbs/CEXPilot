@@ -21,7 +21,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 
 /**
- * K 线历史序列查询：指定时间范围（TimeSpec）+ 指定粒度，返回逐根 K 线明细。
+ * K 线历史序列查询：指定时间范围（TimeSpec），粒度可省略，返回逐根 K 线明细。
  * 区间统计（开高低收/涨跌幅/成交量/成交额）归 get_market_statistics，本 tool 不输出。
  * 本类只解析参数、调用 KlineQueryService、组装 facts；
  * 分页、时间戳运算和缺口检查都在 service 及其协作组件里。
@@ -48,7 +48,8 @@ public class GetKlinesTool extends AbstractMarketTool {
     protected JsonNode doExecute(JsonNode args, com.cexpilot.runtime.ToolContext ctx) {
         Exchange exchange = parseExchange(args);
         String base = parseBase(args);
-        CandleInterval interval = CandleInterval.parse(args.path("interval").asText("5m"));
+        CandleInterval interval = args.has("interval")
+                ? CandleInterval.parse(args.get("interval").asText()) : null;
         TimeSpec spec = TimeSpecParser.parse(args.get("time"));
         boolean includeUnclosed = args.path("include_unclosed").asBoolean(false);
 
@@ -67,7 +68,8 @@ public class GetKlinesTool extends AbstractMarketTool {
         ObjectNode facts = MAPPER.createObjectNode();
         facts.put("exchange", exchange.displayName());
         facts.put("symbol", base);
-        facts.put("candle_interval", interval.code());
+        facts.put("candle_interval", result.effective().interval().code());
+        facts.put("interval_source", interval == null ? "automatic" : "explicit");
         facts.set("requested_range", SeriesFacts.rangeJson(requested));
         if (!effective.equals(requested)) {
             facts.set("effective_range", SeriesFacts.rangeJson(effective));

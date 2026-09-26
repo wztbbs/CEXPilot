@@ -83,11 +83,13 @@ public final class MarketCalculator {
     /**
      * 区间内已结算费率统计。
      *
+     * @param sum           已结算费率之和（小数形式）；正数表示多头净付费给空头，
+     *                      等于该区间实际资金费现金流（结算时刻全额收付，不按时长分摊）
      * @param mean          均值（小数形式）
      * @param trend         复用 fundingTrend：后半段均值 vs 前半段均值，不足 4 期为 unknown
      * @param periodCount   期数
      */
-    public record FundingStats(BigDecimal mean, BigDecimal min, BigDecimal max,
+    public record FundingStats(BigDecimal mean, BigDecimal sum, BigDecimal min, BigDecimal max,
                                int positiveCount, int negativeCount, int zeroCount,
                                String trend, int periodCount) {
     }
@@ -97,6 +99,7 @@ public final class MarketCalculator {
         if (rates == null || rates.isEmpty()) {
             return null;
         }
+        BigDecimal sum = rates.stream().reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal min = rates.stream().min(BigDecimal::compareTo).orElseThrow();
         BigDecimal max = rates.stream().max(BigDecimal::compareTo).orElseThrow();
         int positive = 0;
@@ -111,7 +114,7 @@ public final class MarketCalculator {
                 zero++;
             }
         }
-        return new FundingStats(avg(rates), min, max, positive, negative, zero,
+        return new FundingStats(avg(rates), sum, min, max, positive, negative, zero,
                 fundingTrend(rates), rates.size());
     }
 

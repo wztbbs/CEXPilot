@@ -20,7 +20,7 @@ description: >
       "end":{"year":null,"month":9,"day":3,"time":null},"end_mode":"inclusive_date|exclusive"}，
      year 可省略（按最近一次该日期消解）；end_mode=inclusive_date 表示包含结束日期整天（仅允许 end.time=null）。
   timezone 均为 IANA 时区（如 Asia/Shanghai），填 null 表示继承请求时区（当前为 UTC+8）。
-  interval 为统计粒度：区间内的开高低收由该粒度的 K 线逐根核对得到，粒度越细最高/最低越精确。
+  interval 仅在用户明确指定 K 线粒度时填写；未指定时省略，由程序自动选择，不得自行猜测粒度。
   区间起止未对齐粒度边界时自动外延覆盖，并以 requested_range/effective_range 标注实际区间。
   返回的 coverage 必须检查：range_complete=true 才表示请求区间被完整覆盖，仅在此时输出 statistics；
   range_complete=false（部分覆盖/缺口/区间终点未到）时不输出 statistics（statistics_omitted 注明原因），不得凭部分数据自行编造区间指标；
@@ -61,8 +61,7 @@ input_schema:
     interval:
       type: string
       enum: [5m, 15m, 1h]
-      default: 5m
-      description: 统计粒度
+      description: 用户明确指定的 K 线粒度；未指定时省略，由程序自动选择
     time:
       type: object
       description: 时间范围（TimeSpec），4 种 type 结构见工具描述，字段严格校验由服务端执行

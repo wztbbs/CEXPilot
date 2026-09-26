@@ -59,7 +59,7 @@ class GetTradeFlowStatisticsToolTest {
             }
 
             @Override
-            public FetchResult fetch(String base, long startMs, long endMs) {
+            public FetchResult fetch(String base, long startMs, long endMs, Instant requestTime) {
                 return new FetchResult(closedGrid(startMs, endMs), abortReason);
             }
         };

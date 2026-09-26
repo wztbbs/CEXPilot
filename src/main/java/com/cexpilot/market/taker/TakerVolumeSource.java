@@ -6,6 +6,7 @@ import com.cexpilot.market.series.SeriesCapability;
 import com.cexpilot.time.TakerInterval;
 
 import java.util.List;
+import java.time.Instant;
 
 /**
  * 交易所官方 taker 成交量统计数据源统一契约。与 K 线、持仓量同源约束：
@@ -24,10 +25,12 @@ public interface TakerVolumeSource {
     SeriesCapability capability();
 
     /**
-     * 拉取周期起点落在 [startMs, endMs) 内的 5m taker 成交量点，按 timestamp 升序去重。
+     * 为计算范围 [startMs, endMs) 拉取 5m taker 成交量点，按周期起点升序去重。
+     * 适配器可外扩并重叠分页，返回值允许包含区间外点；QueryService 过滤后再校验。
+     * requestTime 用于限制取数外扩不超出当前时刻和保留期，不改变计算范围。
      * 因预算或游标异常中止时保留 abortReason。
      */
-    FetchResult fetch(String base, long startMs, long endMs);
+    FetchResult fetch(String base, long startMs, long endMs, Instant requestTime);
 
     record FetchResult(List<TakerVolumePoint> points, String abortReason) {
     }

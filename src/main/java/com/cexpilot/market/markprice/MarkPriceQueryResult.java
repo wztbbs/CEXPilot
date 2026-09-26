@@ -3,6 +3,7 @@ package com.cexpilot.market.markprice;
 import com.cexpilot.market.model.Candle;
 import com.cexpilot.market.series.SeriesCoverage;
 import com.cexpilot.time.TimeRange;
+import com.cexpilot.time.CandleInterval;
 
 import java.util.List;
 
@@ -17,5 +18,6 @@ public record MarkPriceQueryResult(PriceType priceType,
                                    TimeRange requested,
                                    TimeRange effective,
                                    List<Candle> candles,
-                                   SeriesCoverage coverage) {
+                                   SeriesCoverage coverage,
+                                   CandleInterval interval) {
 }

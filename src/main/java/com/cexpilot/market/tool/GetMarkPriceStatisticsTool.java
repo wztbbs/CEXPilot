@@ -47,7 +47,8 @@ public class GetMarkPriceStatisticsTool extends AbstractMarketTool {
         Exchange exchange = parseExchange(args);
         String base = parseBase(args);
         PriceType priceType = PriceType.parse(args.path("price_type").asText("mark"));
-        CandleInterval interval = CandleInterval.parse(args.path("interval").asText("5m"));
+        CandleInterval interval = args.has("interval")
+                ? CandleInterval.parse(args.get("interval").asText()) : null;
         TimeSpec spec = TimeSpecParser.parse(args.get("time"));
         boolean includeUnclosed = args.path("include_unclosed").asBoolean(false);
 
@@ -66,7 +67,8 @@ public class GetMarkPriceStatisticsTool extends AbstractMarketTool {
         facts.put("exchange", exchange.displayName());
         facts.put("symbol", base);
         facts.put("price_type", priceType.code());
-        facts.put("candle_interval", interval.code());
+        facts.put("candle_interval", result.interval().code());
+        facts.put("interval_source", interval == null ? "automatic" : "explicit");
         facts.set("requested_range", SeriesFacts.rangeJson(requested));
         if (!effective.equals(requested)) {
             facts.set("effective_range", SeriesFacts.rangeJson(effective));

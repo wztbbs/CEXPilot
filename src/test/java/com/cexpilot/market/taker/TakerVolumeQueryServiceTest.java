@@ -75,7 +75,7 @@ class TakerVolumeQueryServiceTest {
             }
 
             @Override
-            public FetchResult fetch(String base, long startMs, long endMs) {
+            public FetchResult fetch(String base, long startMs, long endMs, Instant requestTime) {
                 return new FetchResult(points, abortReason);
             }
         };
@@ -95,6 +95,45 @@ class TakerVolumeQueryServiceTest {
         assertEquals(END - FIVE_M_MS, result.points().get(11).timestamp());
         // 请求区间本就对齐 5m 网格：effective 与 requested 相同
         assertEquals(result.requested(), result.effective());
+    }
+
+    @Test
+    void paddingIsRemovedBeforeValidationAndDoesNotChangeCalculationRange() throws Exception {
+        var points = fullGrid(-1);
+        points.add(0, new TakerVolumePoint(START - FIVE_M_MS, BigDecimal.TEN, BigDecimal.TEN));
+        points.add(new TakerVolumePoint(END, BigDecimal.TEN, BigDecimal.TEN));
+        points.add(new TakerVolumePoint(END + FIVE_M_MS, BigDecimal.TEN, BigDecimal.TEN));
+        var result = service(fakeSource(points, null, null)).query(UTC, spec("23", "23"), NOW, Exchange.BINANCE, "BTC");
+        assertTrue(result.coverage().rangeComplete());
+        assertEquals(12, result.coverage().expectedCount());
+        assertEquals(12, result.points().size());
+        assertEquals(fullGrid(-1), result.points());
+        assertEquals(START, result.effective().startInclusive().toEpochMilli());
+        assertEquals(END, result.effective().endExclusive().toEpochMilli());
+        assertTrue(result.coverage().unexpected().isEmpty());
+    }
+
+    @Test
+    void paddingCannotReplaceMissingLastPeriod() throws Exception {
+        var points = fullGrid(11);
+        points.add(0, new TakerVolumePoint(START - FIVE_M_MS, BigDecimal.ONE, BigDecimal.ONE));
+        points.add(new TakerVolumePoint(END, BigDecimal.ONE, BigDecimal.ONE));
+        var result = service(fakeSource(points, null, null)).query(UTC, spec("23", "23"), NOW, Exchange.BINANCE, "BTC");
+        assertFalse(result.coverage().rangeComplete());
+        assertEquals(11, result.points().size());
+        assertEquals(List.of(END - FIVE_M_MS), result.coverage().missing());
+    }
+
+    @Test
+    void inRangeMisalignmentAndDuplicatesStillFailStrictValidation() throws Exception {
+        var points = fullGrid(-1);
+        points.add(new TakerVolumePoint(START + 1, BigDecimal.ONE, BigDecimal.ONE));
+        points.add(points.get(0));
+        var result = service(fakeSource(points, null, null)).query(UTC, spec("23", "23"), NOW, Exchange.BINANCE, "BTC");
+        assertFalse(result.coverage().rangeComplete());
+        assertEquals(List.of(START + 1), result.coverage().unexpected());
+        assertEquals(List.of(START), result.coverage().duplicates());
+        assertTrue(result.coverage().missing().isEmpty());
     }
 
     @Test

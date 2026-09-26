@@ -3,6 +3,7 @@ package com.cexpilot.market.taker;
 import com.cexpilot.market.Exchange;
 import com.cexpilot.market.model.TakerVolumePoint;
 import com.cexpilot.market.series.SeriesCoverageValidator;
+import com.cexpilot.market.series.SeriesRangeFilter;
 import com.cexpilot.market.series.SeriesQueryPolicy;
 import com.cexpilot.market.series.SeriesValidation;
 import com.cexpilot.market.series.TimePoint;
@@ -21,7 +22,7 @@ import java.util.Set;
 
 /**
  * 组织 taker 成交量统计查询流程：消解时间 → 选择数据源 → 查询前检查
- * （5m 固定粒度对齐、预算、保留期）→ 分页拉取 → 覆盖核对。
+ * （5m 固定粒度对齐、预算、保留期）→ 适配器外扩取数 → 精确过滤 → 覆盖核对。
  * 与 K 线、持仓量共用同一套 series 骨架。
  */
 @Service
@@ -57,8 +58,10 @@ public class TakerVolumeQueryService {
 
         TakerVolumeSource.FetchResult fetch = source.fetch(base,
                 effectiveRange.startInclusive().toEpochMilli(),
-                effectiveRange.endExclusive().toEpochMilli());
-        List<TimePoint> points = fetch.points().stream()
+                effectiveRange.endExclusive().toEpochMilli(), requestTime);
+        List<TakerVolumePoint> inRange = SeriesRangeFilter.withinRange(
+                fetch.points(), effectiveRange, TakerVolumePoint::timestamp);
+        List<TimePoint> points = inRange.stream()
                 .map(p -> new TimePoint(p.timestamp()))
                 .toList();
         SeriesValidation validation = SeriesCoverageValidator.validate(
@@ -76,7 +79,7 @@ public class TakerVolumeQueryService {
         for (TimePoint point : validation.points()) {
             acceptedTimes.add(point.ms());
         }
-        List<TakerVolumePoint> accepted = fetch.points().stream()
+        List<TakerVolumePoint> accepted = inRange.stream()
                 .filter(p -> acceptedTimes.contains(p.timestamp()))
                 .toList();
         if (accepted.isEmpty()) {

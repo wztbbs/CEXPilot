@@ -3,6 +3,7 @@ package com.cexpilot.market.markprice;
 import com.cexpilot.market.Exchange;
 import com.cexpilot.market.model.Candle;
 import com.cexpilot.market.series.SeriesCoverageValidator;
+import com.cexpilot.market.series.CandleIntervalSelector;
 import com.cexpilot.market.series.SeriesQueryPolicy;
 import com.cexpilot.market.series.SeriesValidation;
 import com.cexpilot.market.series.TimePoint;
@@ -48,6 +49,7 @@ public class MarkPriceQueryService {
             throw new IllegalArgumentException("交易所暂无标记价格数据源: " + exchange.displayName());
         }
 
+        interval = CandleIntervalSelector.select(interval, range, source.capability());
         TimeRange effective = SeriesQueryPolicy.check(
                 interval, range, source.capability(), exchange.displayName(), requestTime);
 
@@ -77,6 +79,6 @@ public class MarkPriceQueryService {
         if (accepted.isEmpty()) {
             throw new IllegalArgumentException("区间内没有价格数据");
         }
-        return new MarkPriceQueryResult(priceType, range, effective, accepted, validation.coverage());
+        return new MarkPriceQueryResult(priceType, range, effective, accepted, validation.coverage(), interval);
     }
 }

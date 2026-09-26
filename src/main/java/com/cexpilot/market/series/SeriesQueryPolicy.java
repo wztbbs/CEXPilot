@@ -38,6 +38,20 @@ public final class SeriesQueryPolicy {
                             + "请缩短回溯范围或换用支持更长历史的交易所");
         }
 
+        TimeRange effective = align(interval, range);
+        long pointsNeeded = (effective.endExclusive().toEpochMilli()
+                - effective.startInclusive().toEpochMilli()) / interval.duration().toMillis();
+        if (pointsNeeded > capability.budget()) {
+            throw new IllegalArgumentException(
+                    "区间过长：按 " + interval.code() + " 粒度需要 " + pointsNeeded
+                            + " 个数据点，超过单次查询预算 " + capability.budget()
+                            + " 个；请缩短区间或换更粗粒度");
+        }
+        return effective;
+    }
+
+    /** 选择粒度时与正式查询使用同一边界对齐规则，避免低估所需根数。 */
+    public static TimeRange align(SeriesInterval interval, TimeRange range) {
         long intervalMs = interval.duration().toMillis();
         long startMs = range.startInclusive().toEpochMilli();
         long endMs = range.endExclusive().toEpochMilli();
@@ -50,14 +64,6 @@ public final class SeriesQueryPolicy {
                     Instant.ofEpochMilli(alignedEnd), range.timezone());
         }
 
-        long pointsNeeded = (effective.endExclusive().toEpochMilli()
-                - effective.startInclusive().toEpochMilli()) / intervalMs;
-        if (pointsNeeded > capability.budget()) {
-            throw new IllegalArgumentException(
-                    "区间过长：按 " + interval.code() + " 粒度需要 " + pointsNeeded
-                            + " 个数据点，超过单次查询预算 " + capability.budget()
-                            + " 个；请缩短区间或换更粗粒度");
-        }
         return effective;
     }
 }
