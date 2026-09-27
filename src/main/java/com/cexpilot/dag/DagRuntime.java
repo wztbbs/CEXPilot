@@ -81,9 +81,19 @@ public class DagRuntime {
     public ExecutionResult execute(String question, String conversationContext, String traceId,
                                    TraceSink sink, Consumer<String> answerDelta,
                                    RequestContext requestContext) {
+        return execute(question, conversationContext, traceId, sink, answerDelta, requestContext, null);
+    }
+
+    /**
+     * @param progress 非 null 时在阶段边界回调进度文案（SSE 推给前端展示"执行到哪一步"）
+     */
+    public ExecutionResult execute(String question, String conversationContext, String traceId,
+                                   TraceSink sink, Consumer<String> answerDelta,
+                                   RequestContext requestContext, Consumer<String> progress) {
         RequestContext effectiveContext = resolveRequestContext(requestContext);
         ObjectNode timeContext = answerTimeContext(effectiveContext,
                 requestContext != null && requestContext.userZone() != null);
+        emit(progress, "正在生成执行计划…");
         DagPlanner.PlanOutcome outcome = planner.plan(question, conversationContext, traceId, sink);
         int totalPromptTokens = outcome.promptTokens();
         int totalCompletionTokens = outcome.completionTokens();
@@ -122,7 +132,9 @@ public class DagRuntime {
             queryStatus.put("missing", missing.length() <= 200 ? missing : missing.substring(0, 200));
         }
         DagPlan plan = outcome.plan().orElseThrow();
+        emit(progress, "执行计划已生成（" + plan.nodes().size() + " 项查询），正在获取数据…");
         DagExecutor.ExecutionOutcome execution = executor.execute(plan, traceId, sink, effectiveContext);
+        emit(progress, "数据获取完毕，正在组装答案…");
         steps = execution.layers();
         for (PlanNode node : plan.nodes()) {
             ToolResult result = execution.context().get(node.id());
@@ -148,6 +160,12 @@ public class DagRuntime {
 
         return new ExecutionResult(answer.content(), evidence, toolCallCount, steps,
                 totalPromptTokens, totalCompletionTokens, outcome.intent());
+    }
+
+    private static void emit(Consumer<String> progress, String text) {
+        if (progress != null) {
+            progress.accept(text);
+        }
     }
 
     private ChatResponse callAnswerLlm(List<ChatMessage> messages, String traceId, TraceSink sink,

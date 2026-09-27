@@ -61,7 +61,7 @@ public class AskController {
     }
 
     /**
-     * 流式问答（SSE）：meta（会话与 trace 标识）→ delta × N（答案增量）→ done（统计）；
+     * 流式问答（SSE）：meta（会话与 trace 标识）→ progress × N（阶段进度）→ delta × N（答案增量）→ done（统计）；
      * 任何阶段失败都以 error 事件收尾。问答编排在工作线程执行，trace 落库与非流式一致。
      */
     @PostMapping(value = "/ask/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -80,6 +80,11 @@ public class AskController {
                             public void onMeta(String conversationId, String traceId) {
                                 send(emitter, "meta",
                                         Map.of("conversationId", conversationId, "traceId", traceId));
+                            }
+
+                            @Override
+                            public void onProgress(String text) {
+                                send(emitter, "progress", Map.of("text", text));
                             }
 
                             @Override

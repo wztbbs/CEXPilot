@@ -124,6 +124,24 @@
   }
   #send:disabled { opacity: .3; cursor: not-allowed; }
   #send svg { width: 18px; height: 18px; }
+
+  /* ── 执行进度（置灰只读） ─────────────────── */
+  #progress {
+    display: none;
+    width: 100%;
+    background: #efeff0;
+    color: #8a8a8a;
+    border: 1px solid #e4e4e7;
+    border-radius: 12px;
+    font-size: 13px;
+    font-family: inherit;
+    line-height: 1.7;
+    resize: none;
+    outline: none;
+    padding: 10px 14px;
+    margin-bottom: 10px;
+    overflow-y: auto;
+  }
 </style>
 </head>
 <body>
@@ -136,6 +154,7 @@
   <div id="messages"></div>
 
   <div id="input-area">
+    <textarea id="progress" readonly disabled rows="1"></textarea>
     <div id="input-box">
       <textarea id="question" rows="1" placeholder="问点什么，例如：BTC 最近一小时怎么了？"></textarea>
       <button id="send" title="发送" disabled>
@@ -154,9 +173,28 @@
   var messages = document.getElementById('messages');
   var textarea = document.getElementById('question');
   var sendBtn = document.getElementById('send');
+  var progressBox = document.getElementById('progress');
 
   var conversationId = null;
   var pending = false;
+
+  // 执行进度框：请求期间显示在输入框上方，逐行追加阶段文案，结束后隐藏
+  function showProgress() {
+    progressBox.value = '';
+    progressBox.style.height = 'auto';
+    progressBox.style.display = 'block';
+  }
+
+  function appendProgress(text) {
+    progressBox.value += (progressBox.value ? '\n' : '') + text;
+    progressBox.style.height = 'auto';
+    progressBox.style.height = Math.min(progressBox.scrollHeight, 120) + 'px';
+  }
+
+  function hideProgress() {
+    progressBox.style.display = 'none';
+    progressBox.value = '';
+  }
 
   function autoResize() {
     textarea.style.height = 'auto';
@@ -198,6 +236,7 @@
     pending = true;
     textarea.value = '';
     autoResize();
+    showProgress();
 
     addMessage('user', question);
     var loadingEl = addLoading();
@@ -227,15 +266,19 @@
       try { payload = JSON.parse(data); } catch (e) { return; }
       if (name === 'meta') {
         conversationId = payload.conversationId;
+      } else if (name === 'progress') {
+        appendProgress(payload.text);
       } else if (name === 'delta') {
         appendDelta(payload.text);
       } else if (name === 'done') {
+        hideProgress();
         if (!answerDiv) {
           loadingEl.remove();
           answerDiv = addMessage('assistant', '（无回答）');
         }
         appendMeta(answerDiv, payload.toolCalls, payload.durationMs, payload.traceId);
       } else if (name === 'error') {
+        hideProgress();
         loadingEl.remove();
         addMessage('error', payload.error || '请求失败，请稍后再试');
       }
@@ -275,6 +318,7 @@
         return pump(res.body.getReader(), new TextDecoder('utf-8'), '');
       })
       .catch(function (e) {
+        hideProgress();
         loadingEl.remove();
         addMessage('error', e.message || '网络异常，请稍后再试');
       })

@@ -51,9 +51,11 @@ public class AskService {
         this.clock = clock;
     }
 
-    /** 流式问答的事件出口：meta 在建 trace 后触发，delta 为答案增量，done 带完整结果。 */
+    /** 流式问答的事件出口：meta 在建 trace 后触发，progress 为阶段进度，delta 为答案增量，done 带完整结果。 */
     public interface AskStreamListener {
         void onMeta(String conversationId, String traceId);
+
+        void onProgress(String text);
 
         void onDelta(String text);
 
@@ -122,7 +124,8 @@ public class AskService {
             //    本次 Query 写入 conversation_query，成为后续追问的上下文。
             //    intent 归类为 UNKNOWN 的 query 落 unmatched_query，作为能力缺口数据集。
             ExecutionResult result = runtime.execute(question, conversationContext, traceId, traceSink,
-                    listener == null ? null : listener::onDelta, requestContext);
+                    listener == null ? null : listener::onDelta, requestContext,
+                    listener == null ? null : listener::onProgress);
             long durationMs = System.currentTimeMillis() - start;
             double cost = computeCost(result.promptTokens(), result.completionTokens());
 
