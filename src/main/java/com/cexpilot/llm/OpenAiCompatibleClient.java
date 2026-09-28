@@ -94,8 +94,19 @@ public class OpenAiCompatibleClient implements LlmClient {
         return chat(messages, tools, null);
     }
 
+    /**
+     * 无 tools 时内部统一走流式读取（不对外推 delta）：首 chunk 到达时间即 TTFT，
+     * 非流式响应拿不到这个值；带 tools 的请求保留非流式路径（tool_calls 聚合逻辑）。
+     */
     @Override
     public ChatResponse chat(List<ChatMessage> messages, List<ToolSpec> tools, JsonNode responseFormat) {
+        if (tools == null || tools.isEmpty()) {
+            return chatStreaming(messages, null, responseFormat, null);
+        }
+        return chatNonStreaming(messages, tools, responseFormat);
+    }
+
+    private ChatResponse chatNonStreaming(List<ChatMessage> messages, List<ToolSpec> tools, JsonNode responseFormat) {
         ObjectNode body = buildBody(messages, tools, responseFormat);
 
         long start = System.currentTimeMillis();
@@ -159,13 +170,19 @@ public class OpenAiCompatibleClient implements LlmClient {
 
     /**
      * 流式回答（OpenAI SSE）：逐 chunk 回调增量文本，聚合为完整响应返回。
-     * stream_options.include_usage 让最后一个 chunk 携带 token 用量；客户端断开等
+     * stream_options.include_usage 让最后一个 chunk 携带 token 用量（含缓存命中量）；
+     * 首个 data chunk 的到达时间记为 TTFT（prefill 结束点）。客户端断开等
      * 回调异常会向上传播中断读取，由调用方按失败处理。
      */
     @Override
     public ChatResponse chatStream(List<ChatMessage> messages, List<ToolSpec> tools,
                                    Consumer<String> onDelta) {
-        ObjectNode body = buildBody(messages, tools, null);
+        return chatStreaming(messages, tools, null, onDelta);
+    }
+
+    private ChatResponse chatStreaming(List<ChatMessage> messages, List<ToolSpec> tools,
+                                       JsonNode responseFormat, Consumer<String> onDelta) {
+        ObjectNode body = buildBody(messages, tools, responseFormat);
         body.put("stream", true);
         body.putObject("stream_options").put("include_usage", true);
 
@@ -173,7 +190,8 @@ public class OpenAiCompatibleClient implements LlmClient {
         log.info("LLM 流式请求 POST {}/chat/completions model={} 消息数={}",
                 baseUrl, config.getModel(), messages.size());
         StringBuilder content = new StringBuilder();
-        Integer[] tokens = new Integer[2]; // [promptTokens, completionTokens]
+        long[] ttftMs = {-1};
+        Integer[] tokens = new Integer[3]; // [promptTokens, completionTokens, cachedTokens]
         try {
             restClient.post()
                     .uri("/chat/completions")
@@ -195,16 +213,23 @@ public class OpenAiCompatibleClient implements LlmClient {
                                 if (payload.isEmpty() || "[DONE]".equals(payload)) {
                                     continue;
                                 }
+                                if (ttftMs[0] < 0) {
+                                    ttftMs[0] = System.currentTimeMillis() - start;
+                                }
                                 JsonNode chunk = MAPPER.readTree(payload);
                                 JsonNode delta = chunk.path("choices").path(0).path("delta").path("content");
                                 if (delta.isTextual() && !delta.asText().isEmpty()) {
-                                    onDelta.accept(delta.asText());
+                                    if (onDelta != null) {
+                                        onDelta.accept(delta.asText());
+                                    }
                                     content.append(delta.asText());
                                 }
                                 JsonNode usage = chunk.path("usage");
                                 if (usage.isObject() && usage.path("prompt_tokens").isInt()) {
                                     tokens[0] = usage.path("prompt_tokens").asInt();
                                     tokens[1] = usage.path("completion_tokens").asInt();
+                                    JsonNode cached = usage.path("prompt_tokens_details").path("cached_tokens");
+                                    tokens[2] = cached.isInt() ? cached.asInt() : null;
                                 }
                             }
                         }
@@ -220,9 +245,11 @@ public class OpenAiCompatibleClient implements LlmClient {
             throw new LlmException("LLM 流式调用失败: " + e.getMessage(), e);
         }
 
-        log.info("LLM 流式响应 {}ms model={} promptTokens={} completionTokens={}",
-                System.currentTimeMillis() - start, config.getModel(), tokens[0], tokens[1]);
-        return new ChatResponse(content.toString(), List.of(), tokens[0], tokens[1]);
+        log.info("LLM 流式响应 {}ms model={} promptTokens={} completionTokens={} cachedTokens={} ttft={}ms",
+                System.currentTimeMillis() - start, config.getModel(), tokens[0], tokens[1], tokens[2],
+                ttftMs[0] < 0 ? null : ttftMs[0]);
+        return new ChatResponse(content.toString(), List.of(), tokens[0], tokens[1], tokens[2],
+                ttftMs[0] < 0 ? null : ttftMs[0]);
     }
 
     private ObjectNode buildBody(List<ChatMessage> messages, List<ToolSpec> tools, JsonNode responseFormat) {

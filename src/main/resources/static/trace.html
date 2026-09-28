@@ -197,6 +197,7 @@
       + metaItem('intent', trace.intent)
       + metaItem('visitor', trace.visitor_id && String(trace.visitor_id).slice(0, 8) + '…')
       + metaItem('model', trace.model)
+      + metaItem('commit', trace.build_commit)
       + metaItem('耗时', trace.duration_ms != null ? (trace.duration_ms / 1000).toFixed(1) + 's' : null)
       + metaItem('tokens', trace.prompt_tokens != null ? (trace.prompt_tokens + trace.completion_tokens) : null)
       + metaItem('工具调用', trace.tool_calls)
@@ -214,7 +215,10 @@
       var label = plannerCalls.length > 1 ? '第 ' + (i + 1) + ' 次尝试' : '规划输出';
       if (e.error) label += '（调用失败）';
       html += '<details' + (i === plannerCalls.length - 1 ? ' open' : '') + '><summary>' + label
-        + (e.duration_ms != null ? ' · ' + (e.duration_ms / 1000).toFixed(1) + 's' : '') + '</summary>'
+        + (e.duration_ms != null ? ' · ' + (e.duration_ms / 1000).toFixed(1) + 's' : '')
+        + (e.ttft_ms != null ? ' · ttft ' + (e.ttft_ms / 1000).toFixed(1) + 's' : '')
+        + (e.cached_tokens != null ? ' · 缓存 ' + e.cached_tokens + (e.prompt_tokens != null ? '/' + e.prompt_tokens : '') : '')
+        + '</summary>'
         + '<pre class="json">' + esc(typeof envelope === 'string' ? envelope : JSON.stringify(envelope, null, 2)) + '</pre></details>';
     });
     /* 校验失败的 PLAN 记录也展示出来（学习价值最高的一类数据） */

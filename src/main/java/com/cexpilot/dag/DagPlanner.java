@@ -325,12 +325,13 @@ public class DagPlanner {
             sink.record(TraceEvent.llmCall(traceId, TRACE_NAME,
                     eventInput(attempt, messages.size()), rawOutput(response.content()),
                     System.currentTimeMillis() - start,
-                    response.promptTokens(), response.completionTokens(), null));
+                    response.promptTokens(), response.completionTokens(),
+                    response.ttftMs(), response.cachedTokens(), null));
             return response;
         } catch (Exception e) {
             sink.record(TraceEvent.llmCall(traceId, TRACE_NAME,
                     eventInput(attempt, messages.size()), null,
-                    System.currentTimeMillis() - start, null, null, e.getMessage()));
+                    System.currentTimeMillis() - start, null, null, null, null, e.getMessage()));
             throw e;
         }
     }

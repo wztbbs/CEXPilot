@@ -21,12 +21,12 @@ public class TraceRepository {
     }
 
     public void startTrace(String traceId, String conversationId, String question, String model,
-                           String promptVersion, String visitorId) {
+                           String promptVersion, String visitorId, String buildCommit) {
         jdbc.update("""
-                        INSERT INTO ask_trace (trace_id, conversation_id, question, status, model, prompt_version, visitor_id)
-                        VALUES (?, ?, ?, 'RUNNING', ?, ?, ?)
+                        INSERT INTO ask_trace (trace_id, conversation_id, question, status, model, prompt_version, visitor_id, build_commit)
+                        VALUES (?, ?, ?, 'RUNNING', ?, ?, ?, ?)
                         """,
-                traceId, conversationId, question, model, promptVersion, visitorId);
+                traceId, conversationId, question, model, promptVersion, visitorId, buildCommit);
     }
 
     public void finishTrace(String traceId, String status, String answer, int llmSteps, int toolCalls,
@@ -50,12 +50,13 @@ public class TraceRepository {
         jdbc.update("""
                         INSERT INTO trace_event
                             (trace_id, seq, event_type, name, input_json, output_json,
-                             duration_ms, prompt_tokens, completion_tokens, error)
-                        VALUES (?, ?, ?, ?, CAST(? AS JSON), CAST(? AS JSON), ?, ?, ?, ?)
+                             duration_ms, prompt_tokens, completion_tokens, ttft_ms, cached_tokens, error)
+                        VALUES (?, ?, ?, ?, CAST(? AS JSON), CAST(? AS JSON), ?, ?, ?, ?, ?, ?)
                         """,
                 traceId, seq, event.eventType(), event.name(),
                 event.inputJson(), event.outputJson(),
-                event.durationMs(), event.promptTokens(), event.completionTokens(), event.error());
+                event.durationMs(), event.promptTokens(), event.completionTokens(),
+                event.ttftMs(), event.cachedTokens(), event.error());
     }
 
     public Map<String, Object> findTrace(String traceId) {

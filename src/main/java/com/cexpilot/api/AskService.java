@@ -11,6 +11,8 @@ import com.cexpilot.trace.DbTraceSink;
 import com.cexpilot.trace.TraceRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.info.BuildProperties;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -34,6 +36,8 @@ public class AskService {
     private final DbTraceSink traceSink;
     private final LlmConfig llmConfig;
     private final Clock clock;
+    // 构建时打入的 git commit 指纹；IDE 直跑（无 build-info.properties）时为 null
+    private final String buildCommit;
 
     public AskService(ConversationService conversation,
                       DagRuntime runtime,
@@ -41,7 +45,8 @@ public class AskService {
                       TraceRepository traceRepository,
                       DbTraceSink traceSink,
                       LlmConfig llmConfig,
-                      Clock clock) {
+                      Clock clock,
+                      ObjectProvider<BuildProperties> buildProperties) {
         this.conversation = conversation;
         this.runtime = runtime;
         this.unmatchedQueryRepository = unmatchedQueryRepository;
@@ -49,6 +54,8 @@ public class AskService {
         this.traceSink = traceSink;
         this.llmConfig = llmConfig;
         this.clock = clock;
+        BuildProperties props = buildProperties.getIfAvailable();
+        this.buildCommit = props != null ? props.get("commit") : null;
     }
 
     /** 流式问答的事件出口：meta 在建 trace 后触发，progress 为阶段进度，delta 为答案增量，done 带完整结果。 */
@@ -109,10 +116,11 @@ public class AskService {
         // 3. 开启 trace：写入一条 RUNNING 记录。traceId 是本次问答的全局标识——
         //    后续每次 LLM 调用、每次工具调用都会以它为外键落 trace_event，
         //    用户点 👎 后凭它完整回放"当时调了什么工具、拿到了什么数据"。
-        //    同时记录 model 和 promptVersion（prompt 内容的哈希），便于排查答案可复现性。
+        //    同时记录 model、promptVersion（prompt 内容的哈希）和 buildCommit（代码版本指纹），
+        //    便于排查答案可复现性。
         String traceId = UUID.randomUUID().toString();
         traceRepository.startTrace(traceId, resolvedConversationId, question,
-                llmConfig.getNormal().getModel(), runtime.promptVersion(), visitorId);
+                llmConfig.getNormal().getModel(), runtime.promptVersion(), visitorId, buildCommit);
         if (listener != null) {
             listener.onMeta(resolvedConversationId, traceId);
         }

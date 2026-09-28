@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS ask_trace (
     answer            MEDIUMTEXT    NULL,
     model             VARCHAR(64)   NULL,
     prompt_version    VARCHAR(16)   NULL,
+    build_commit      VARCHAR(64)   NULL, -- 构建时打入的 git commit 指纹（定位答案对应的代码版本）
     llm_steps         INT           NOT NULL DEFAULT 0,
     tool_calls        INT           NOT NULL DEFAULT 0,
     prompt_tokens     INT           NULL,
@@ -58,6 +59,8 @@ CREATE TABLE IF NOT EXISTS trace_event (
     duration_ms       BIGINT      NULL,
     prompt_tokens     INT         NULL,
     completion_tokens INT         NULL,
+    ttft_ms           BIGINT      NULL, -- 首 token 时间（prefill 耗时），仅 LLM_CALL 流式路径有值
+    cached_tokens     INT         NULL, -- prompt 缓存命中量，仅 LLM_CALL 有值
     error             TEXT        NULL,
     created_at        DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     KEY idx_event_trace (trace_id, seq)
