@@ -5,6 +5,8 @@ description: >
   不返回逐期明细；需要明细请用 get_funding_rate_history。
   sum 为结算时刻落在区间内的已结算费率直接求和（小数形式），等于该区间实际资金费现金流：
   正数表示多头净付费给空头；资金费在结算时刻全额收付，不按持仓时长分摊。
+  statistics.observation_seconds 是完整查询窗口的秒数（不是首末结算点之差），可与 statistics.sum 一起输入 annualize 做累计费率简单年化；
+  statistics.sum 不代表复合持有期收益率，不可直接复利年化。
   本工具只计算单个交易所、单个币种、单个区间的上述指标，不产出不同查询结果之间的差值、比值、大小比较或排名。
   时间范围用 time 对象表达（必填），4 种结构选其一：
   1) 自然周期，如昨天/上周：{"type":"calendar_period","timezone":null,"unit":"day|week|month|quarter|year","offset":-1,

@@ -115,6 +115,42 @@ mvn clean test   # 单元与配置集成测试，不调用外部 LLM、交易所
 
 配置随应用在启动时加载，修改后需要重新构建并重启，不支持热更新。参数键名须与执行器读取的键一致；修改参数契约时仍需同步执行逻辑。提示词版本包含实际渲染的工具、意图、规划约束和回答模板，便于追踪配置变更。
 
+计算工具与查询工具共用 YAML 注册、DAG 节点和 Trace 链路，目前启用 `avg`、`relative_change`、`annualize`：
+
+| 工具 | `args.input` | 输出 |
+| --- | --- | --- |
+| `avg` | `{kind: "values", values: [a, b, ...]}`，或 `{kind: "field", collection: 对象数组, field: 字段名}`；二维表还需 `columns` 列名数组 | `value`：等权算术平均，`count`：参与元素数，单位沿用输入 |
+| `relative_change` | `{current: 待比较值, baseline: 正数基准}` | `value`：`(current-baseline)/baseline`，`percent`：已乘 100 的百分数值 |
+| `annualize` | `{basis, method, rate, rate_unit, period: {value, unit}, year_days?}`，结构见下文 | `value`：年化比例，`percent`：年化百分数，附输入口径、周期、年基准、公式与假设 |
+
+行情输入用 `{{node.data.字段}}` 引用，并声明 `depends_on`；只允许用户明确提供的常量，不支持自由表达式。比如平均最近 N 期费率，先查 `get_funding_rate_history(count=N)`，再把 `rates` 和 `rates_columns` 引用到 `avg`，选择 `field=rate`。已有统计工具能直接输出的指标仍优先直接查询。
+
+算子接受数值及无单位十进制字符串，使用 BigDecimal，结果按 34 位有效数字 HALF_EVEN 舍入；结果数值以十进制字符串输出，可继续引用。空集合、缺失字段、null、非数值均失败；`relative_change` 拒绝零和负基准。规划期检查嵌套参数并接入现有 repair，执行期在引用解析后重新校验实际值。
+
+DAG 在提取字段前拦截标明区间/样本不完整或省略统计的引用源，失败会沿依赖传播。单位、比较方向和业务口径的语义匹配仍需规划器判断，两个裸数通过校验不代表比较有效；回答阶段不得补算失败结果。计算参数与结果进入 `TOOL_CALL` trace，原始引用保留在 `PLAN` 中。本地测试使用模拟模型与数据，不代表已评估真实模型的规划准确率。
+
+`annualize` 的设计口径：
+
+| 参数 | 含义与约束 |
+| --- | --- |
+| `basis` | 必填：`periodic_rate` 单期费率/收益率外推；`cumulative_rate` 历史窗口费率直接求和；`holding_return` 持有期总收益率 |
+| `method` | 必填：`simple` 简单年化，或 `compound` 复利/几何年化；`cumulative_rate` 只允许 `simple` |
+| `rate` / `rate_unit` | 原始值与单位均必填；`ratio` 的 0.0001 和 `percent` 的 0.01 均表示 0.01%，代码统一换算 |
+| `period` | rate 对应的完整时长，`{value, unit}`；单位为 second/minute/hour/day，1 秒至 365250 天，不接受含义不固定的月份或年份 |
+| `year_days` | 可省略，代码默认 365，亦可显式选 360 或 366；固定日数基准，结果披露来源，不自动推断闰年 |
+
+令 `r` 为换算后的小数比例，`n = year_days * 86400 / period_seconds`，简单年化为 `r*n`，复利年化为 `(1+r)^n-1`。复利使用 [big-math 2.3.2](https://github.com/eobermuhlner/big-math) 的十进制 log/exp，支持非整数 n，并为极小费率保留额外精度；年化对数增长绝对值超过 200 时失败。复利及持有期收益率输入不可小于 -100%，等于 -100% 的复利结果仍为 -100%。
+
+例如用户明确给出“每 8 小时 0.01%，简单年化”，节点参数为：
+
+```json
+{"input":{"basis":"periodic_rate","method":"simple","rate":"0.01","rate_unit":"percent","period":{"value":8,"unit":"hour"}}}
+```
+
+结果 `value="0.1095"`、`percent="10.95"`，默认 365 天。方法、对象或周期不明确时提示词要求先澄清；代码只能拦截缺失/非法参数，无法证明模型填写的口径来自用户原意。资金费率保持原始付费方向，不自动当作多头收益；复利外推需要复投假设，结果不是实际或未来收益承诺。
+
+历史资金费率简单年化引用 `get_funding_rate_statistics.statistics.sum` 与 `statistics.observation_seconds`，后者由代码按完整查询窗口计算，不能用首末结算点之差。历史价格收益年化引用 `get_market_statistics.statistics.change_pct`（`rate_unit=percent`）及其 `statistics.observation_seconds`，后者按实际参与的 K 线窗口计算。当前费率快照未提供可靠对应周期，不能猜 8 小时；明确查询最近一期已结算费率时，可引用 history(count=1) 的费率及结算周期。
+
 第一次调用使用 `prompts/dag_planner.txt`，只规划必要查询。部分可查询时保留可用计划并说明其余缺口；序列和明细由对应工具返回，无需明细保留开关；只需统计指标时优先选择统计工具。近期成交返回 `limit` 范围内实际取得的全部记录（最多 100 笔）。
 
 第二次调用统一使用 `prompts/agent_system.txt`，仅根据 query 和本轮 FACTS 回答。历史只用于消解指代。无计划时直接返回缺口说明或追问，不调用回答模型；查询失败和单侧数据缺失同样需要明确说明。工具返回的完整 evidence 直接作为 FACTS，不再按数组长度裁剪明细。各工具自身的查询预算和返回上限仍然适用。

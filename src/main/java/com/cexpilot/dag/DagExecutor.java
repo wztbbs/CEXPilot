@@ -1,6 +1,7 @@
 package com.cexpilot.dag;
 
 import com.cexpilot.config.DagConfig;
+import com.cexpilot.calculation.CalculationTool;
 import com.cexpilot.runtime.AgentTool;
 import com.cexpilot.runtime.RequestContext;
 import com.cexpilot.runtime.ToolContext;
@@ -106,8 +107,14 @@ public class DagExecutor {
         JsonNode resolvedArgs = null;
         ToolResult result;
         try {
-            resolvedArgs = registry.prepareArguments(node.tool(), ReferenceResolver.resolve(node.args(), ctx));
             AgentTool tool = registry.get(node.tool());
+            if (tool instanceof CalculationTool calculation) {
+                for (ReferenceResolver.Ref ref : ReferenceResolver.findRefs(node.args())) {
+                    ToolResult source = ctx.get(ref.nodeId());
+                    if (source != null && source.ok()) calculation.validateSource(source.data());
+                }
+            }
+            resolvedArgs = registry.prepareArguments(node.tool(), ReferenceResolver.resolve(node.args(), ctx));
             result = tool.execute(resolvedArgs, new ToolContext(traceId, null,
                     requestContext == null ? null : requestContext.userZone(),
                     requestContext == null ? null : requestContext.requestTime()));

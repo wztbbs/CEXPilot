@@ -88,6 +88,9 @@ public class GetMarketStatisticsTool extends AbstractMarketTool {
                 node.put("quote_volume", stats.quoteVolume());
             }
             node.put("candle_count", stats.candleCount());
+            // change_pct 对应实际参与计算的 K 线窗口，不能拿请求窗口长度来折算。
+            node.put("observation_seconds", java.math.BigDecimal.valueOf(
+                    result.coverage().coveredUntilMs() - candles.get(0).openTime(), 3));
             ObjectNode actualRange = node.putObject("actual_range");
             actualRange.put("start_inclusive", Times.readable(candles.get(0).openTime(), zone));
             actualRange.put("end_exclusive",

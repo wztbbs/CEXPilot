@@ -1,6 +1,7 @@
 package com.cexpilot.dag;
 
 import com.cexpilot.config.DagConfig;
+import com.cexpilot.calculation.CalculationTool;
 import com.cexpilot.runtime.ToolRegistry;
 import com.cexpilot.runtime.ToolArguments;
 import org.springframework.stereotype.Component;
@@ -97,6 +98,13 @@ public class PlanValidator {
         if (spec == null) return;
         for (String error : ToolArguments.validate(node.args(), spec.inputSchema(), true)) {
             errors.add(node.id() + " 工具 " + node.tool() + ": " + error);
+        }
+        if (registry.get(node.tool()) instanceof CalculationTool calculation) {
+            try {
+                calculation.validateArguments(node.args(), true);
+            } catch (IllegalArgumentException e) {
+                errors.add(node.id() + " 工具 " + node.tool() + ": " + e.getMessage());
+            }
         }
     }
 

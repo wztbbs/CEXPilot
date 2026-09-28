@@ -1,6 +1,8 @@
 name: get_market_statistics
 enabled: true
 description: >
+  statistics.observation_seconds 是实际参与统计的 K 线窗口秒数；区间涨跌幅 statistics.change_pct 的单位为 percent，
+  可与此时长一起输入 annualize（basis=holding_return），不要按请求窗口估算时长。
   查询指定时间范围的区间统计：区间开盘价、收盘价、最高价、最低价、涨跌幅、成交量合计和成交额合计（USDT）。
   不返回逐根 K 线明细；需要明细请用 get_klines。
   本工具只计算单个交易所、单个币种、单个区间的上述指标，不产出不同查询结果之间的差值、比值、大小比较或排名。

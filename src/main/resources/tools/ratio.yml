@@ -1,0 +1,25 @@
+name: ratio
+enabled: true
+description: >
+  计算 left 除以 right 的倍数或占比，公式固定为 left / right，right 是分母。
+  input 结构为 {"left":"{{n1.data.statistics.quote_volume}}","right":"{{n2.data.statistics.quote_volume}}"}，两项必填。
+  "A 是 B 的几倍"绑定 left=A、right=B；"部分占总体的比例"绑定 left=部分、right=总体。
+  输入允许 JSON number 或无单位的十进制字符串（包括科学计数法），不接受百分号、千位分隔符、表达式、布尔值、null、对象或数组。
+  right 必须大于 0；零或负分母均失败，不能取绝对值、交换输入或改公式绕过；left 可以为零或负数（负比值按实陈述，不解释为倍数）。
+  输出 left、right 回显实际数值；value 是小数比例，value_unit=ratio；percent 是已乘 100 的百分数值，展示占比时直接引用 percent 加百分号。
+  例如 left=300、right=100 时 value="3"、percent="300"，即 left 是 right 的 3 倍；不能把 value=3 说成 3%，也不能把 percent 再乘 100。
+  value、percent、left、right 都是十进制字符串，可被后续计算节点引用；formula=left / right。
+  使用 BigDecimal，除法按 34 位有效数字 HALF_EVEN 舍入；单值最多 100 位有效数字，scale 绝对值不超过 1000。
+  适用示例：币安昨天成交额是 OKX 的几倍（时间窗口和单位一致）；某币种成交额占两所合计的比例（left=单所成交额，right=sum 算子的合计输出）。
+  不适用：相对增减百分比（用 relative_change）、绝对差值（用 difference）、大小判断（用 compare）、加权平均或排名。
+  输入必须使用同单位、同指标定义及可比窗口；占比的分母必须确为同一总体的完整合计，代码不会仅凭两个裸数证明业务口径相同。
+  行情值必须引用本轮查询结果，只有用户明确提供的数值可写常量；所有引用必须声明 depends_on。
+  DAG 会拒绝标明 coverage.range_complete=false、sample_complete=false、complete=false 或 statistics_omitted 的引用源。
+input_schema:
+  type: object
+  additionalProperties: false
+  required: [input]
+  properties:
+    input:
+      type: object
+      description: 必填 left（分子）和 right（大于零的分母）；value=left/right，percent 已乘 100

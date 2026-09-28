@@ -1,0 +1,29 @@
+name: avg
+enabled: true
+description: >
+  计算一个非空数值集合的等权算术平均值，每个元素权重相同。可以平均两个或多个查询结果，或计算序列中指定字段的样本均值。
+  input 恰好使用以下一种结构：
+  1) 数值集合：{"kind":"values","values":["{{n1.data.value}}","{{n2.data.value}}"]}；两个数 a、b 就写 values=[a,b]，
+     也可以把 values 整体引用为上游数值数组。
+  2) 对象集合：{"kind":"field","collection":"{{n1.data.items}}","field":"price"}；field 是直接字段名，不支持嵌套路径。
+  3) 表格列：{"kind":"field","collection":"{{n1.data.rates}}","columns":"{{n1.data.rates_columns}}","field":"rate"}；
+     现有历史工具多返回二维数组及对应 *_columns，必须同时引用列名数组，按真实列名选择，不能猜下标或把整行当数字。
+  数值允许 JSON number 或无单位的十进制字符串（包括科学计数法）；不接受百分号、千位分隔符、算术表达式、布尔值或 null。
+  输出 value 为十进制字符串、count 为实际参与元素数、method=equal_weight_arithmetic_mean；value 与输入同单位、同比例口径。
+  使用 BigDecimal 求和，仅最终除法按 34 位有效数字 HALF_EVEN 舍入。集合最多 10000 项；单值最多 100 位有效数字，scale 绝对值不超过 1000。
+  空集合、字段缺失、null、非数值、重复列名、表格行列长度不符都失败，不跳过元素、不填零、不展开嵌套集合。
+  适用示例：两所 BTC 同期成交额的等权均值；最近 10 期已结算资金费率的每期均值（history count=10 → avg 表格 rate 列）；
+  最近 50 笔成交价的逐笔等权均值（recent_trades → price_usdt 列）。已有统计工具能直接给出所需均值时优先直接使用。
+  不适用：成交量加权均价、按时间加权平均、两组样本合并均值（除非每组原始样本数相同）、年化。
+  只能对用户指定且口径可比的数据计算；不混合单位，不把两个均值的等权平均冒充原始样本总体平均。
+  行情值必须引用本轮查询结果，不能抄写、猜测或预先计算；只有用户明确提供的数值可以写常量，所有引用必须声明 depends_on。
+  DAG 会拒绝标明 coverage.range_complete=false、sample_complete=false、complete=false 或 statistics_omitted 的引用源；
+  不得为了绕过完整性检查把不完整来源改写为常量。输出只是所选集合的均值，不会自动确认用户意图或全部业务口径。
+input_schema:
+  type: object
+  additionalProperties: false
+  required: [input]
+  properties:
+    input:
+      type: object
+      description: 输入选择对象，kind=values 或 field；完整结构和边界见工具描述，嵌套结构由算子严格校验

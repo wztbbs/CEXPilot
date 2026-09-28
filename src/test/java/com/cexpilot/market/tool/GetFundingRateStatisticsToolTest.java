@@ -101,6 +101,8 @@ class GetFundingRateStatisticsToolTest {
         assertEquals(1, stats.path("negative_count").asInt());
         assertEquals(0, stats.path("zero_count").asInt());
         assertEquals(3, stats.path("period_count").asInt());
+        // 全日长度是24小时，不是首末结算点的16小时。
+        assertEquals(86400, stats.path("observation_seconds").asLong());
         assertEquals("2026-09-23 00:00:00", stats.path("actual_range").path("start_inclusive").asText());
         assertEquals("2026-09-23 16:00:00", stats.path("actual_range").path("end_inclusive").asText());
     }

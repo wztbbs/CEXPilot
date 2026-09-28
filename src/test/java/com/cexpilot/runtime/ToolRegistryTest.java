@@ -176,6 +176,11 @@ class ToolRegistryTest {
                 new GetOrderbookTool(market), new GetRecentTradesTool(market),
                 new GetTradeHistoryTool(market, mock(com.cexpilot.market.trade.TradeQueryService.class)),
                 new GetTradeFlowStatisticsTool(market, mock(com.cexpilot.market.taker.TakerVolumeQueryService.class)),
+                new com.cexpilot.calculation.AvgTool(), new com.cexpilot.calculation.RelativeChangeTool(),
+                new com.cexpilot.calculation.AnnualizeTool(), new com.cexpilot.calculation.CompareTool(),
+                new com.cexpilot.calculation.DifferenceTool(), new com.cexpilot.calculation.RatioTool(),
+                new com.cexpilot.calculation.SumTool(), new com.cexpilot.calculation.MinTool(),
+                new com.cexpilot.calculation.MaxTool(),
                 new GetTransactionTool(mock(TxAnalysisService.class)));
         try (var context = new AnnotationConfigApplicationContext()) {
             for (AgentTool executor : executors) {
@@ -184,7 +189,7 @@ class ToolRegistryTest {
             context.register(ToolRegistry.class);
             context.refresh();
             ToolRegistry registry = context.getBean(ToolRegistry.class);
-            assertEquals(17, registry.size());
+            assertEquals(26, registry.size());
             assertEquals("binance", registry.prepareArguments("get_ticker", MAPPER.createObjectNode().put("symbol", "BTC")).path("exchange").asText());
             assertThrows(IllegalArgumentException.class, () -> registry.prepareArguments("get_transaction", MAPPER.createObjectNode().put("tx_hash", "0xabc")));
             assertDoesNotThrow(() -> registry.prepareArguments("get_transaction", MAPPER.createObjectNode().put("tx_hash", "0x" + "a".repeat(64))));

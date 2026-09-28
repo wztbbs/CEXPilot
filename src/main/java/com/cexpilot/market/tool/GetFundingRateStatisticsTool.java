@@ -15,6 +15,7 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.Duration;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -77,6 +78,9 @@ public class GetFundingRateStatisticsTool extends AbstractMarketTool {
             node.put("trend_method", "按实际取得的" + stats.periodCount()
                     + "期后半段均值 vs 前半段均值，差值小于 0.005% 判为 flat；不足 4 期为 unknown");
             node.put("period_count", stats.periodCount());
+            // sum 属于完整查询窗口，而不是首末两个结算点之间（后者少一个周期）。
+            node.put("observation_seconds", BigDecimal.valueOf(Duration.between(
+                    result.range().startInclusive(), result.range().endExclusive()).toMillis(), 3));
             ObjectNode actualRange = node.putObject("actual_range");
             actualRange.put("start_inclusive",
                     Times.readable(result.points().get(0).fundingTime(), zone));

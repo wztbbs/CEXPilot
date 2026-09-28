@@ -105,10 +105,23 @@ class GetMarketStatisticsToolTest {
         assertEquals("120", stats.path("volume").asText());
         assertEquals("12000", stats.path("quote_volume").asText());
         assertEquals(12, stats.path("candle_count").asInt());
+        assertEquals(3600, stats.path("observation_seconds").asLong());
         assertEquals("2026-09-23 02:00:00", stats.path("actual_range").path("start_inclusive").asText());
         assertEquals("2026-09-23 03:00:00", stats.path("actual_range").path("end_exclusive").asText());
         // 不返回 K 线明细
         assertTrue(facts.path("candles").isMissingNode());
+    }
+
+    @Test
+    void observationDurationUsesAlignedCandlesRatherThanRequestedMinutes() {
+        ToolResult result = tool(source(false)).execute(args(
+                "{\"type\":\"relative_day_range\",\"timezone\":\"UTC\","
+                        + "\"start\":{\"day_offset\":-1,\"time\":\"02:02:00\"},"
+                        + "\"end\":{\"day_offset\":-1,\"time\":\"02:58:00\"}}"), ctx());
+        assertTrue(result.ok(), result::error);
+        assertEquals(3600, result.data().at("/statistics/observation_seconds").asLong());
+        assertEquals("2026-09-23 02:00:00", result.data().at("/statistics/actual_range/start_inclusive").asText());
+        assertEquals("2026-09-23 03:00:00", result.data().at("/statistics/actual_range/end_exclusive").asText());
     }
 
     @Test
