@@ -2,7 +2,7 @@ name: difference
 enabled: true
 description: >
   计算两个十进制数值的带符号差值 left - right，结果与输入同单位、同口径。
-  input 结构为 {"left":"{{n1.data.ticker.price_usdt}}","right":"{{n2.data.ticker.price_usdt}}"}，left、right 两项必填。
+  input 示例（n1、n2 均为 get_ticker）为 {"left":"{{n1.data.last_price}}","right":"{{n2.data.last_price}}"}，left、right 两项必填。
   "A 比 B 高/多多少"绑定 left=A、right=B；value 为正表示 left 更高，为负表示 left 更低，不取绝对值、不交换顺序。
   输入允许 JSON number 或无单位的十进制字符串（包括科学计数法），不接受百分号、千位分隔符、表达式、布尔值、null、对象或数组；left、right 均可为零或负数。
   输入为 percent 口径时（如两个 statistics.change_pct 或 relative_change 的 percent 输出），value 即相差的百分点数，不是百分比变化率。
@@ -21,3 +21,14 @@ input_schema:
     input:
       type: object
       description: 必填 left（被减数）和 right（减数）；value=left-right 带符号，不支持自定义公式
+
+# ToolResult.data 的字段结构；条件字段允许缺失，实际可用性在执行时检查。
+output_schema:
+  type: "object"
+  additionalProperties: false
+  properties:
+    left: {"type": "string"}
+    right: {"type": "string"}
+    value: {"type": "string", "description": "带符号差值；输入同单位"}
+    value_unit: {"type": "string"}
+    formula: {"type": "string"}

@@ -39,7 +39,8 @@ public final class ToolDefinitionLoader {
                         throw new IllegalArgumentException("必须配置 name、description 和布尔型 enabled");
                     }
                     definitions.add(new ToolDefinition(name, enabled, description.trim(),
-                            MAPPER.valueToTree(doc.get("input_schema"))));
+                            MAPPER.valueToTree(doc.get("input_schema")),
+                            MAPPER.valueToTree(doc.get("output_schema"))));
                 } catch (Exception e) {
                     throw new IllegalStateException("工具配置错误 " + resource.getDescription() + ": " + e.getMessage(), e);
                 }

@@ -107,6 +107,7 @@ mvn clean test   # 单元与配置集成测试，不调用外部 LLM、交易所
 | tool `enabled` | 控制注册与可执行性；false 时不暴露、不执行 | 不直接传入 |
 | tool `description` | 简短能力及关键限制 | 是 |
 | tool `input_schema` | 参数校验及默认值补齐 | 以精简参数说明传入；相同参数定义合并 |
+| tool `output_schema` | `ToolResult.data` 的输出字段契约；规划期引用路径校验 | 以紧凑层级结构传入，含类型、含义及固定列位置 |
 | tool `capabilities` / `limitations` / `scope` | 维护文档；需要模型知道的限制须写入 description | 否 |
 | intent `name` / `description` | 意图归类，仅用于统计 | 是 |
 | intent 其余字段 | 文档参考，不限制工具调用或控制回答策略 | 否 |
@@ -114,6 +115,10 @@ mvn clean test   # 单元与配置集成测试，不调用外部 LLM、交易所
 `input_schema` 当前支持扁平对象：`type`、`properties`、`required`、`additionalProperties`，以及参数的 `type`（string/integer/number/boolean）、`description`、`enum`、`default`、`minimum`、`maximum`、`pattern`。不支持的 schema 字段或无效默认值会在启动时失败，避免配置被静默忽略。规划时校验具体参数；执行时在上游引用解析后再次校验并补齐默认值。默认值只补缺省字段，不替换显式 null。
 
 配置随应用在启动时加载，修改后需要重新构建并重启，不支持热更新。参数键名须与执行器读取的键一致；修改参数契约时仍需同步执行逻辑。提示词版本包含实际渲染的工具、意图、规划约束和回答模板，便于追踪配置变更。
+
+`output_schema` 使用 JSON Schema 结构子集：`type`、`description`、`properties`、`additionalProperties`、`items`、`prefixItems`。对象显式列出字段并设置 `additionalProperties: false`；数组用 `items` 描述元素，二维表的固定列用 `prefixItems` + `items: false` 描述。契约根对应 `data`，例如 `get_ticker` 的价格引用是 `{{n1.data.last_price}}`；资金费率表第二列引用为 `{{n1.data.rates.0.1}}`。新增或修改工具返回字段时须同步更新契约。
+
+Planner 与 PlanValidator 共用这份契约：错误字段、错误层级、数组列越界在工具执行前报出并进入现有规划修复重试。该校验不判断业务口径或计划是否足以回答问题，也不要求声明最终回答结果。契约列出条件字段的并集，不保证每次都存在或非 null；数组实际行数、覆盖完整性和数据可用性仍在运行时检查。无 `type` 的节点表示形状随输入变化（如 `min/max.item`），其内部路径留给运行时解析，避免误拦合法引用。
 
 计算工具与查询工具共用 YAML 注册、DAG 节点和 Trace 链路，目前启用 `avg`、`relative_change`、`annualize`：
 

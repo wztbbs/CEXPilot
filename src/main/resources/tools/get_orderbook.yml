@@ -41,3 +41,52 @@ input_schema:
       minimum: 5
       maximum: 50
       description: 请求盘口档位数
+
+# ToolResult.data 的字段结构；条件字段允许缺失，实际可用性在执行时检查。
+output_schema:
+  type: "object"
+  additionalProperties: false
+  properties:
+    exchange: {"type": "string"}
+    symbol: {"type": "string"}
+    depth: {"type": "integer"}
+    requested_depth: {"type": "integer"}
+    bid_levels: {"type": "integer"}
+    ask_levels: {"type": "integer"}
+    as_of_utc8: {"type": "string"}
+    quantity_unit: {"type": "string"}
+    best_bid: {"type": "number"}
+    best_ask: {"type": "number"}
+    spread: {"type": "number"}
+    imbalance_top1: {"type": "number", "description": "仅对应实际档数的字段存在"}
+    imbalance_top2: {"type": "number", "description": "仅对应实际档数的字段存在"}
+    imbalance_top3: {"type": "number", "description": "仅对应实际档数的字段存在"}
+    imbalance_top4: {"type": "number", "description": "仅对应实际档数的字段存在"}
+    imbalance_top5: {"type": "number", "description": "仅对应实际档数的字段存在"}
+    imbalance_top6: {"type": "number", "description": "仅对应实际档数的字段存在"}
+    imbalance_top7: {"type": "number", "description": "仅对应实际档数的字段存在"}
+    imbalance_top8: {"type": "number", "description": "仅对应实际档数的字段存在"}
+    imbalance_top9: {"type": "number", "description": "仅对应实际档数的字段存在"}
+    imbalance_top10: {"type": "number", "description": "仅对应实际档数的字段存在"}
+    bids_columns:
+      type: "array"
+      items: {"type": "string"}
+    asks_columns:
+      type: "array"
+      items: {"type": "string"}
+    bids:
+      type: "array"
+      items:
+        type: "array"
+        prefixItems:
+          - {"type": "number", "description": "price_usdt"}
+          - {"type": "number", "description": "数量，单位见 quantity_unit"}
+        items: false
+    asks:
+      type: "array"
+      items:
+        type: "array"
+        prefixItems:
+          - {"type": "number", "description": "price_usdt"}
+          - {"type": "number", "description": "数量，单位见 quantity_unit"}
+        items: false

@@ -37,6 +37,11 @@ class ToolRegistryTest {
             description: YAML中的新描述
             capabilities: [仅供文档的内容]
             limitations: [不会自动注入的限制]
+            output_schema:
+              type: object
+              additionalProperties: false
+              properties:
+                price: {type: number, description: 最新价格}
             input_schema:
               type: object
               additionalProperties: false
@@ -89,6 +94,7 @@ class ToolRegistryTest {
         assertTrue(prompt.contains("sample：YAML中的新描述"));
         assertTrue(prompt.contains("default=binance"));
         assertTrue(prompt.contains("minimum=1, maximum=5"));
+        assertTrue(prompt.contains("输出 data 字段：{price:number(最新价格)}"));
         assertFalse(prompt.contains("仅供文档的内容"));
         assertFalse(prompt.contains("不会自动注入的限制"));
 
@@ -134,6 +140,8 @@ class ToolRegistryTest {
                 YAML.replace("default: 3", "default: 9"),
                 YAML.replace("required: [symbol]", "required: [unknown]"),
                 YAML.replace("type: integer", "type: imaginary"),
+                YAML.replace("output_schema:", "ignored_output_schema:"),
+                YAML.replace("price: {type: number, description: 最新价格}", "price: {type: imaginary}"),
                 YAML.replace("enabled: true", "enabled: maybe"),
                 YAML.replace("minimum: 1", "minimum: 1, unsupported: true"),
                 YAML + "enabled: false\n")) {

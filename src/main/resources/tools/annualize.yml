@@ -42,3 +42,24 @@ input_schema:
     input:
       type: object
       description: basis、method、rate、rate_unit、period 必填，year_days 可选；方法和口径无默认值，结构见描述
+
+# ToolResult.data 的字段结构；条件字段允许缺失，实际可用性在执行时检查。
+output_schema:
+  type: "object"
+  additionalProperties: false
+  properties:
+    value: {"type": "string", "description": "ratio 年化值"}
+    percent: {"type": "string", "description": "percent 年化值"}
+    value_unit: {"type": "string"}
+    basis: {"type": "string"}
+    method: {"type": "string"}
+    input_rate: {"type": "string"}
+    input_rate_unit: {"type": "string"}
+    rate_ratio: {"type": "string"}
+    period_seconds: {"type": "string"}
+    year_days_source: {"type": "string"}
+    annual_factor: {"type": "string"}
+    formula: {"type": "string"}
+    interpretation: {"type": "string"}
+    assumption: {"type": "string"}
+    year_days: {"type": "integer"}

@@ -2,7 +2,7 @@ name: ratio
 enabled: true
 description: >
   计算 left 除以 right 的倍数或占比，公式固定为 left / right，right 是分母。
-  input 结构为 {"left":"{{n1.data.statistics.quote_volume}}","right":"{{n2.data.statistics.quote_volume}}"}，两项必填。
+  input 示例（n1、n2 均为 get_market_statistics）为 {"left":"{{n1.data.statistics.quote_volume}}","right":"{{n2.data.statistics.quote_volume}}"}，两项必填。
   "A 是 B 的几倍"绑定 left=A、right=B；"部分占总体的比例"绑定 left=部分、right=总体。
   输入允许 JSON number 或无单位的十进制字符串（包括科学计数法），不接受百分号、千位分隔符、表达式、布尔值、null、对象或数组。
   right 必须大于 0；零或负分母均失败，不能取绝对值、交换输入或改公式绕过；left 可以为零或负数（负比值按实陈述，不解释为倍数）。
@@ -23,3 +23,15 @@ input_schema:
     input:
       type: object
       description: 必填 left（分子）和 right（大于零的分母）；value=left/right，percent 已乘 100
+
+# ToolResult.data 的字段结构；条件字段允许缺失，实际可用性在执行时检查。
+output_schema:
+  type: "object"
+  additionalProperties: false
+  properties:
+    left: {"type": "string"}
+    right: {"type": "string"}
+    value: {"type": "string", "description": "ratio 倍数"}
+    value_unit: {"type": "string"}
+    formula: {"type": "string"}
+    percent: {"type": "string", "description": "percent"}

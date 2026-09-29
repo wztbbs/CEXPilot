@@ -48,3 +48,81 @@ input_schema:
       type: string
       pattern: '^0x[0-9a-fA-F]{64}$'
       description: 完整以太坊交易哈希（0x加64位十六进制）
+
+# ToolResult.data 的字段结构；条件字段允许缺失，实际可用性在执行时检查。
+output_schema:
+  type: "object"
+  additionalProperties: false
+  properties:
+    tx_hash: {"type": "string"}
+    from: {"type": "string"}
+    to: {"type": "string"}
+    value_wei: {"type": "string"}
+    value_eth: {"type": "string"}
+    status: {"type": "string"}
+    note: {"type": "string"}
+    status_note: {"type": "string"}
+    execution_fee_wei: {"type": "string"}
+    execution_fee_eth: {"type": "string"}
+    blob_fee_wei: {"type": "string"}
+    blob_fee_eth: {"type": "string"}
+    total_fee_wei: {"type": "string"}
+    total_fee_eth: {"type": "string"}
+    failure_note: {"type": "string"}
+    created_contract_address: {"type": "string"}
+    value_eth_status: {"type": "string"}
+    fund_flow_coverage: {"type": "string"}
+    fund_flow_note: {"type": "string"}
+    token_metadata_as_of: {"type": "string"}
+    block_number: {"type": "integer"}
+    gas_used: {"type": "integer"}
+    event_count: {"type": "integer"}
+    events:
+      type: "array"
+      items:
+        type: "object"
+        additionalProperties: false
+        properties:
+          type: {"type": "string"}
+          contract: {"type": "string"}
+          from: {"type": "string"}
+          to: {"type": "string"}
+          token_symbol: {"type": "string"}
+          amount_raw: {"type": "string"}
+          amount: {"type": "string"}
+          amount_unit: {"type": "string"}
+          metadata_status: {"type": "string"}
+          interpretation: {"type": "string"}
+          log_index: {"type": "integer"}
+          token_decimals: {"type": "integer"}
+    fund_flow:
+      type: "array"
+      items:
+        type: "object"
+        additionalProperties: false
+        properties:
+          token: {"type": "string"}
+          token_address: {"type": "string"}
+          from: {"type": "string"}
+          to: {"type": "string"}
+          amount_raw: {"type": "string"}
+          amount: {"type": "string"}
+          amount_unit: {"type": "string"}
+          amount_wei: {"type": "string"}
+          execution_status: {"type": "string"}
+          log_index: {"type": "integer"}
+    approvals:
+      type: "array"
+      items:
+        type: "object"
+        additionalProperties: false
+        properties:
+          token: {"type": "string"}
+          token_address: {"type": "string"}
+          owner: {"type": "string"}
+          spender: {"type": "string"}
+          amount: {"type": "string"}
+          amount_raw: {"type": "string"}
+          amount_unit: {"type": "string"}
+          risk_note: {"type": "string"}
+          log_index: {"type": "integer"}

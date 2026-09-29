@@ -34,3 +34,29 @@ input_schema:
     symbol:
       type: string
       description: 基础币代码，如 BTC / ETH
+
+# ToolResult.data 的字段结构；条件字段允许缺失，实际可用性在执行时检查。
+output_schema:
+  type: "object"
+  additionalProperties: false
+  properties:
+    exchange: {"type": "string"}
+    symbol: {"type": "string"}
+    current_funding_rate: {"type": "number", "description": "ratio；0.0001=0.01%；可能缺失"}
+    current_funding_rate_pct: {"type": "number", "description": "percent"}
+    current_rate_kind: {"type": "string", "description": "settled 或 predicted，比较前确认口径"}
+    data_status: {"type": "string"}
+    current_rate_settlement_time_utc8: {"type": "string"}
+    next_funding_time_utc8: {"type": "string"}
+    following_funding_time_utc8: {"type": "string"}
+    snapshot_time_utc8: {"type": "string"}
+    units:
+      type: "object"
+      additionalProperties: false
+      properties:
+        current_funding_rate: {"type": "string"}
+        current_funding_rate_pct: {"type": "string"}
+        current_rate_settlement_time_utc8: {"type": "string"}
+        next_funding_time_utc8: {"type": "string"}
+        following_funding_time_utc8: {"type": "string"}
+        snapshot_time_utc8: {"type": "string"}

@@ -3,10 +3,10 @@ enabled: true
 description: >
   对一个非空数值集合精确求和。可以合计两个或多个查询结果，或对序列中指定字段求累计。
   input 恰好使用以下一种结构：
-  1) 数值集合：{"kind":"values","values":["{{n1.data.value}}","{{n2.data.value}}"]}；两个数 a、b 就写 values=[a,b]，
+  1) 数值集合（n1、n2 均为 get_ticker）：{"kind":"values","values":["{{n1.data.last_price}}","{{n2.data.last_price}}"]}；两个数 a、b 就写 values=[a,b]，
      也可以把 values 整体引用为上游数值数组。
-  2) 对象集合：{"kind":"field","collection":"{{n1.data.items}}","field":"price"}；field 是直接字段名，不支持嵌套路径。
-  3) 表格列：{"kind":"field","collection":"{{n1.data.rates}}","columns":"{{n1.data.rates_columns}}","field":"rate"}；
+  2) 对象集合（用户给定数值示例）：{"kind":"field","collection":[{"price":10},{"price":20}],"field":"price"}；field 是直接字段名，不支持嵌套路径。行情 collection 必须引用上游契约中的真实数组字段。
+  3) 表格列（n1 为 get_funding_rate_history）：{"kind":"field","collection":"{{n1.data.rates}}","columns":"{{n1.data.rates_columns}}","field":"rate"}；
      现有历史工具多返回二维数组及对应 *_columns，必须同时引用列名数组，按真实列名选择，不能猜下标或把整行当数字。
   数值允许 JSON number 或无单位的十进制字符串（包括科学计数法）；不接受百分号、千位分隔符、算术表达式、布尔值或 null。
   输出 value 为十进制字符串、count 为实际参与元素数、method=arithmetic_sum；value 与输入同单位、同比例口径。
@@ -28,3 +28,12 @@ input_schema:
     input:
       type: object
       description: 输入选择对象，kind=values 或 field；完整结构和边界见工具描述，嵌套结构由算子严格校验
+
+# ToolResult.data 的字段结构；条件字段允许缺失，实际可用性在执行时检查。
+output_schema:
+  type: "object"
+  additionalProperties: false
+  properties:
+    value: {"type": "string", "description": "十进制结果，单位沿用输入"}
+    count: {"type": "integer"}
+    method: {"type": "string"}

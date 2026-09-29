@@ -79,6 +79,7 @@ class GetFundingRateHistoryToolTest {
                     + "\"segment\":\"full\",\"extent\":\"full_period\"}}");
             ToolResult result = tool().execute(args, ctx());
             assertTrue(result.ok(), () -> String.valueOf(result.error()));
+            com.cexpilot.runtime.OutputContractAssertions.assertKnownPaths("get_funding_rate_history", result.data());
             JsonNode facts = result.data();
             assertEquals("time_range", facts.path("mode").asText());
             assertEquals(8, facts.path("funding_interval_hours").asInt());
@@ -98,6 +99,7 @@ class GetFundingRateHistoryToolTest {
                     "{\"exchange\":\"binance\",\"symbol\":\"BTC\",\"count\":5}");
             ToolResult result = tool().execute(args, ctx());
             assertTrue(result.ok(), () -> String.valueOf(result.error()));
+            com.cexpilot.runtime.OutputContractAssertions.assertKnownPaths("get_funding_rate_history", result.data());
             JsonNode facts = result.data();
             assertEquals("recent_count", facts.path("mode").asText());
             assertEquals(5, facts.path("requested_count").asInt());

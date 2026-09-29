@@ -32,3 +32,19 @@ input_schema:
     symbol:
       type: string
       description: 基础币代码，如 BTC / ETH
+
+# ToolResult.data 的字段结构；条件字段允许缺失，实际可用性在执行时检查。
+output_schema:
+  type: "object"
+  additionalProperties: false
+  properties:
+    exchange: {"type": "string"}
+    symbol: {"type": "string"}
+    instrument: {"type": "string"}
+    market_type: {"type": "string"}
+    metric: {"type": "string"}
+    unit: {"type": "string"}
+    data_status: {"type": "string"}
+    data_time_utc8: {"type": "string"}
+    snapshot_time_utc8: {"type": "string"}
+    open_interest: {"type": "number", "description": "单位见 unit，币数与合约张数不能混用"}

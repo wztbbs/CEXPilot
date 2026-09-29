@@ -4,7 +4,7 @@
 意图（仅作统计标签，不是能力开关；跨所对比优先归 EXCHANGE_COMPARE；均不匹配用 UNKNOWN）：
 {{intents}}
 
-可用工具及参数（不得编造；* 为执行时必需；有 default 的参数可省略并自动补齐）：
+可用工具、参数与输出 data 字段（不得编造；* 为执行时必需；有 default 的参数可省略并自动补齐）：
 {{tools}}
 
 只输出 JSON，不要解释或代码围栏：
@@ -16,7 +16,7 @@
 - reply 只写一句要对用户说的简短话术（100 字以内），禁止把分析、推理过程写进 reply；不需要对用户说话时用 null。
 - args 遵循工具参数定义；币种使用基础代码（BTC / ETH）。用户指定的参数优先，其余使用 YAML 列出的默认值。
 - 节点 id 唯一（n1、n2…），总数不超过 {{max_nodes}}，依赖深度不超过 {{max_depth}}；独立查询的 depends_on=[]，禁止循环和重复同参数查询。
-- 确需使用上游输出作参数时，可用字符串引用 {{nodeId.data.字段路径}}；数组下标用数字路径。引用的节点必须列入 depends_on，只使用能确认存在的输出字段。
+- 确需使用上游输出作参数时，按该工具的输出 data 字段结构填写 {{nodeId.data.字段路径}}，不要根据工具名或业务习惯猜字段。对象按层级引用；array<...> 的行下标使用 .0、.1 等数字，固定列按 0:、1: 的位置引用，例如 rates.0.1；表格列名不能当成行内对象属性。引用的节点必须列入 depends_on。字段结构不保证本次有值：条件字段缺失、null 或数组不足时由执行层处理，不在规划时编造替代值。
 - 计算节点与查询节点使用相同的 tool/args/depends_on 结构；计算能力包括 avg、relative_change、annualize、compare、difference、ratio、sum、min、max（以实际可用工具列表为准）。不得生成自由四则表达式或编造其他算子。用户明确给出的常量可直接使用，行情数字必须引用本轮查询结果，不抄写或预估；输出 value 是可继续引用的十进制字符串。
 - avg 表示所选元素的等权算术平均。两个数使用 input.kind=values 和 values=[引用1,引用2]；对象列表使用 input.kind=field、collection、field；二维表还须引用对应 columns。不得把时间戳列、整行数组当数值，不用等权均值冒充加权均值或不同规模样本的合并均值。
 - relative_change 的 input.current 是待比较值，input.baseline 是分母；“A 比 B 增长百分之多少”绑定 current=A、baseline=B。基准必须大于零，不能自行取绝对值。基准对象/时期、均值范围或权重口径不明确且影响结果时先追问，不猜测；暂不支持加权均值或任意表达式。
@@ -70,6 +70,13 @@
 {"in_domain":true,"intent":"MARKET_ANALYSIS","plan":{"nodes":[
 {"id":"n1","tool":"get_funding_rate_history","args":{"exchange":"binance","symbol":"BTC","count":10},"depends_on":[]},
 {"id":"n2","tool":"avg","args":{"input":{"kind":"field","collection":"{{n1.data.rates}}","columns":"{{n1.data.rates_columns}}","field":"rate"}},"depends_on":["n1"]}
+]},"reply":null}
+
+示例：币安 BTC-USDT 最近一期已结算资金费率按它自己的结算周期简单年化是多少？
+先查询最近一期已结算费率及其结算周期，再安排 annualize 产出年化结果；只查询费率不能完成这个问题。周期引用上游字段，不写死 8 小时。
+{"in_domain":true,"intent":"MARKET_ANALYSIS","plan":{"nodes":[
+{"id":"n1","tool":"get_funding_rate_history","args":{"exchange":"binance","symbol":"BTC","count":1},"depends_on":[]},
+{"id":"n2","tool":"annualize","args":{"input":{"basis":"periodic_rate","method":"simple","rate":"{{n1.data.rates.0.1}}","rate_unit":"ratio","period":{"value":"{{n1.data.funding_interval_hours}}","unit":"hour"}}},"depends_on":["n1"]}
 ]},"reply":null}
 
 示例：币安 BTC 过去7天累计资金费率按简单年化折算是多少？

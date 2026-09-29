@@ -3,9 +3,9 @@ enabled: true
 description: >
   在一个非空数值集合中找最大值，并返回该值对应的元素位置和原始行，回答"最高是多少、出现在哪个对象/哪个时刻"。
   input 恰好使用以下一种结构：
-  1) 数值集合：{"kind":"values","values":["{{n1.data.value}}","{{n2.data.value}}"]}；也可以把 values 整体引用为上游数值数组。
-  2) 对象集合：{"kind":"field","collection":"{{n1.data.items}}","field":"price"}；field 是直接字段名，不支持嵌套路径。
-  3) 表格列：{"kind":"field","collection":"{{n1.data.rates}}","columns":"{{n1.data.rates_columns}}","field":"rate"}；
+  1) 数值集合（n1、n2 均为 get_ticker）：{"kind":"values","values":["{{n1.data.last_price}}","{{n2.data.last_price}}"]}；也可以把 values 整体引用为上游数值数组。
+  2) 对象集合（用户给定数值示例）：{"kind":"field","collection":[{"price":10},{"price":20}],"field":"price"}；field 是直接字段名，不支持嵌套路径。行情 collection 必须引用上游契约中的真实数组字段。
+  3) 表格列（n1 为 get_funding_rate_history）：{"kind":"field","collection":"{{n1.data.rates}}","columns":"{{n1.data.rates_columns}}","field":"rate"}；
      现有历史工具多返回二维数组及对应 *_columns，必须同时引用列名数组，按真实列名选择，不能猜下标或把整行当数字。
   数值允许 JSON number 或无单位的十进制字符串（包括科学计数法）；不接受百分号、千位分隔符、算术表达式、布尔值或 null。
   输出 value 为最大值十进制字符串（与输入同单位）、count 为实际参与元素数、method=maximum；
@@ -27,3 +27,14 @@ input_schema:
     input:
       type: object
       description: 输入选择对象，kind=values 或 field；index 为 0 基位置，并列取首个，完整结构和边界见工具描述
+
+# ToolResult.data 的字段结构；条件字段允许缺失，实际可用性在执行时检查。
+output_schema:
+  type: "object"
+  additionalProperties: false
+  properties:
+    value: {"type": "string", "description": "十进制结果，单位沿用输入"}
+    count: {"type": "integer"}
+    method: {"type": "string"}
+    index: {"type": "integer", "description": "0 基位置"}
+    item: {"description": "仅 kind=field 返回命中原始行；对象或数组形状随 collection，内部路径运行期校验"}

@@ -40,3 +40,34 @@ input_schema:
       minimum: 1
       maximum: 100
       description: 请求成交笔数；用户指定条数时填入对应数值
+
+# ToolResult.data 的字段结构；条件字段允许缺失，实际可用性在执行时检查。
+output_schema:
+  type: "object"
+  additionalProperties: false
+  properties:
+    exchange: {"type": "string"}
+    symbol: {"type": "string"}
+    trade_count: {"type": "integer"}
+    buy_count: {"type": "integer"}
+    requested_count: {"type": "integer"}
+    actual_count: {"type": "integer"}
+    buy_volume_ratio: {"type": "number", "description": "ratio"}
+    sample_complete: {"type": "boolean"}
+    quantity_unit: {"type": "string"}
+    actual_count_note: {"type": "string"}
+    sample_basis: {"type": "string"}
+    recent_trades_columns:
+      type: "array"
+      items: {"type": "string"}
+      description: "数量列名依交易所和币种变化，引用实际 columns"
+    recent_trades:
+      type: "array"
+      items:
+        type: "array"
+        prefixItems:
+          - {"type": "string", "description": "time_utc8"}
+          - {"type": "number", "description": "price_usdt"}
+          - {"type": "number", "description": "数量，单位见 quantity_unit"}
+          - {"type": "string", "description": "aggressor_side"}
+        items: false

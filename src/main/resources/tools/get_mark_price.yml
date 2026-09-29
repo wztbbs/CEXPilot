@@ -32,3 +32,22 @@ input_schema:
     symbol:
       type: string
       description: 基础币代码，如 BTC / ETH
+
+# ToolResult.data 的字段结构；条件字段允许缺失，实际可用性在执行时检查。
+output_schema:
+  type: "object"
+  additionalProperties: false
+  properties:
+    exchange: {"type": "string"}
+    symbol: {"type": "string"}
+    mark_price: {"type": "number"}
+    index_price: {"type": "number"}
+    basis: {"type": "number"}
+    current_funding_rate: {"type": "number"}
+    current_funding_rate_pct: {"type": "number"}
+    basis_time_diff_ms: {"type": "integer"}
+    mark_price_time_utc8: {"type": "string"}
+    index_price_time_utc8: {"type": "string"}
+    current_funding_rate_kind: {"type": "string"}
+    current_funding_rate_as_of_utc8: {"type": "string"}
+    next_funding_time_utc8: {"type": "string"}

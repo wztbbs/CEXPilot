@@ -263,8 +263,8 @@ class DagExecutorTest {
                 {"type":"object","properties":{"limit":{"type":"integer","default":3,"maximum":5}}}
                 """);
         ToolRegistry registry = new ToolRegistry(List.of(upstream, downstream), List.of(
-                new com.cexpilot.runtime.ToolDefinition("upstream", true, "上游", empty),
-                new com.cexpilot.runtime.ToolDefinition("downstream", true, "下游", bounded)));
+                new com.cexpilot.runtime.ToolDefinition("upstream", true, "上游", empty, MAPPER.createObjectNode()),
+                new com.cexpilot.runtime.ToolDefinition("downstream", true, "下游", bounded, MAPPER.createObjectNode())));
         DagPlan plan = DagPlan.fromJson(MAPPER.readTree("""
                 {"nodes":[
                   {"id":"n1","tool":"upstream","args":{}},

@@ -31,6 +31,7 @@ class GetFundingRateToolTest {
         ToolResult result = new GetFundingRateTool(market).execute(
                 MAPPER.readTree("{\"exchange\":\"binance\",\"symbol\":\"BTC\"}"), null);
         assertTrue(result.ok(), () -> String.valueOf(result.error()));
+        com.cexpilot.runtime.OutputContractAssertions.assertKnownPaths("get_funding_rate", result.data());
         var facts = result.data();
         assertEquals("0.0001", facts.path("current_funding_rate").asText());
         assertEquals("0.01", facts.path("current_funding_rate_pct").asText());

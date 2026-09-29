@@ -34,3 +34,26 @@ input_schema:
     symbol:
       type: string
       description: 基础币代码，如 BTC / ETH
+
+# ToolResult.data 的字段结构；条件字段允许缺失，实际可用性在执行时检查。
+output_schema:
+  type: "object"
+  additionalProperties: false
+  properties:
+    exchange: {"type": "string"}
+    symbol: {"type": "string"}
+    last_price: {"type": "number", "description": "最新成交价 USDT；直接位于 data 下"}
+    change_pct_24h:
+      type: ["number", "null"]
+      description: "percent；滚动24h涨跌幅"
+    volume_24h_base: {"type": "number"}
+    turnover_24h_usdt: {"type": "number"}
+    turnover_24h_usdt_estimated: {"type": "boolean"}
+    change_pct_24h_note: {"type": "string"}
+    as_of_utc8: {"type": "string"}
+    units:
+      type: "object"
+      additionalProperties: false
+      properties:
+        volume_24h_base: {"type": "string"}
+        turnover_24h_usdt: {"type": "string"}

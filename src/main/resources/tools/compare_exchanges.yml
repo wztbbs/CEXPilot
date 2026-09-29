@@ -35,3 +35,7 @@ input_schema:
       enum: [1h, 4h, 24h]
       default: 1h
       description: 从当前向前的时间窗口
+
+# ToolResult.data 的字段结构；条件字段允许缺失，实际可用性在执行时检查。
+output_schema:
+  description: "工具已停用；重新启用前须按执行器补齐输出契约"

@@ -11,6 +11,7 @@ import com.cexpilot.llm.LlmJson;
 import com.cexpilot.llm.ToolSpec;
 import com.cexpilot.prompt.PromptStore;
 import com.cexpilot.runtime.ToolRegistry;
+import com.cexpilot.runtime.ToolOutputSchema;
 import com.cexpilot.runtime.TraceEvent;
 import com.cexpilot.runtime.TraceSink;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -348,7 +349,7 @@ public class DagPlanner {
         return sb.toString();
     }
 
-    private static String renderTools(List<ToolSpec> specs) {
+    private String renderTools(List<ToolSpec> specs) {
         Map<String, JsonNode> common = new java.util.LinkedHashMap<>();
         Map<String, Integer> counts = new java.util.HashMap<>();
         Set<String> different = new HashSet<>();
@@ -368,7 +369,9 @@ public class DagPlanner {
         }
         for (ToolSpec spec : specs) {
             sb.append("- ").append(spec.name()).append("：").append(spec.description()).append('\n')
-                    .append("  参数：").append(renderParams(spec.inputSchema(), common.keySet())).append('\n');
+                    .append("  参数：").append(renderParams(spec.inputSchema(), common.keySet())).append('\n')
+                    .append("  输出 data 字段：").append(ToolOutputSchema.describe(registry.outputSchema(spec.name())))
+                    .append('\n');
         }
         return sb.toString();
     }

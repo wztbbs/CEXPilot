@@ -66,3 +66,68 @@ input_schema:
       type: boolean
       default: false
       description: 是否包含当前未完结周期的采样点；false 时剔除并标注 dropped_unclosed
+
+# ToolResult.data 的字段结构；条件字段允许缺失，实际可用性在执行时检查。
+output_schema:
+  type: "object"
+  additionalProperties: false
+  properties:
+    exchange: {"type": "string"}
+    symbol: {"type": "string"}
+    requested_range:
+      type: "object"
+      additionalProperties: false
+      properties:
+        start_inclusive: {"type": "string"}
+        end_exclusive: {"type": "string"}
+        timezone: {"type": "string"}
+    effective_range:
+      type: "object"
+      additionalProperties: false
+      properties:
+        start_inclusive: {"type": "string"}
+        end_exclusive: {"type": "string"}
+        timezone: {"type": "string"}
+    coverage:
+      type: "object"
+      additionalProperties: false
+      properties:
+        expected_count: {"type": "integer"}
+        actual_count: {"type": "integer"}
+        missing_count: {"type": "integer"}
+        unexpected_count: {"type": "integer"}
+        dropped_unclosed: {"type": "boolean"}
+        closed_part_complete: {"type": "boolean"}
+        range_complete: {"type": "boolean"}
+        contains_unclosed: {"type": "boolean"}
+        covered_until: {"type": "string"}
+        abort_reason: {"type": "string"}
+        missing_open_times:
+          type: "array"
+          items: {"type": "string"}
+        unexpected_open_times:
+          type: "array"
+          items: {"type": "string"}
+    oi_interval: {"type": "string"}
+    unit: {"type": "string"}
+    statistics_omitted: {"type": "string"}
+    statistics:
+      type: "object"
+      additionalProperties: false
+      properties:
+        start_oi: {"type": "number"}
+        end_oi: {"type": "number"}
+        change: {"type": "number"}
+        max_oi: {"type": "number"}
+        min_oi: {"type": "number"}
+        change_pct: {"type": "number", "description": "percent"}
+        max_time: {"type": "string"}
+        min_time: {"type": "string"}
+        point_count: {"type": "integer"}
+        actual_range:
+          type: "object"
+          additionalProperties: false
+          properties:
+            start_inclusive: {"type": "string"}
+            end_inclusive: {"type": "string"}
+      description: "仅完整覆盖且有可统计数据时存在；缺失时由运行期拒绝计算"

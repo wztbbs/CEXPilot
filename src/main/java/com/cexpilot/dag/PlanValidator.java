@@ -4,6 +4,7 @@ import com.cexpilot.config.DagConfig;
 import com.cexpilot.calculation.CalculationTool;
 import com.cexpilot.runtime.ToolRegistry;
 import com.cexpilot.runtime.ToolArguments;
+import com.cexpilot.runtime.ToolOutputSchema;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayDeque;
@@ -21,7 +22,7 @@ import java.util.Set;
  * - 供给：tool 已注册且在 allowedTools 白名单内；
  * - 入参：满足 inputSchema 的 required（值为具体值或 {{ref}} 均可，类型、枚举、范围等按 YAML 校验）；
  * - 规模：节点数 ≤ min(maxNodes, maxToolCalls)、拓扑深度 ≤ maxDepth；
- * - 引用闭合：每个 {{ref}} 的目标节点存在且在（传递）依赖闭包内。
+ * - 引用闭合：目标节点存在且在依赖闭包内；字段路径符合上游工具的 output_schema。
  */
 @Component
 public class PlanValidator {
@@ -181,6 +182,9 @@ public class PlanValidator {
             if (node.id() == null) {
                 continue;
             }
+            for (String error : ReferenceResolver.syntaxErrors(node.args())) {
+                errors.add(node.id() + " " + error);
+            }
             for (ReferenceResolver.Ref ref : ReferenceResolver.findRefs(node.args())) {
                 PlanNode target = byId.get(ref.nodeId());
                 if (target == null) {
@@ -193,6 +197,14 @@ public class PlanValidator {
                 }
                 if (!transitiveDeps(node.id(), byId).contains(ref.nodeId())) {
                     errors.add(node.id() + " 引用了 " + ref.nodeId() + " 但未（传递）依赖它，请加入 depends_on");
+                }
+                var outputSchema = registry.outputSchema(target.tool());
+                if (outputSchema != null) {
+                    String error = ToolOutputSchema.referenceError(outputSchema, ref.path());
+                    if (error != null) {
+                        errors.add(node.id() + " 引用 {{" + ref.nodeId() + ref.path() + "}} 不符合上游工具 "
+                                + target.tool() + " 的输出契约：" + error);
+                    }
                 }
             }
         }

@@ -2,7 +2,7 @@ name: compare
 enabled: true
 description: >
   精确比较两个十进制数值的大小关系，回答"A 比 B 大、小还是恰好相等"。
-  input 结构为 {"left":"{{n1.data.statistics.change_pct}}","right":"{{n2.data.statistics.change_pct}}"}，left、right 两项必填，地位对称。
+  input 示例（n1、n2 均为 get_market_statistics）为 {"left":"{{n1.data.statistics.change_pct}}","right":"{{n2.data.statistics.change_pct}}"}，left、right 两项必填，地位对称。
   输入允许 JSON number 或无单位的十进制字符串（包括科学计数法），不接受百分号、千位分隔符、表达式、布尔值、null、对象或数组。
   left、right 均可为零或负数，不限制取值范围；比较涨跌幅时两侧必须是同一口径（都引用 ratio 或都引用已乘 100 的 percent 字段）。
   输出 left、right 回显实际参与比较的数值；relation ∈ {greater, less, equal}，表示 left 相对 right 的关系；
@@ -22,3 +22,15 @@ input_schema:
     input:
       type: object
       description: 必填 left 与 right（待比较的两个数值或完整上游字段引用）；比较的是大小关系，不含差值
+
+# ToolResult.data 的字段结构；条件字段允许缺失，实际可用性在执行时检查。
+output_schema:
+  type: "object"
+  additionalProperties: false
+  properties:
+    left: {"type": "string"}
+    right: {"type": "string"}
+    value: {"type": "string", "description": "-1/0/1 大小关系"}
+    value_unit: {"type": "string"}
+    formula: {"type": "string"}
+    relation: {"type": "string", "description": "greater/less/equal；left 相对 right"}

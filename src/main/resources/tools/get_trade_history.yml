@@ -50,3 +50,39 @@ input_schema:
     time:
       type: object
       description: 时间范围（TimeSpec），4 种 type 结构见工具描述，字段严格校验由服务端执行
+
+# ToolResult.data 的字段结构；条件字段允许缺失，实际可用性在执行时检查。
+output_schema:
+  type: "object"
+  additionalProperties: false
+  properties:
+    exchange: {"type": "string"}
+    symbol: {"type": "string"}
+    trade_source_kind: {"type": "string"}
+    abort_reason: {"type": "string"}
+    partial_result_note: {"type": "string"}
+    first_trade_time: {"type": "string"}
+    last_trade_time: {"type": "string"}
+    trades_note: {"type": "string"}
+    requested_range:
+      type: "object"
+      additionalProperties: false
+      properties:
+        start_inclusive: {"type": "string"}
+        end_exclusive: {"type": "string"}
+        timezone: {"type": "string"}
+    actual_count: {"type": "integer"}
+    complete: {"type": "boolean"}
+    trades_columns:
+      type: "array"
+      items: {"type": "string"}
+    trades:
+      type: "array"
+      items:
+        type: "array"
+        prefixItems:
+          - {"type": "string", "description": "time"}
+          - {"type": "number", "description": "price_usdt"}
+          - {"type": "number", "description": "qty_base"}
+          - {"type": "string", "description": "taker_side"}
+        items: false

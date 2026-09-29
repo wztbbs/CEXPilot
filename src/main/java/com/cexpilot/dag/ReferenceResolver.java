@@ -65,6 +65,25 @@ public final class ReferenceResolver {
         return refs;
     }
 
+    /** 不让 rates[0]、空格或未闭合括号等错误引用被当成普通字符串静默略过。 */
+    public static List<String> syntaxErrors(JsonNode args) {
+        List<String> errors = new ArrayList<>();
+        collectSyntaxErrors(args, errors);
+        return errors;
+    }
+
+    private static void collectSyntaxErrors(JsonNode node, List<String> errors) {
+        if (node == null) return;
+        if (node.isTextual()) {
+            String remaining = EMBEDDED_REF.matcher(node.asText()).replaceAll("");
+            if (remaining.contains("{{") || remaining.contains("}}")) {
+                errors.add("引用语法错误：使用 {{nodeId.data.字段路径}}，数组下标用 .0 而非 [0]");
+            }
+        } else if (node.isContainerNode()) {
+            node.forEach(child -> collectSyntaxErrors(child, errors));
+        }
+    }
+
     private static void collectRefs(JsonNode node, List<Ref> refs) {
         if (node == null) {
             return;

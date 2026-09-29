@@ -26,7 +26,8 @@ public final class TestTools {
                     properties.putObject(required.asText()).put("type", "string");
                 }
             }
-            definitions.add(new ToolDefinition(tool.name(), true, tool.description(), schema));
+            definitions.add(new ToolDefinition(tool.name(), true, tool.description(), schema,
+                    MAPPER.createObjectNode()));
         }
         return new ToolRegistry(new ArrayList<>(tools), definitions);
     }

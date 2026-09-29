@@ -94,6 +94,7 @@ class GetMarketStatisticsToolTest {
                         + "\"start\":{\"day_offset\":-1,\"time\":\"02:00:00\"},"
                         + "\"end\":{\"day_offset\":-1,\"time\":\"03:00:00\"}}"), ctx());
         assertTrue(result.ok(), () -> String.valueOf(result.error()));
+        com.cexpilot.runtime.OutputContractAssertions.assertKnownPaths("get_market_statistics", result.data());
         JsonNode facts = result.data();
         assertTrue(facts.path("coverage").path("range_complete").asBoolean());
         JsonNode stats = facts.path("statistics");
@@ -119,6 +120,7 @@ class GetMarketStatisticsToolTest {
                         + "\"start\":{\"day_offset\":-1,\"time\":\"02:02:00\"},"
                         + "\"end\":{\"day_offset\":-1,\"time\":\"02:58:00\"}}"), ctx());
         assertTrue(result.ok(), result::error);
+        com.cexpilot.runtime.OutputContractAssertions.assertKnownPaths("get_market_statistics", result.data());
         assertEquals(3600, result.data().at("/statistics/observation_seconds").asLong());
         assertEquals("2026-09-23 02:00:00", result.data().at("/statistics/actual_range/start_inclusive").asText());
         assertEquals("2026-09-23 03:00:00", result.data().at("/statistics/actual_range/end_exclusive").asText());
@@ -131,6 +133,7 @@ class GetMarketStatisticsToolTest {
                         + "\"start\":{\"day_offset\":-1,\"time\":\"02:00:00\"},"
                         + "\"end\":{\"day_offset\":-1,\"time\":\"03:00:00\"}}"), ctx());
         assertTrue(result.ok(), () -> String.valueOf(result.error()));
+        com.cexpilot.runtime.OutputContractAssertions.assertKnownPaths("get_market_statistics", result.data());
         assertFalse(result.data().path("coverage").path("closed_part_complete").asBoolean());
         assertEquals(1, result.data().path("coverage").path("missing_count").asInt());
         assertTrue(result.data().path("statistics").isMissingNode());
@@ -144,6 +147,7 @@ class GetMarketStatisticsToolTest {
                 "{\"type\":\"calendar_period\",\"timezone\":\"UTC\",\"unit\":\"day\",\"offset\":0,"
                         + "\"segment\":\"full\",\"extent\":\"full_period\"}"), ctx());
         assertTrue(result.ok(), () -> String.valueOf(result.error()));
+        com.cexpilot.runtime.OutputContractAssertions.assertKnownPaths("get_market_statistics", result.data());
         JsonNode facts = result.data();
         assertTrue(facts.path("coverage").path("closed_part_complete").asBoolean());
         assertFalse(facts.path("coverage").path("range_complete").asBoolean());
