@@ -45,6 +45,11 @@ public class ToolRegistry {
 
     public AgentTool get(String name) { return tools.get(name); }
 
+    public JsonNode outputSchema(String name) {
+        ToolDefinition definition = definitions.get(name);
+        return definition == null ? null : definition.outputSchema().deepCopy();
+    }
+
     public ToolSpec spec(String name) {
         ToolDefinition definition = definitions.get(name);
         return definition == null ? null : definition.spec();
