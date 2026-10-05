@@ -1,6 +1,7 @@
 package com.cexpilot.dag;
 
 import com.cexpilot.config.DagConfig;
+import com.cexpilot.metric.*;
 import com.cexpilot.calculation.CalculationTool;
 import com.cexpilot.runtime.AgentTool;
 import com.cexpilot.runtime.RequestContext;
@@ -33,7 +34,7 @@ import java.util.concurrent.TimeoutException;
  * 层间屏障等待全部完成后再调度下一层。
  *
  * 并发纪律（沿用 merchant 项目的约定）：工作线程只读 DagContext，只做依赖检查、
- * 引用解析、tool.execute；结果的写入 DagContext 与 TOOL_CALL trace 统一由主线程
+ * 指标 Provider 查询或计算工具执行；结果的写入 DagContext 与 trace 统一由主线程
  * 在层间完成，因此层内不存在共享态写竞争。
  *
  * 失败语义：任一节点失败不中断整体——直接依赖失败的节点记 "skipped: 上游节点失败"；
@@ -47,9 +48,16 @@ public class DagExecutor {
 
     private final ToolRegistry registry;
     private final DagConfig config;
+    private final MetricProviderRegistry metricProviders;
     private final ExecutorService pool;
 
     public DagExecutor(ToolRegistry registry, DagConfig config) {
+        this(registry, config, new MetricProviderRegistry(List.of()));
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public DagExecutor(ToolRegistry registry, DagConfig config, MetricProviderRegistry metricProviders) {
+        this.metricProviders = metricProviders;
         this.registry = registry;
         this.config = config;
         this.pool = Executors.newFixedThreadPool(config.getExecutorThreads());
@@ -99,7 +107,7 @@ public class DagExecutor {
         for (String dep : node.dependsOn()) {
             ToolResult depResult = ctx.get(dep);
             if (depResult == null || !depResult.ok()) {
-                log.warn("节点 {} 工具 {} 跳过: 上游节点 {} 失败", node.id(), node.tool(), dep);
+                log.warn("节点 {} 执行器 {} 跳过: 上游节点 {} 失败", node.id(), executionName(node), dep);
                 return new NodeOutcome(ToolResult.failure("skipped: 上游节点失败"),
                         null, System.currentTimeMillis() - start);
             }
@@ -107,8 +115,14 @@ public class DagExecutor {
         JsonNode resolvedArgs = null;
         ToolResult result;
         try {
+            if (node.metric() != null) {
+                MetricResult metricResult = metricProviders.get(node.metric().provider()).query(node.metricQuery(), requestContext);
+                return new NodeOutcome(ToolResult.success(MetricResultJson.write(node.metric(), metricResult)),
+                        node.args().toString(), System.currentTimeMillis() - start);
+            }
             AgentTool tool = registry.get(node.tool());
             if (tool instanceof CalculationTool calculation) {
+                com.cexpilot.metric.MetricCalculationContext.validate(node, ctx);
                 for (ReferenceResolver.Ref ref : ReferenceResolver.findRefs(node.args())) {
                     ToolResult source = ctx.get(ref.nodeId());
                     if (source != null && source.ok()) calculation.validateSource(source.data());
@@ -118,9 +132,12 @@ public class DagExecutor {
             result = tool.execute(resolvedArgs, new ToolContext(traceId, null,
                     requestContext == null ? null : requestContext.userZone(),
                     requestContext == null ? null : requestContext.requestTime()));
+            if (tool instanceof CalculationTool) {
+                result = com.cexpilot.metric.MetricCalculationContext.attach(node, ctx, result);
+            }
         } catch (Exception e) {
-            log.warn("节点 {} 工具 {} 执行异常: {}", node.id(), node.tool(), e.getMessage());
-            return new NodeOutcome(ToolResult.failure("工具执行异常: " + e.getMessage()),
+            log.warn("节点 {} 执行器 {} 执行异常: {}", node.id(), executionName(node), e.getMessage());
+            return new NodeOutcome(ToolResult.failure((node.metric() == null ? "工具执行异常: " : "指标查询失败: ") + e.getMessage()),
                     String.valueOf(resolvedArgs == null ? node.args() : resolvedArgs),
                     System.currentTimeMillis() - start);
         }
@@ -155,11 +172,26 @@ public class DagExecutor {
                     null, 0);
         }
         ToolResult result = outcome.result();
+        if (node.metric() != null) {
+            // Provider 已直接返回指标模型；没有原始 Tool 调用，也不进行第二次适配。
+            ObjectNode input = MAPPER.createObjectNode();
+            input.put("node_id", node.id());
+            input.set("args", node.args());
+            input.set("metric_binding", node.metric().identity());
+            sink.record(new TraceEvent(traceId, "METRIC_RESULT", node.metric().metric(),
+                    input.toString(), result.toMessageContent(), outcome.durationMs(),
+                    null, null, null, null, result.error()));
+        } else {
+            sink.record(TraceEvent.toolCall(traceId, node.tool(),
+                    eventInput(node.id(), outcome.resolvedArgsJson()),
+                    result.toMessageContent(), outcome.durationMs(),
+                    result.ok() ? null : result.error()));
+        }
         ctx.put(node.id(), result);
-        sink.record(TraceEvent.toolCall(traceId, node.tool(),
-                eventInput(node.id(), outcome.resolvedArgsJson()),
-                result.toMessageContent(), outcome.durationMs(),
-                result.ok() ? null : result.error()));
+    }
+
+    private static String executionName(PlanNode node) {
+        return node.metric() == null ? node.tool() : node.metric().provider();
     }
 
     private static String eventInput(String nodeId, String resolvedArgsJson) {

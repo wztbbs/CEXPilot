@@ -1,20 +1,30 @@
 # CEXPilot — Crypto / CEX AI Copilot（Phase 1）
 
-一个带 Agent 交互层的 CEX 后端系统。Phase 1 提供查询能力：
+当前默认问答流程为 **K 线指标试点**：仅支持 Binance / OKX 的 USDT 报价、USDT 结算永续成交 K 线指标。原 Funding、OI、盘口、ticker 快照和 Ethereum 工具保留代码，暂不进入新 Planner，也不自动回退旧流程。
 
-- **Market Investigator**：自然语言查询 Binance / OKX 永续合约行情（价格变化、Funding、OI、盘口、两所对比）
-- **Ethereum Tx Investigator**：输入交易哈希，分析转账 / 授权 / Swap / 资金流
-- 支持多轮追问；每次问答全链路 Trace 落库；支持 👍/👎 反馈与 Smoke Eval
+- 区间指标：开、高、低、收、涨跌幅、基础币成交量、USDT 成交额。
+- 序列指标：每根 K 线的开、高、低、收、基础币成交量；粒度支持 5m / 15m / 1h。
+- 计算：复用 avg / sum / min / max / compare / difference / ratio / relative_change / annualize。
+- 支持多轮追问、流式回答和 Trace；数据覆盖不完整时不提供区间指标，依赖计算不能补算。
 
-核心原则：**LLM 只负责理解意图、选择工具、解释结果；所有金融数字由确定性代码计算。**
+## 指标主流程
 
-## 架构一句话
-
+```text
+用户问题 → Planner 输出 {metrics, calculations}
+         → 展开 exchanges、推导依赖、绑定 KlineMetricProvider、校验物理 DAG
+         → KlineQueryService → KlineQueryResult / Candle / SeriesCoverage
+         → Provider 直接生成 MetricResult → 标准指标 JSON → 多层计算 → Answer
 ```
-用户问题 → DagPlanner（领域判断、意图归类、查询规划）
-        → DagExecutor 并行执行 ToolRegistry 中的工具（确定性取数与计算）
-        → LLM 基于事实生成答案 → 答案 + Evidence + Trace（MySQL）
-```
+
+指标定义、核心概念及绑定在 `src/main/resources/metrics/kline.yml`。Planner 不接收底层取数 Tool 目录；同一指标组共享品种、时间和粒度，仅 exchanges 为列表。结果引用如 `{{m1.binance.value}}`、`{{m1.okx.samples}}`，计算结果引用 `{{c1.value}}`；不输出 depends_on。
+
+`range_statistic` 返回 value 与实际 observation_seconds，`time_series` 返回 samples[{time,value}]。两者都保留单位、覆盖情况和来源；同组分支独立失败，失败会阻止依赖计算。第一版没有跨指标请求合并，预算按展开后的节点计数，各查询服务仍有分页预算。
+
+Trace 中 `PLAN` 保留逻辑计划，`PLAN_COMPILED` 记录物理绑定，`METRIC_RESULT` 记录 Provider 的参数、标准指标结果与耗时，计算算子继续记录 `TOOL_CALL`。原有 trace 仍可回放；新增计划不接受旧 nodes/tool 协议。
+
+K 线绑定只配置 `provider: kline` 和类型化 `selector`，不再配置旧 Tool 字段路径或列名。`KlineMetricProvider` 直接复用查询结果和 `MarketCalculator.rangeStats()`；`MetricResultJson` 是唯一的指标输出序列化边界。旧 `GetKlinesTool` / `GetMarketStatisticsTool` 保留供旧调用使用，新主流程不执行它们，也不把旧 JSON 再读回模型。
+
+可试问：“币安 BTC 昨天涨跌多少？”、“昨天币安 BTC 永续成交额比 OKX 高百分之多少？”、“分别求两所 BTC 昨天 1 小时 K 线收盘价的等权平均，再比较差值。”
 
 概念:
 | 概念                    | 解决什么                          |
@@ -33,7 +43,8 @@
 
 | 包 | 职责 |
 |---|---|
-| `runtime` / `dag` | YAML 工具注册、规划、参数校验、DAG 执行与事实回答 |
+| `runtime` / `dag` | 工具注册、指标规划、参数校验、DAG 执行与事实回答 |
+| `metric` | 指标目录、逻辑计划编译、结果适配与计算来源传播 |
 | `llm` | OpenAI 兼容客户端（function calling） |
 | `market` | Binance / OKX 客户端、数据标准化、确定性计算、8 个行情工具 |
 | `ethereum` | RPC 客户端、ABI 事件解码、交易资金流分析 |

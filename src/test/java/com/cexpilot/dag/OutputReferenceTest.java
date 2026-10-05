@@ -77,20 +77,29 @@ class OutputReferenceTest {
         assertTrue(validator.validate(DagPlan.fromJson(MAPPER.readTree(envelope(source, good)).path("plan")), null, 8).isEmpty());
     }
 
+    private static String metricEnvelope(String field) {
+        var plan = MetricTestSupport.plan(MetricTestSupport.metric("m1", "price.close", "range_statistic", "binance"));
+        MetricTestSupport.calculation(plan, "n2", "difference", "{\"left\":\"{{m1.binance." + field + "}}\",\"right\":1}");
+        return MetricTestSupport.envelope(plan);
+    }
+
     @Test
     void repairsBeforeAnyMarketCallAndOnlyComputedFactsReachAnswer() {
-        MarketDataService market = mock(MarketDataService.class);
-        when(market.ticker(Exchange.BINANCE, "BTC")).thenReturn(
-                new Ticker(new BigDecimal("101.25"), BigDecimal.ONE, BigDecimal.TEN, BigDecimal.TEN, false, 1));
-        var registry = registry(List.of(new GetTickerTool(market), new DifferenceTool()));
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        var registry = MetricTestSupport.registry();
+        var provider = MetricTestSupport.provider((q,c) -> {
+            calls.incrementAndGet();
+            var result = (com.cexpilot.metric.MetricResult.Scalar)MetricTestSupport.metricResult(q,c,24,true);
+            return new com.cexpilot.metric.MetricResult.Scalar(result.metadata(),new BigDecimal("101.25"),result.observationSeconds(),result.actualRange());
+        });
         List<List<ChatMessage>> seen = new ArrayList<>();
         List<TraceEvent> events = new ArrayList<>();
         LlmClient llm = (messages, tools) -> {
             seen.add(List.copyOf(messages));
             String response;
             if (seen.size() <= 2) {
-                verify(market, never()).ticker(any(), any());
-                response = envelope("get_ticker", seen.size() == 1 ? "data.ticker.price_usdt" : "data.last_price");
+                assertEquals(0, calls.get());
+                response = metricEnvelope(seen.size() == 1 ? "price_usdt" : "value");
             } else {
                 assertTrue(messages.get(1).content().contains("\"value\":\"100.25\""));
                 response = "相差 100.25 USDT。";
@@ -101,22 +110,21 @@ class OutputReferenceTest {
         var prompts = new PromptStore(LOADER);
         var intents = new IntentRegistry(LOADER);
         var planner = new DagPlanner(llm, registry, intents, new LlmConfig(), config, prompts, new PlanValidator(registry, config));
-        var executor = new DagExecutor(registry, config);
+        var executor = new DagExecutor(registry, config, MetricTestSupport.providers(provider));
         try {
             var outcome = new DagRuntime(llm, planner, executor, prompts, intents, Clock.systemUTC())
                     .execute("币安 BTC 价格减去我给定的 1 USDT 是多少？", "", "ref-repair", events::add);
             assertEquals(3, seen.size());
             assertEquals(2, outcome.toolCallCount());
-            verify(market, times(1)).ticker(Exchange.BINANCE, "BTC");
-            var tickerEvent = events.stream().filter(e -> "get_ticker".equals(e.name())).findFirst().orElseThrow();
-            try {
-                OutputContractAssertions.assertKnownPaths("get_ticker", MAPPER.readTree(tickerEvent.outputJson()).path("data"));
-            } catch (java.io.IOException e) {
-                throw new AssertionError(e);
-            }
+            assertEquals(1, calls.get());
+            assertEquals(1, events.stream().filter(e -> "METRIC_RESULT".equals(e.eventType())).count());
+            assertFalse(events.stream().anyMatch(e -> "get_market_statistics".equals(e.name())));
             String repair = seen.get(1).get(seen.get(1).size() - 1).content();
             assertTrue(repair.contains("输出契约"));
-            assertTrue(repair.contains("last_price"));
+            assertTrue(repair.contains("value"));
+            assertTrue(repair.contains("{{m1.binance.price_usdt}}"));
+            assertFalse(repair.contains("get_market_statistics"));
+            assertFalse(repair.contains("{{metric_0.data."));
             assertEquals(1, events.stream().filter(e -> "PLAN".equals(e.eventType()) && e.error() != null).count());
         } finally {
             executor.shutdown();
@@ -125,11 +133,11 @@ class OutputReferenceTest {
 
     @Test
     void exhaustedRepairsExecuteNeitherToolsNorAnswer() {
-        var registry = registry(List.of(stub("get_ticker"), new DifferenceTool()));
+        var registry = MetricTestSupport.registry(stub("get_klines"), stub("get_market_statistics"));
         List<List<ChatMessage>> seen = new ArrayList<>();
         LlmClient llm = (messages, tools) -> {
             seen.add(List.copyOf(messages));
-            return new ChatResponse(envelope("get_ticker", "data.price_usdt"), List.of(), 1, 1);
+            return new ChatResponse(metricEnvelope("price_usdt"), List.of(), 1, 1);
         };
         var config = new DagConfig();
         config.setPlannerMaxRetries(1);
@@ -149,8 +157,8 @@ class OutputReferenceTest {
 
     @Test
     void allPlannerExamplesUseRealOutputPaths() throws Exception {
-        var tools = DEFINITIONS.stream().filter(ToolDefinition::enabled).map(d -> stub(d.name())).toList();
-        var registry = registry(tools);
+        var registry = MetricTestSupport.registry();
+        var compiler = new com.cexpilot.metric.MetricPlanCompiler(new com.cexpilot.metric.MetricCatalog(LOADER), registry);
         var validator = new PlanValidator(registry, new DagConfig());
         String prompt;
         try (var stream = LOADER.getResource("classpath:prompts/dag_planner.txt").getInputStream()) {
@@ -160,18 +168,18 @@ class OutputReferenceTest {
         int count = 0;
         while (matcher.find()) {
             JsonNode plan = MAPPER.readTree(prompt.substring(matcher.start())).path("plan");
-            if (plan.at("/nodes/0/tool").asText().equals("工具名")) continue;
-            var errors = validator.validate(DagPlan.fromJson(plan), null, 8);
+            if (plan.path("metrics").isEmpty() && plan.path("calculations").isEmpty()) continue;
+            var errors = validator.validate(compiler.compile(plan, 8), compiler.allowedTools(), 8);
             assertTrue(errors.isEmpty(), errors.toString());
             count++;
         }
-        assertTrue(count >= 10);
+        assertEquals(3, count);
         for (String tool : List.of("difference", "avg", "sum", "min", "max", "compare", "ratio", "relative_change")) {
             String description = DEFINITIONS.stream().filter(d -> d.name().equals(tool)).findFirst().orElseThrow().description();
             for (var ref : ReferenceResolver.findRefs(MAPPER.getNodeFactory().textNode(description))) {
                 String source = ref.path().startsWith(".data.rates") ? "get_funding_rate_history"
                         : ref.path().startsWith(".data.statistics") ? "get_market_statistics" : "get_ticker";
-                assertNull(ToolOutputSchema.referenceError(registry.outputSchema(source), ref.path()), tool + ref.path());
+                assertNull(ToolOutputSchema.referenceError(DEFINITIONS.stream().filter(d -> d.name().equals(source)).findFirst().orElseThrow().outputSchema(), ref.path()), tool + ref.path());
             }
         }
     }

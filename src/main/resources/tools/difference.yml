@@ -32,3 +32,12 @@ output_schema:
     value: {"type": "string", "description": "带符号差值；输入同单位"}
     value_unit: {"type": "string"}
     formula: {"type": "string"}
+    # 指标 DAG 执行时附加；独立调用算子时可不存在。
+    unit: {"type": "string", "description": "由程序继承或推导的结果单位"}
+    metric_sources:
+      type: array
+      description: 去重后的指标来源、窗口和质量信息，由执行器维护
+      items:
+        type: object
+        additionalProperties: true
+        properties: {}

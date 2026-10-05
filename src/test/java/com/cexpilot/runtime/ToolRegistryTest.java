@@ -81,22 +81,8 @@ class ToolRegistryTest {
         assertFalse(input.has("limit"));
         assertEquals(resolved, registry.get("sample").execute(resolved, new ToolContext("test", null)).data());
 
-        List<ChatMessage> seen = new ArrayList<>();
-        var loader = new DefaultResourceLoader();
-        DagPlanner planner = new DagPlanner((messages, tools) -> {
-            seen.addAll(messages);
-            assertNull(tools);
-            return new ChatResponse("{\"in_domain\":true,\"intent\":\"UNKNOWN\",\"plan\":null}", List.of(), 1, 1);
-        }, registry, new IntentRegistry(loader), new LlmConfig(), new DagConfig(),
-                new PromptStore(loader), new PlanValidator(registry, new DagConfig()));
-        planner.plan("查询BTC", "", "test", event -> {});
-        String prompt = seen.get(0).content();
-        assertTrue(prompt.contains("sample：YAML中的新描述"));
-        assertTrue(prompt.contains("default=binance"));
-        assertTrue(prompt.contains("minimum=1, maximum=5"));
-        assertTrue(prompt.contains("输出 data 字段：{price:number(最新价格)}"));
-        assertFalse(prompt.contains("仅供文档的内容"));
-        assertFalse(prompt.contains("不会自动注入的限制"));
+        // Planner 已不暴露取数 Tool；契约仍供物理 DAG 校验与默认值处理使用。
+        assertEquals("{price:number(最新价格)}", ToolOutputSchema.describe(registry.outputSchema("sample")));
 
         var validator = new PlanValidator(registry, new DagConfig());
         DagPlan valid = DagPlan.fromJson(MAPPER.readTree("""
@@ -194,16 +180,22 @@ class ToolRegistryTest {
             for (AgentTool executor : executors) {
                 context.registerBean(executor.name(), AgentTool.class, () -> executor);
             }
-            context.register(ToolRegistry.class);
+            context.register(ToolRegistry.class, com.cexpilot.metric.MetricCatalog.class,
+                    DagPlanner.class, PlanValidator.class, DagConfig.class, LlmConfig.class,
+                    PromptStore.class, IntentRegistry.class, com.cexpilot.dag.DagExecutor.class,
+                    com.cexpilot.metric.MetricProviderRegistry.class, com.cexpilot.metric.KlineMetricProvider.class);
+            context.registerBean(com.cexpilot.market.kline.KlineQueryService.class,
+                    () -> mock(com.cexpilot.market.kline.KlineQueryService.class));
+            context.registerBean(com.cexpilot.llm.LlmClient.class, () -> mock(com.cexpilot.llm.LlmClient.class));
             context.refresh();
             ToolRegistry registry = context.getBean(ToolRegistry.class);
             assertEquals(26, registry.size());
+            assertNotNull(context.getBean(DagPlanner.class));
+            assertNotNull(context.getBean(com.cexpilot.dag.DagExecutor.class));
+            assertNotNull(context.getBean(com.cexpilot.metric.MetricProviderRegistry.class).get("kline"));
             assertEquals("binance", registry.prepareArguments("get_ticker", MAPPER.createObjectNode().put("symbol", "BTC")).path("exchange").asText());
             assertThrows(IllegalArgumentException.class, () -> registry.prepareArguments("get_transaction", MAPPER.createObjectNode().put("tx_hash", "0xabc")));
             assertDoesNotThrow(() -> registry.prepareArguments("get_transaction", MAPPER.createObjectNode().put("tx_hash", "0x" + "a".repeat(64))));
-            // compare_exchanges 暂缓（聚合指标类待重新设计），yml 置 disabled 后不注册、不暴露
-            assertThrows(IllegalArgumentException.class,
-                    () -> registry.prepareArguments("compare_exchanges", MAPPER.createObjectNode().put("symbol", "ETH")));
         }
     }
     @Test

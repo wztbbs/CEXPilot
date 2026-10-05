@@ -142,7 +142,7 @@ public class DagRuntime {
                 continue;
             }
             toolCallCount++;
-            appendEvidence(evidence, node.id(), node.tool(), result);
+            appendEvidence(evidence, node, result);
         }
         String userContent = question + "\n\n<FACTS>\n" + evidence + "\n</FACTS>\n<QUERY_STATUS>\n"
                 + queryStatus + "\n</QUERY_STATUS>";
@@ -226,10 +226,17 @@ public class DagRuntime {
         return sb.toString();
     }
 
-    private void appendEvidence(ArrayNode evidence, String nodeId, String toolName, ToolResult result) {
+    private void appendEvidence(ArrayNode evidence, PlanNode node, ToolResult result) {
         ObjectNode entry = evidence.addObject();
-        entry.put("node_id", nodeId);
-        entry.put("tool", toolName);
+        entry.put("node_id", node.id());
+        if (node.metric() != null) {
+            entry.put("type", "metric");
+            entry.set("identity", node.metric().identity());
+        } else {
+            entry.put("type", "calculation");
+            entry.put("operator", node.tool());
+            entry.set("input_references", node.args());
+        }
         entry.put("ok", result.ok());
         if (result.data() != null) {
             entry.set("data", result.data());

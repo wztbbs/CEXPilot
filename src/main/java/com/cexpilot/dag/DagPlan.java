@@ -64,8 +64,15 @@ public record DagPlan(List<PlanNode> nodes) {
         for (PlanNode node : nodes) {
             ObjectNode n = nodesArray.addObject();
             n.put("id", node.id());
-            n.put("tool", node.tool());
+            if (node.metric() != null) {
+                n.put("type", "metric");
+                n.put("provider", node.metric().provider());
+            } else {
+                n.put("type", "tool");
+                n.put("tool", node.tool());
+            }
             n.set("args", node.args());
+            if (node.metric() != null) n.set("metric_binding", node.metric().identity());
             var deps = n.putArray("depends_on");
             node.dependsOn().forEach(deps::add);
         }

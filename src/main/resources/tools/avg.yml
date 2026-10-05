@@ -36,3 +36,12 @@ output_schema:
     value: {"type": "string", "description": "十进制结果，单位沿用输入"}
     count: {"type": "integer"}
     method: {"type": "string"}
+    # 指标 DAG 执行时附加；独立调用算子时可不存在。
+    unit: {"type": "string", "description": "由程序继承或推导的结果单位"}
+    metric_sources:
+      type: array
+      description: 去重后的指标来源、窗口和质量信息，由执行器维护
+      items:
+        type: object
+        additionalProperties: true
+        properties: {}

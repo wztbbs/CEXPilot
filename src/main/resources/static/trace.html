@@ -227,17 +227,27 @@
       html += '<details><summary>校验失败的 Plan · ' + esc(e.error) + '</summary>'
         + '<pre class="json">' + esc(pretty(e.output)) + '</pre></details>';
     });
+    events.filter(function (e) { return e.event_type === 'PLAN' && !e.error && e.output && e.output.plan && e.output.plan.metrics; }).forEach(function (e) {
+      html += '<details><summary>有效指标计划（完整）</summary>'
+        + '<pre class="json">' + esc(pretty(e.output)) + '</pre></details>';
+    });
     html += '</div>';
 
     /* ③ DAG 拓扑 */
     var planEvents = events.filter(function (e) { return e.event_type === 'PLAN' && !e.error; });
+    var compiledPlans = events.filter(function (e) { return e.event_type === 'PLAN_COMPILED' && !e.error; });
     var toolCalls = events.filter(function (e) { return e.event_type === 'TOOL_CALL'; });
     var byNodeId = {};
+    var metricByNodeId = {};
+    events.filter(function (e) { return e.event_type === 'METRIC_RESULT'; }).forEach(function (e) {
+      if (e.input && e.input.node_id) metricByNodeId[e.input.node_id] = e;
+    });
     toolCalls.forEach(function (e) {
       if (e.input && e.input.node_id) byNodeId[e.input.node_id] = e;
     });
     html += '<div class="section"><h2><span class="no">3</span>Plan 拓扑（点击节点查看入参/出参）</h2>';
     var plan = planEvents.length ? parseJson(planEvents[planEvents.length - 1].output) : null;
+    if (compiledPlans.length) plan = compiledPlans[compiledPlans.length - 1].output;
     /* 兼容旧数据：合并规划改造初期的 PLAN 事件落的是整个 envelope（plan 在 .plan 子树） */
     if (plan && !plan.nodes && plan.plan && plan.plan.nodes) plan = plan.plan;
     if (!plan || !plan.nodes || !plan.nodes.length) {
@@ -247,14 +257,16 @@
         if (li > 0) html += '<div class="dag-arrow">↓</div>';
         html += '<div class="dag-level">';
         level.forEach(function (n) {
-          var call = byNodeId[n.id];
-          var ok = call ? !call.error : null;
+          var call = byNodeId[n.id] || metricByNodeId[n.id];
+          var metricResult = metricByNodeId[n.id];
+          var ok = metricResult ? !metricResult.error : (call ? !call.error : null);
           var cls = ok === null ? 'pending' : (ok ? 'ok' : 'fail');
           var statusText = ok === null ? '未执行' : (ok ? '✓ 成功' : '✗ 失败');
           if (call && call.duration_ms != null) statusText += ' · ' + (call.duration_ms / 1000).toFixed(1) + 's';
           html += '<div class="dag-node ' + cls + '" data-node="' + esc(n.id) + '">'
             + '<div class="nid">' + esc(n.id) + '</div>'
-            + '<div class="tool">' + esc(n.tool) + '</div>'
+            + '<div class="tool">' + esc(n.provider || n.tool) + '</div>'
+            + (n.metric_binding ? '<div class="dag-deps">' + esc(n.metric_binding.group_id + '.' + n.metric_binding.exchange + ' · ' + n.metric_binding.metric) + '</div>' : '')
             + '<div class="status">' + statusText + '</div>'
             + (n.depends_on && n.depends_on.length
                 ? '<div class="dag-deps">依赖: ' + esc(n.depends_on.join(', ')) + '</div>' : '')
@@ -275,14 +287,17 @@
     content.querySelectorAll('.dag-node').forEach(function (el) {
       el.addEventListener('click', function () {
         var nodeId = el.getAttribute('data-node');
-        var call = byNodeId[nodeId];
+        var call = byNodeId[nodeId] || metricByNodeId[nodeId];
+        var metricResult = metricByNodeId[nodeId];
         var node = plan.nodes.filter(function (n) { return n.id === nodeId; })[0];
-        document.getElementById('modalTitle').textContent = node.id + ' · ' + node.tool;
+        document.getElementById('modalTitle').textContent = node.id + ' · ' + (node.provider || node.tool);
         document.getElementById('modalSub').textContent = call
-          ? ('耗时 ' + (call.duration_ms / 1000).toFixed(1) + 's' + (call.error ? ' · 失败' : ' · 成功'))
+          ? ('耗时 ' + (call.duration_ms / 1000).toFixed(1) + 's' + ((call.error || (metricResult && metricResult.error)) ? ' · 失败' : ' · 成功'))
           : '该节点未执行';
         document.getElementById('modalInput').textContent = call ? pretty(call.input && call.input.args) : pretty(node.args);
-        document.getElementById('modalOutput').textContent = call ? pretty(call.output) : '（无执行记录）';
+        document.getElementById('modalOutput').textContent = metricResult
+          ? pretty({ raw_tool_result: byNodeId[nodeId] && byNodeId[nodeId].output, metric_binding: node.metric_binding, metric_result: metricResult.output })
+          : (call ? pretty(call.output) : '（无执行记录）');
         modalMask.className = 'modal-mask show';
       });
     });

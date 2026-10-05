@@ -63,3 +63,12 @@ output_schema:
     interpretation: {"type": "string"}
     assumption: {"type": "string"}
     year_days: {"type": "integer"}
+    # 指标 DAG 执行时附加；独立调用算子时可不存在。
+    unit: {"type": "string", "description": "由程序继承或推导的结果单位"}
+    metric_sources:
+      type: array
+      description: 去重后的指标来源、窗口和质量信息，由执行器维护
+      items:
+        type: object
+        additionalProperties: true
+        properties: {}

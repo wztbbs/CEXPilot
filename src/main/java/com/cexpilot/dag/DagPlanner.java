@@ -1,6 +1,10 @@
 package com.cexpilot.dag;
 
 import com.cexpilot.config.DagConfig;
+import com.cexpilot.metric.MetricCatalog;
+import com.cexpilot.metric.MetricPlanCompiler;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.io.DefaultResourceLoader;
 import com.cexpilot.config.LlmConfig;
 import com.cexpilot.intent.IntentDefinition;
 import com.cexpilot.intent.IntentRegistry;
@@ -8,46 +12,21 @@ import com.cexpilot.llm.ChatMessage;
 import com.cexpilot.llm.ChatResponse;
 import com.cexpilot.llm.LlmClient;
 import com.cexpilot.llm.LlmJson;
-import com.cexpilot.llm.ToolSpec;
 import com.cexpilot.prompt.PromptStore;
 import com.cexpilot.runtime.ToolRegistry;
-import com.cexpilot.runtime.ToolOutputSchema;
 import com.cexpilot.runtime.TraceEvent;
 import com.cexpilot.runtime.TraceSink;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
-/**
- * LLM 动态规划器（合并调用）：一次 LLM 调用同时完成领域判断、intent 归类（统计 hint）
- * 与 Plan 生成。渲染 dag_planner prompt（注入对话上下文、intent 列表、全量已注册工具
- * 与规模约束），LLM 不带 tools 输出 {"in_domain", "intent", "reply", "plan"}：
- * - in_domain=false → 直接接受（reply 为产品边界话术），不 repair；
- * - in_domain=true 且 plan=null → reply 非空时视为模型有意不规划（工具不足以回答或需追问），
- *   不 repair；plan 存在但 nodes 为空且 reply 非空时同理（模型常这么表达追问），直接接受；
- *   reply 为空则既不是规划也不是话术，属协议违约，走 repair；
- *   reply 超长（>100 字）视为模型把推理过程倒进了 reply 的协议误用，走 repair；
- * - in_domain=true 且 plan 非空 → LlmJson 容错解析 + PlanValidator 确定性校验，
- *   失败把错误明细追加为消息让 LLM 修复，最多重试 plannerMaxRetries 次；
- * - 信封缺失走格式修复，不抢救缺少领域判断的裸 plan。
- * - 工具定义是能力来源；无法产出核心结果时由 planner 用 plan=null 和 reply 说明缺口。
- *   代码检查计划结构和查询参数，不以问题类别推断是否能完成任务。
- *
- * 每次 LLM 调用落 LLM_CALL trace（name="dag_planner"），每次生成的输出落 PLAN trace
- * （校验通过或有意不规划时 error 为 null，否则带错误明细）。
- *
- * dag.planner-response-format 配置 json_object / json_schema 时，planner 调用会下发
- * OpenAI 兼容 response_format 约束（json_schema 强制信封结构，需模型支持）。
- */
+/** 单次 LLM 生成紧凑指标计划；确定性编译为 Tool DAG，再校验和有限次数修复。 */
 @Component
 public class DagPlanner {
 
@@ -64,10 +43,22 @@ public class DagPlanner {
     private final DagConfig dagConfig;
     private final PromptStore prompts;
     private final PlanValidator validator;
+    private final MetricCatalog catalog;
+    private final MetricPlanCompiler compiler;
 
     public DagPlanner(LlmClient llm, ToolRegistry registry, IntentRegistry intentRegistry,
                       LlmConfig llmConfig, DagConfig dagConfig, PromptStore prompts,
                       PlanValidator validator) {
+        this(llm, registry, intentRegistry, llmConfig, dagConfig, prompts, validator,
+                new MetricCatalog(new DefaultResourceLoader()));
+    }
+
+    @Autowired
+    public DagPlanner(LlmClient llm, ToolRegistry registry, IntentRegistry intentRegistry,
+                      LlmConfig llmConfig, DagConfig dagConfig, PromptStore prompts,
+                      PlanValidator validator, MetricCatalog catalog) {
+        this.catalog = catalog;
+        this.compiler = new MetricPlanCompiler(catalog, registry);
         this.llm = llm;
         this.registry = registry;
         this.intentRegistry = intentRegistry;
@@ -139,7 +130,7 @@ public class DagPlanner {
 
         if (!parsed.isObject() || !parsed.path("in_domain").isBoolean()) {
             String error = "输出缺少信封：必须输出完整 JSON 对象 {\"in_domain\", \"intent\", \"reply\", \"plan\"}，"
-                    + "不要直接输出 nodes 数组";
+                    + "不要直接输出指标数组或旧版 nodes";
             return repairDecision(traceId, sink, parsed.toString(), error);
         }
         if (!parsed.path("in_domain").asBoolean(false)) {
@@ -164,7 +155,7 @@ public class DagPlanner {
                                                   String traceId, TraceSink sink) {
         if (reply == null || reply.isBlank()) {
             // plan 缺失且无任何话术 = 协议违约，必须 repair。
-            String error = "缺少 plan 且未给出 reply：可查询时必须输出 plan.nodes；"
+            String error = "缺少 plan 且未给出 reply：可查询时必须输出 plan.metrics 和 plan.calculations；"
                     + "确需拒绝时必须在 reply 写明原因";
             return repairDecision(traceId, sink, parsed.toString(), error);
         }
@@ -174,7 +165,7 @@ public class DagPlanner {
                     + " 字以内），禁止输出推理过程；问题可查询时必须输出 plan 字段";
             return repairDecision(traceId, sink, parsed.toString(), error);
         }
-        // plan=null 或空 nodes + 非空 reply：模型有意不规划，直接接受不 repair。
+        // plan=null 或空 metrics/calculations + 非空 reply：模型有意不规划，直接接受不 repair。
         sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
         return PlanDecision.accepted(true, intent, reply, null);
     }
@@ -183,18 +174,21 @@ public class DagPlanner {
                                       String traceId, TraceSink sink) {
         String error;
         try {
-            DagPlan plan = DagPlan.fromJson(parsed.path("plan"));
+            DagPlan plan = compiler.compile(parsed.path("plan"), Math.min(dagConfig.getMaxNodes(), maxToolCalls));
             if (plan.nodes().isEmpty() && reply != null && !reply.isBlank()) {
                 return evaluateReplyWithoutPlan(parsed, intent, reply, traceId, sink);
             }
-            List<String> errors = validator.validate(plan, null, maxToolCalls);
+            List<String> errors = validator.validate(plan, compiler.allowedTools(), maxToolCalls);
             if (errors.isEmpty()) {
                 sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
+                sink.record(new TraceEvent(traceId, "PLAN_COMPILED", "metric_compiler",
+                        MAPPER.createObjectNode().put("catalog_version", catalog.version()).toString(),
+                        plan.toJson().toString(), null, null, null, null, null, null));
                 // plan 已合法时，超长 reply 直接丢弃，不再为 reply 重试。
                 String effectiveReply = isReasoningDump(reply) ? null : reply;
                 return PlanDecision.accepted(true, intent, effectiveReply, plan);
             }
-            error = planValidationError(errors);
+            error = planValidationError(compiler.logicalErrors(plan, errors));
         } catch (Exception e) {
             error = "plan 解析失败: " + e.getMessage();
         }
@@ -202,16 +196,8 @@ public class DagPlanner {
     }
 
     private String planValidationError(List<String> errors) {
-        String error = "plan 校验失败: " + String.join("; ", errors);
-        if (error.contains("未注册的工具")) {
-            // 常见诱因：模型把 args 胶水进 tool 字符串。给出可用工具名和格式提示。
-            StringBuilder names = new StringBuilder();
-            registry.specs().forEach(spec -> names.append(names.isEmpty() ? "" : ", ")
-                    .append(spec.name()));
-            error += "；tool 字段只能填工具名本身（可用：" + names
-                    + "），args 必须是独立的 JSON 对象字段，如 {\"tool\": \"get_ticker\", \"args\": {\"symbol\": \"BTC\"}}";
-        }
-        return error;
+        return "plan 校验失败: " + String.join("; ", errors)
+                + "；仅使用指标目录与算子，引用格式为 {{指标组.交易所.value}} / {{计算ID.value}}，不要输出底层 Tool 节点";
     }
 
     private PlanDecision repairDecision(String traceId, TraceSink sink, String output, String error) {
@@ -252,54 +238,37 @@ public class DagPlanner {
 
     /**
      * planner 输出信封的 JSON Schema。plan/reply 允许 null：模型判断工具不足以回答时
-     * 输出 plan=null；tool 字段带注册工具名枚举，guided decoding 从生成层面禁止
-     * 编造工具名或把 args 胶水进 tool 字符串。
+     * 输出 plan=null；metric/operator 字段使用目录枚举，结构为 metrics/calculations。
+     * 业务约束及展开后的 DAG 仍由编译器与 PlanValidator 校验。
      */
     private JsonNode plannerSchema() {
-        try {
-            ObjectNode schema = (ObjectNode) MAPPER.readTree("""
-                    {"type": "object", "additionalProperties": false,
-                     "properties": {
-                       "in_domain": {"type": "boolean"},
-                       "intent": {"type": "string"},
-                       "reply": {"type": ["string", "null"]},
-                       "plan": {"type": ["object", "null"], "additionalProperties": false,
-                         "properties": {"nodes": {"type": "array", "items": {
-                           "type": "object", "additionalProperties": false,
-                           "properties": {
-                             "id": {"type": "string"},
-                             "tool": {"type": "string"},
-                             "args": {"type": "object"},
-                             "depends_on": {"type": "array", "items": {"type": "string"}}
-                           },
-                           "required": ["id", "tool", "args", "depends_on"]
-                         }}},
-                         "required": ["nodes"]}
-                     },
-                     "required": ["in_domain", "plan"]}
-                    """);
-            ArrayNode toolEnum = MAPPER.createArrayNode();
-            registry.specs().forEach(spec -> toolEnum.add(spec.name()));
-            ((ObjectNode) schema.at("/properties/plan/properties/nodes/items/properties/tool"))
-                    .set("enum", toolEnum);
+        try (var input = new org.springframework.core.io.ClassPathResource("metrics/plan-schema.json").getInputStream()) {
+            ObjectNode schema = (ObjectNode) MAPPER.readTree(input);
+            ((ObjectNode) schema.at("/properties/plan/properties/metrics/items/properties/metric"))
+                    .set("enum", MAPPER.valueToTree(catalog.names()));
+            ((ObjectNode) schema.at("/properties/plan/properties/calculations/items/properties/operator"))
+                    .set("enum", MAPPER.valueToTree(catalog.operators().stream().sorted()
+                            .filter(name -> registry.get(name) instanceof com.cexpilot.calculation.CalculationTool).toList()));
             return schema;
         } catch (Exception e) {
-            throw new IllegalStateException("planner schema 内置常量解析失败", e);
+            throw new IllegalStateException("加载指标计划 schema 失败", e);
         }
     }
 
     private String systemPrompt(String conversationContext) {
         return prompts.render(PROMPT_NAME, Map.of(
                 "intents", renderIntentList(),
-                "tools", renderTools(registry.specs()),
+                "concepts", catalog.concepts(),
+                "metrics", catalog.describeMetrics(),
+                "operators", catalog.describeOperators(registry),
                 "max_nodes", String.valueOf(Math.min(dagConfig.getMaxNodes(), llmConfig.getMaxToolCalls())),
                 "max_depth", String.valueOf(dagConfig.getMaxDepth()),
                 "conversation_context", conversationContext == null ? "" : conversationContext));
     }
 
-    /** 不含每轮历史的有效规划提示词版本，包含实际注入的工具和意图配置。 */
+    /** 不含每轮历史的有效规划提示词版本，包含指标目录（含绑定）、算子和意图配置。 */
     public String promptVersion() {
-        return PromptStore.fingerprint(systemPrompt(""));
+        return PromptStore.fingerprint(systemPrompt("") + catalog.version());
     }
 
     /** LLM 编造未注册的 intent 名时记 UNKNOWN，防止编造的名字进入统计。 */
@@ -347,63 +316,6 @@ public class DagPlanner {
             sb.append('\n');
         }
         return sb.toString();
-    }
-
-    private String renderTools(List<ToolSpec> specs) {
-        Map<String, JsonNode> common = new java.util.LinkedHashMap<>();
-        Map<String, Integer> counts = new java.util.HashMap<>();
-        Set<String> different = new HashSet<>();
-        for (ToolSpec spec : specs) {
-            spec.inputSchema().path("properties").fields().forEachRemaining(field -> {
-                JsonNode previous = common.putIfAbsent(field.getKey(), field.getValue());
-                if (previous != null && !previous.equals(field.getValue())) different.add(field.getKey());
-                counts.merge(field.getKey(), 1, Integer::sum);
-            });
-        }
-        common.keySet().removeIf(key -> counts.get(key) < 2 || different.contains(key));
-        StringBuilder sb = new StringBuilder();
-        if (!common.isEmpty()) {
-            sb.append("公共参数定义（仅适用于列出该参数的工具）：\n");
-            common.forEach((name, schema) -> sb.append("  ").append(name)
-                    .append('(').append(renderParamDefinition(schema)).append(")\n"));
-        }
-        for (ToolSpec spec : specs) {
-            sb.append("- ").append(spec.name()).append("：").append(spec.description()).append('\n')
-                    .append("  参数：").append(renderParams(spec.inputSchema(), common.keySet())).append('\n')
-                    .append("  输出 data 字段：").append(ToolOutputSchema.describe(registry.outputSchema(spec.name())))
-                    .append('\n');
-        }
-        return sb.toString();
-    }
-
-    private static String renderParams(JsonNode schema, Set<String> common) {
-        JsonNode properties = schema.path("properties");
-        if (properties.isEmpty()) return "无";
-        Set<String> required = new HashSet<>();
-        schema.path("required").forEach(node -> required.add(node.asText()));
-        List<String> params = new ArrayList<>();
-        properties.fields().forEachRemaining(field -> {
-            String param = field.getKey() + (required.contains(field.getKey()) ? "*" : "");
-            if (!common.contains(field.getKey())) param += "(" + renderParamDefinition(field.getValue()) + ")";
-            params.add(param);
-        });
-        return String.join(", ", params);
-    }
-
-    private static String renderParamDefinition(JsonNode field) {
-        List<String> parts = new ArrayList<>();
-        parts.add(field.path("type").asText());
-        if (field.path("enum").isArray()) {
-            List<String> values = new ArrayList<>();
-            field.get("enum").forEach(value -> values.add(value.asText()));
-            parts.add(String.join("|", values));
-        }
-        for (String key : List.of("default", "minimum", "maximum", "pattern")) {
-            if (field.has(key)) parts.add(key + "=" + field.get(key).asText());
-        }
-        String description = field.path("description").asText("").trim();
-        if (!description.isEmpty()) parts.add(description);
-        return String.join(", ", parts);
     }
 
     private static String textOrNull(JsonNode node) {

@@ -38,3 +38,12 @@ output_schema:
     method: {"type": "string"}
     index: {"type": "integer", "description": "0 基位置"}
     item: {"description": "仅 kind=field 返回命中原始行；对象或数组形状随 collection，内部路径运行期校验"}
+    # 指标 DAG 执行时附加；独立调用算子时可不存在。
+    unit: {"type": "string", "description": "由程序继承或推导的结果单位"}
+    metric_sources:
+      type: array
+      description: 去重后的指标来源、窗口和质量信息，由执行器维护
+      items:
+        type: object
+        additionalProperties: true
+        properties: {}

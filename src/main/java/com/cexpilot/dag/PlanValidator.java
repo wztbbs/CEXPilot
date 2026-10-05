@@ -19,7 +19,7 @@ import java.util.Set;
 /**
  * Plan 确定性校验（不调 LLM），返回全部错误明细供 DagPlanner 喂回 LLM 修复：
  * - 结构：id 非空唯一、depends_on 引用存在、三色 DFS 判环；
- * - 供给：tool 已注册且在 allowedTools 白名单内；
+ * - 供给：指标节点具有编译后的类型化请求；工具节点已注册且在 allowedTools 白名单内；
  * - 入参：满足 inputSchema 的 required（值为具体值或 {{ref}} 均可，类型、枚举、范围等按 YAML 校验）；
  * - 规模：节点数 ≤ min(maxNodes, maxToolCalls)、拓扑深度 ≤ maxDepth；
  * - 引用闭合：目标节点存在且在依赖闭包内；字段路径符合上游工具的 output_schema。
@@ -65,8 +65,14 @@ public class PlanValidator {
         }
 
         for (PlanNode node : nodes) {
-            validateTool(node, allowedTools, errors);
-            validateArgs(node, errors);
+            if (node.metric() != null) {
+                if (node.tool() != null || !node.dependsOn().isEmpty()) {
+                    errors.add(node.id() + " 指标节点必须具有一致的类型化请求，且不能混入 Tool 或上游依赖");
+                }
+            } else {
+                validateTool(node, allowedTools, errors);
+                validateArgs(node, errors);
+            }
             for (String dep : node.dependsOn()) {
                 if (!byId.containsKey(dep)) {
                     errors.add(node.id() + " 的 depends_on 引用了不存在的节点: " + dep);
@@ -198,12 +204,13 @@ public class PlanValidator {
                 if (!transitiveDeps(node.id(), byId).contains(ref.nodeId())) {
                     errors.add(node.id() + " 引用了 " + ref.nodeId() + " 但未（传递）依赖它，请加入 depends_on");
                 }
-                var outputSchema = registry.outputSchema(target.tool());
+                var outputSchema = target.metric() == null ? registry.outputSchema(target.tool())
+                        : target.metric().outputSchema();
                 if (outputSchema != null) {
                     String error = ToolOutputSchema.referenceError(outputSchema, ref.path());
                     if (error != null) {
-                        errors.add(node.id() + " 引用 {{" + ref.nodeId() + ref.path() + "}} 不符合上游工具 "
-                                + target.tool() + " 的输出契约：" + error);
+                        errors.add(node.id() + " 引用 {{" + ref.nodeId() + ref.path() + "}} 不符合上游"
+                                + (target.metric() == null ? "工具 " + target.tool() : "指标 " + target.metric().metric()) + " 的输出契约：" + error);
                     }
                 }
             }

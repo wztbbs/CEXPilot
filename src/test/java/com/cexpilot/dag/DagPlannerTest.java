@@ -1,486 +1,138 @@
 package com.cexpilot.dag;
 
 import com.cexpilot.config.DagConfig;
-import com.cexpilot.config.LlmConfig;
-import com.cexpilot.intent.IntentRegistry;
-import com.cexpilot.llm.ChatMessage;
-import com.cexpilot.llm.ChatResponse;
-import com.cexpilot.llm.LlmClient;
-import com.cexpilot.llm.ToolSpec;
-import com.cexpilot.prompt.PromptStore;
-import com.cexpilot.runtime.AgentTool;
-import com.cexpilot.runtime.ToolContext;
-import com.cexpilot.runtime.ToolRegistry;
-import com.cexpilot.runtime.ToolResult;
-import com.cexpilot.runtime.ToolSchemas;
+import com.cexpilot.metric.MetricCatalog;
+import com.cexpilot.metric.MetricPlanCompiler;
 import com.cexpilot.runtime.TraceEvent;
-import com.cexpilot.runtime.TraceSink;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
-import org.springframework.core.io.DefaultResourceLoader;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Queue;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static com.cexpilot.dag.MetricTestSupport.*;
+import static org.junit.jupiter.api.Assertions.*;
 
-/**
- * DagPlanner 合并调用：领域判断 / intent 归类（hint）/ Plan 生成一次完成。
- * 覆盖：出域直接接受不 repair、plan=null+非空 reply 有意不规划不 repair、
- * plan=null+空 reply 协议违约走 repair、首轮合法、
- * repair 后合法、重试耗尽返回 empty、编造 intent 名归一为 UNKNOWN。
- */
+/** 新协议的解析、展开、修复和能力边界；模型为固定脚本，不请求网络。 */
 class DagPlannerTest {
-
-    private static final ObjectMapper MAPPER = new ObjectMapper();
-
-    static class FakeLlmClient implements LlmClient {
-        private final Queue<ChatResponse> script = new ArrayDeque<>();
-        final List<List<ChatMessage>> seenMessages = new ArrayList<>();
-
-        FakeLlmClient(ChatResponse... responses) {
-            script.addAll(List.of(responses));
+    @Test void validPlanExpandsExchangesAndKeepsLogicalAndPhysicalTrace() {
+        var p = plan(metric("m1", "trade.turnover", "range_statistic", "binance", "okx"));
+        calculation(p, "c1", "relative_change", "{\"current\":\"{{m1.binance.value}}\",\"baseline\":\"{{m1.okx.value}}\"}");
+        var llm = new Script(envelope(p));
+        List<TraceEvent> events = new ArrayList<>();
+        var result = planner(llm, registry(), new DagConfig()).plan("比较成交额", "", "test", events::add);
+        assertTrue(result.plan().isPresent(), result.lastError());
+        var nodes = result.plan().orElseThrow().nodes();
+        assertEquals(3, nodes.size());
+        assertEquals(List.of("metric_0", "metric_1"), nodes.get(2).dependsOn());
+        assertEquals("{{metric_0.data.value}}", nodes.get(2).args().at("/input/current").asText());
+        assertEquals(nodes.get(0).args().get("time"), nodes.get(1).args().get("time"));
+        assertEquals("m1", nodes.get(0).metric().groupId());
+        assertNull(nodes.get(0).tool());
+        assertNotNull(nodes.get(0).metricQuery());
+        assertEquals("kline",nodes.get(0).metric().provider());
+        assertEquals(com.cexpilot.metric.KlineMetric.TURNOVER,nodes.get(0).metric().selector());
+        assertEquals(List.of("LLM_CALL", "PLAN", "PLAN_COMPILED"), events.stream().map(TraceEvent::eventType).toList());
+        assertTrue(events.get(2).outputJson().contains("metric_binding"));
+    }
+    @Test void promptExposesOnlyMetricContractsAndOperators() {
+        var llm = new Script(envelope(scalarPlan()));
+        planner(llm, registry(), new DagConfig()).plan("昨天成交额", "", "test", e -> {});
+        String prompt = llm.calls.get(0).get(0).content();
+        for (String expected : List.of("trade.turnover", "price.close", "avg:", "annualize:", "metrics", "samples", "K 线")) assertTrue(prompt.contains(expected), expected);
+        for (String old : List.of("get_ticker", "get_market_statistics", "get_klines", "get_funding_rate", "statistics.quote_volume")) assertFalse(prompt.contains(old), old);
+    }
+    @ParameterizedTest
+    @ValueSource(strings={"{}", "[]", "not json", "{\"plan\":{\"metrics\":[],\"calculations\":[]}}", "{\"in_domain\":true,\"reply\":null,\"plan\":null}", "{\"in_domain\":true,\"plan\":{\"nodes\":[]}}"})
+    void malformedEnvelopeOrLegacyProtocolRepairs(String bad) {
+        var llm = new Script(bad, envelope(scalarPlan()));
+        var result = planner(llm, registry(), new DagConfig()).plan("问题", "", "t", e -> {});
+        assertTrue(result.plan().isPresent(), result.lastError());
+        assertEquals(2, llm.calls.size());
+        assertTrue(llm.calls.get(1).get(3).content().contains("错误明细"));
+        assertEquals(20, result.promptTokens());
+    }
+    @ParameterizedTest @ValueSource(booleans={true,false})
+    void domainAndClarificationShortCircuit(boolean inDomain) {
+        var llm = new Script("{\"in_domain\":"+inDomain+",\"intent\":\"UNKNOWN\",\"plan\":null,\"reply\":\"请明确查询范围\"}");
+        var result = planner(llm, registry(), new DagConfig()).plan("问题", "", "t", e -> {});
+        assertEquals(inDomain,result.inDomain());
+        assertEquals("请明确查询范围",result.reply());
+        assertTrue(result.plan().isEmpty());
+        assertEquals(1,llm.calls.size());
+    }
+    @Test void emptyPlanNeedsReplyAndLongReasoningDoesNotLeak() {
+        for (boolean empty : List.of(true,false)) {
+            ObjectNode e = (ObjectNode) json(envelope(empty ? plan() : scalarPlan()));
+            e.put("reply","推理".repeat(60));
+            var llm = new Script(e.toString(),envelope(scalarPlan()));
+            var result = planner(llm,registry(),new DagConfig()).plan("问题","","t",x -> {});
+            assertTrue(result.plan().isPresent());
+            assertNull(result.reply());
+            assertEquals(empty ? 2 : 1,llm.calls.size());
         }
-
-        @Override
-        public ChatResponse chat(List<ChatMessage> messages, List<ToolSpec> tools) {
-            seenMessages.add(List.copyOf(messages));
-            if (script.isEmpty()) {
-                return new ChatResponse("not json at all", List.of(), 1, 1);
-            }
-            return script.poll();
+        ObjectNode e=(ObjectNode)json(envelope(plan())); e.put("reply","请提供币种");
+        var llm=new Script(e.toString());
+        var result=planner(llm,registry(),new DagConfig()).plan("问题","","t",x -> {});
+        assertTrue(result.plan().isEmpty()); assertEquals("请提供币种",result.reply());
+        var repair=new Script(envelope(plan()),envelope(scalarPlan()));
+        assertTrue(planner(repair,registry(),new DagConfig()).plan("问题","","t",x -> {}).plan().isPresent());
+        assertEquals(2,repair.calls.size());
+    }
+    @Test void unknownIntentAndRetryExhaustion() {
+        ObjectNode e=(ObjectNode)json(envelope(scalarPlan()));e.put("intent","INVENTED");
+        assertEquals("UNKNOWN",planner(new Script(e.toString()),registry(),new DagConfig()).plan("问题","","t",x -> {}).intent());
+        var config=new DagConfig();config.setPlannerMaxRetries(1);
+        var llm=new Script("bad","bad");
+        var result=planner(llm,registry(),config).plan("问题","","t",x -> {});
+        assertTrue(result.plan().isEmpty());assertNotNull(result.lastError());assertEquals(2,llm.calls.size());
+    }
+    @ParameterizedTest @ValueSource(strings={"json_schema", "\"json_schema\"", "json_object"})
+    void responseFormatUsesNewProtocol(String format) {
+        var config=new DagConfig();config.setPlannerResponseFormat(format);
+        var llm=new Script(envelope(scalarPlan()));
+        assertTrue(planner(llm,registry(),config).plan("问题","","t",x -> {}).plan().isPresent());
+        if (format.contains("schema")) {
+            var properties=llm.format.at("/json_schema/schema/properties/plan/properties");
+            assertTrue(properties.has("metrics"));assertTrue(properties.has("calculations"));assertFalse(properties.has("nodes"));
+            assertTrue(properties.at("/metrics/items/properties/metric/enum").toString().contains("price.close"));
+        } else assertEquals("json_object",llm.format.path("type").asText());
+    }
+    @Test void unsupportedMetricsMarketsShapesAndUnknownFieldsFailBeforeExecution() {
+        var registry=registry();var compiler=new MetricPlanCompiler(new MetricCatalog(LOADER),registry);
+        List<ObjectNode> bad=new ArrayList<>();
+        var p=scalarPlan();((ObjectNode)p.at("/metrics/0")).put("metric","funding.rate");bad.add(p);
+        p=scalarPlan();((ObjectNode)p.at("/metrics/0/instrument")).put("market_type","spot");bad.add(p);
+        p=scalarPlan();((ObjectNode)p.at("/metrics/0/instrument")).put("settle","USDC");bad.add(p);
+        p=scalarPlan();((ObjectNode)p.at("/metrics/0")).put("query_shape","snapshot");bad.add(p);
+        p=scalarPlan();((ObjectNode)p.at("/metrics/0")).put("type","metric");bad.add(p);
+        p=scalarPlan();((ObjectNode)p.at("/metrics/0/time")).put("garbage",1);bad.add(p);
+        bad.add(plan(metric("m1","trade.turnover","time_series","binance")));
+        bad.add(plan(metric("m1","price.close","time_series","binance","binance")));
+        for (ObjectNode invalid:bad) assertThrows(IllegalArgumentException.class,()->compiler.compile(invalid,8),invalid::toString);
+    }
+    @Test void missingInputRepairsAndBudgetCountsExpandedNodes() {
+        var valid=scalarPlan();var bad=valid.deepCopy();((ObjectNode)bad.at("/metrics/0")).remove("time");
+        var llm=new Script(envelope(bad),envelope(valid));
+        assertTrue(planner(llm,registry(),new DagConfig()).plan("问题","","t",x->{}).plan().isPresent());
+        assertEquals(2,llm.calls.size());
+        var compiler=new MetricPlanCompiler(new MetricCatalog(LOADER),registry());
+        assertThrows(IllegalArgumentException.class,()->compiler.compile(plan(metric("m1","price.close","range_statistic","binance","okx")),1));
+    }
+    @Test void referencesAndCyclesAreValidatedAndForwardReferencesAllowed() {
+        for(String reference:List.of("{{m1.value}}","{{m1.kraken.value}}","{{m1.binance.price_usdt}}","{{m1.binance.samples}}","{{missing.value}}","{{m1.binance.value}} + 1")) {
+            var p=scalarPlan();calculation(p,"c1","avg","{\"kind\":\"values\",\"values\":[\""+reference+"\",1]}");
+            var config=new DagConfig();config.setPlannerMaxRetries(0);
+            assertTrue(planner(new Script(envelope(p)),registry(),config).plan("问题","","t",x->{}).plan().isEmpty(),reference);
         }
-    }
-
-    static class StubTool implements com.cexpilot.runtime.TestTools.TestTool {
-        @Override
-        public String name() {
-            return "echo_tool";
-        }
-
-        @Override
-        public String description() {
-            return "测试工具";
-        }
-
-        @Override
-        public JsonNode inputSchema() {
-            return MAPPER.createObjectNode();
-        }
-
-        @Override
-        public ToolResult execute(JsonNode args, ToolContext ctx) {
-            return ToolResult.success(MAPPER.createObjectNode());
-        }
-    }
-
-    static class ListSink implements TraceSink {
-        final List<TraceEvent> events = new ArrayList<>();
-
-        @Override
-        public void record(TraceEvent event) {
-            events.add(event);
-        }
-    }
-
-    private static DagPlanner planner(LlmClient llm, DagConfig dagConfig) {
-        ToolRegistry registry = com.cexpilot.runtime.TestTools.registry(List.of(new StubTool()));
-        return new DagPlanner(llm, registry, new IntentRegistry(new DefaultResourceLoader()),
-                new LlmConfig(), dagConfig,
-                new PromptStore(new DefaultResourceLoader()),
-                new PlanValidator(registry, dagConfig));
-    }
-
-    private static ChatResponse respond(String content) {
-        return new ChatResponse(content, List.of(), 10, 5);
-    }
-
-    private static final String VALID_ENVELOPE = """
-            {"in_domain": true,  "intent": "MARKET_LOOKUP", "reply": null,
-             "plan": {"nodes": [{"id": "n1", "tool": "echo_tool", "args": {}, "depends_on": []}]}}
-            """;
-
-    @Test
-    void validPlanOnFirstAttempt() {
-        FakeLlmClient llm = new FakeLlmClient(respond(VALID_ENVELOPE));
-        ListSink sink = new ListSink();
-
-        DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
-                .plan("问题", "", "trace-1", sink);
-
-        assertTrue(outcome.inDomain());
-        assertEquals("MARKET_LOOKUP", outcome.intent());
-        assertTrue(outcome.plan().isPresent());
-        assertEquals(1, outcome.plan().get().nodes().size());
-        assertEquals(10, outcome.promptTokens());
-        assertEquals(5, outcome.completionTokens());
-        // trace：1 次 planner LLM_CALL + 1 条 PLAN（校验通过，无 error）
-        assertEquals(2, sink.events.size());
-        assertEquals("LLM_CALL", sink.events.get(0).eventType());
-        assertEquals("dag_planner", sink.events.get(0).name());
-        assertEquals("PLAN", sink.events.get(1).eventType());
-        assertNull(sink.events.get(1).error());
-        assertEquals(1, llm.seenMessages.size());
-    }
-
-    @Test
-    void outOfDomainAcceptedWithoutRepair() {
-        FakeLlmClient llm = new FakeLlmClient(respond(
-                "{\"in_domain\": false, \"intent\": \"UNKNOWN\", \"reply\": \"我只支持加密货币问题\", \"plan\": null}"));
-        ListSink sink = new ListSink();
-
-        DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
-                .plan("写首诗", "", "trace-2", sink);
-
-        assertFalse(outcome.inDomain());
-        assertNull(outcome.intent());
-        assertEquals("我只支持加密货币问题", outcome.reply());
-        assertTrue(outcome.plan().isEmpty());
-        // 不 repair：只调 1 次 LLM
-        assertEquals(1, llm.seenMessages.size());
-    }
-
-    @Test
-    void nullPlanAcceptedAsIntentionalSkip() {
-        FakeLlmClient llm = new FakeLlmClient(respond(
-                "{\"in_domain\": true,  \"intent\": \"UNKNOWN\", \"reply\": \"缺少链上持仓数据\", \"plan\": null}"));
-        ListSink sink = new ListSink();
-
-        DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
-                .plan("这个问题工具不够", "", "trace-3", sink);
-
-        assertTrue(outcome.inDomain());
-        assertEquals("UNKNOWN", outcome.intent());
-        assertEquals("缺少链上持仓数据", outcome.reply());
-        assertTrue(outcome.plan().isEmpty());
-        assertNull(outcome.lastError());
-        // 有意不规划：不 repair，只调 1 次 LLM
-        assertEquals(1, llm.seenMessages.size());
-    }
-
-    @Test
-    void nullPlanWithNullReplyTriggersRepair() {
-        // plan=null 且 reply 为空：既不是规划也不是话术，协议违约，必须 repair
-        FakeLlmClient llm = new FakeLlmClient(
-                respond("{\"in_domain\": true, "
-                        + " \"intent\": \"MARKET_LOOKUP\", \"reply\": null, \"plan\": null}"),
-                respond(VALID_ENVELOPE));
-        ListSink sink = new ListSink();
-
-        DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
-                .plan("币安上的 BTC 现在多少钱？", "", "trace-20", sink);
-
-        assertTrue(outcome.plan().isPresent());
-        assertEquals(2, llm.seenMessages.size());
-        List<ChatMessage> secondCall = llm.seenMessages.get(1);
-        assertTrue(secondCall.get(secondCall.size() - 1).content().contains("缺少 plan"));
-        assertTrue(sink.events.stream()
-                .filter(e -> e.eventType().equals("PLAN"))
-                .anyMatch(e -> e.error() != null && e.error().contains("缺少 plan")));
-    }
-
-    @Test
-    void fabricatedIntentFallsBackToUnknown() {
-        FakeLlmClient llm = new FakeLlmClient(respond(
-                "{\"in_domain\": true,  \"intent\": \"MADE_UP\", \"reply\": null,"
-                        + " \"plan\": {\"nodes\": [{\"id\": \"n1\", \"tool\": \"echo_tool\", \"args\": {}, \"depends_on\": []}]}}"));
-        ListSink sink = new ListSink();
-
-        DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
-                .plan("问题", "", "trace-4", sink);
-
-        assertTrue(outcome.plan().isPresent());
-        assertEquals("UNKNOWN", outcome.intent());
-    }
-
-    @Test
-    void invalidPlanRepairedWithErrorDetails() {
-        FakeLlmClient llm = new FakeLlmClient(
-                respond("{\"in_domain\": true,  \"intent\": \"UNKNOWN\", \"reply\": null,"
-                        + " \"plan\": {\"nodes\": [{\"id\": \"n1\", \"tool\": \"ghost\", \"args\": {}}]}}"),
-                respond(VALID_ENVELOPE));
-        ListSink sink = new ListSink();
-
-        DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
-                .plan("问题", "", "trace-5", sink);
-
-        assertTrue(outcome.plan().isPresent());
-        assertEquals(2, llm.seenMessages.size());
-        // repair 消息携带校验错误明细 + 针对工具名错误的格式提示
-        List<ChatMessage> secondCall = llm.seenMessages.get(1);
-        ChatMessage repair = secondCall.get(secondCall.size() - 1);
-        assertEquals("user", repair.role());
-        assertTrue(repair.content().contains("未注册的工具"));
-        assertTrue(repair.content().contains("tool 字段只能填工具名本身"));
-        assertTrue(repair.content().contains("echo_tool"));
-        // token 累计两轮
-        assertEquals(20, outcome.promptTokens());
-        // trace：2 次 LLM_CALL + 2 条 PLAN（第一条带 error）
-        long planEvents = sink.events.stream().filter(e -> e.eventType().equals("PLAN")).count();
-        assertEquals(2, planEvents);
-        assertTrue(sink.events.stream()
-                .filter(e -> e.eventType().equals("PLAN"))
-                .anyMatch(e -> e.error() != null && e.error().contains("未注册的工具")));
-    }
-
-    @Test
-    void toolListIsCompactWithoutFullJsonSchema() {
-        StubTool schemaTool = new StubTool() {
-            @Override
-            public JsonNode inputSchema() {
-                return ToolSchemas.parse("""
-                        {"type": "object", "properties": {
-                          "symbol": {"type": "string", "description": "币种基础代码"},
-                          "window": {"type": "string", "enum": ["1h", "4h", "24h"], "description": "时间窗口，默认 1h"}
-                        }, "required": ["symbol"]}
-                        """);
-            }
-        };
-        ToolRegistry registry = com.cexpilot.runtime.TestTools.registry(List.of(schemaTool));
-        FakeLlmClient llm = new FakeLlmClient(respond(VALID_ENVELOPE));
-        DagPlanner planner = new DagPlanner(llm, registry,
-                new IntentRegistry(new DefaultResourceLoader()), new LlmConfig(), new DagConfig(),
-                new PromptStore(new DefaultResourceLoader()),
-                new PlanValidator(registry, new DagConfig()));
-
-        planner.plan("问题", "", "trace-7", new ListSink());
-
-        String system = llm.seenMessages.get(0).get(0).content();
-        // 紧凑格式：参数名 + 必填 * + 枚举 + 一句说明
-        assertTrue(system.contains("echo_tool：测试工具"));
-        assertTrue(system.contains("symbol*(string, 币种基础代码)"));
-        assertTrue(system.contains("window(string, 1h|4h|24h, 时间窗口，默认 1h)"));
-        // 不下发完整 JSON Schema
-        assertFalse(system.contains("\"type\": \"object\""));
-        assertFalse(system.contains("properties"));
-    }
-
-    @Test
-    void retriesExhaustedReturnsEmpty() {
-        DagConfig dagConfig = new DagConfig();
-        dagConfig.setPlannerMaxRetries(1);
-        FakeLlmClient llm = new FakeLlmClient(); // 脚本为空，永远返回非 JSON
-        ListSink sink = new ListSink();
-
-        DagPlanner.PlanOutcome outcome = planner(llm, dagConfig)
-                .plan("问题", "", "trace-6", sink);
-
-        assertTrue(outcome.inDomain());
-        assertEquals("UNKNOWN", outcome.intent());
-        assertTrue(outcome.plan().isEmpty());
-        assertEquals(2, llm.seenMessages.size()); // 首次 + 1 次重试
-        assertTrue(outcome.lastError().contains("解析失败"));
-    }
-
-    @Test
-    void barePlanCannotBypassEnvelope() {
-        for (String output : List.of(
-                "[{\"id\":\"n1\",\"tool\":\"echo_tool\",\"args\":{}}]",
-                "{\"plan\":{\"nodes\":[{\"id\":\"n1\",\"tool\":\"echo_tool\",\"args\":{}}]}}")) {
-            FakeLlmClient llm = new FakeLlmClient(respond(output));
-            DagConfig config = new DagConfig();
-            config.setPlannerMaxRetries(0);
-            DagPlanner.PlanOutcome outcome = planner(llm, config)
-                    .plan("问题", "", "bare-plan", new ListSink());
-            assertTrue(outcome.plan().isEmpty());
-            assertTrue(outcome.lastError().contains("缺少信封"));
-        }
-    }
-
-    @Test
-    void unsalvageableMissingEnvelopeTriggersRepair() {
-        // 既无信封也无可抢救的 plan → 视为格式错误走 repair，而不是误判出域
-        FakeLlmClient llm = new FakeLlmClient(
-                respond("{\"result\": \"some text\"}"),
-                respond(VALID_ENVELOPE));
-        ListSink sink = new ListSink();
-
-        DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
-                .plan("问题", "", "trace-10", sink);
-
-        assertTrue(outcome.plan().isPresent());
-        assertEquals(2, llm.seenMessages.size());
-        List<ChatMessage> secondCall = llm.seenMessages.get(1);
-        ChatMessage repair = secondCall.get(secondCall.size() - 1);
-        assertTrue(repair.content().contains("缺少信封"));
-        assertTrue(sink.events.stream()
-                .filter(e -> e.eventType().equals("PLAN"))
-                .anyMatch(e -> e.error() != null && e.error().contains("缺少信封")));
-    }
-
-    @Test
-    void emptyArrayNotSalvaged() {
-        // 空数组没有可执行的节点，不能抢救，应走 repair
-        FakeLlmClient llm = new FakeLlmClient(
-                respond("[]"),
-                respond(VALID_ENVELOPE));
-        ListSink sink = new ListSink();
-
-        DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
-                .plan("问题", "", "trace-11", sink);
-
-        assertTrue(outcome.plan().isPresent());
-        assertEquals(2, llm.seenMessages.size());
-    }
-
-    @Test
-    void emptyNodesWithReplyAcceptedAsIntentionalSkip() {
-        // 模型用 plan:{"nodes":[]} + reply 表达追问：等价于 plan=null，直接接受不 repair
-        FakeLlmClient llm = new FakeLlmClient(respond(
-                "{\"in_domain\": true,  \"intent\": \"MARKET_LOOKUP\","
-                        + " \"reply\": \"请提供需要查询的币种代码\", \"plan\": {\"nodes\": []}}"));
-        ListSink sink = new ListSink();
-
-        DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
-                .plan("现在盘口压单重不重", "", "trace-13", sink);
-
-        assertTrue(outcome.inDomain());
-        assertEquals("MARKET_LOOKUP", outcome.intent());
-        assertEquals("请提供需要查询的币种代码", outcome.reply());
-        assertTrue(outcome.plan().isEmpty());
-        assertNull(outcome.lastError());
-        assertEquals(1, llm.seenMessages.size());
-        assertNull(sink.events.get(1).error());
-    }
-
-    @Test
-    void emptyNodesWithoutReplyTriggersRepair() {
-        // 空 nodes 且没有 reply：模型什么都没表达，仍按校验失败走 repair
-        FakeLlmClient llm = new FakeLlmClient(
-                respond("{\"in_domain\": true,  \"intent\": \"MARKET_LOOKUP\","
-                        + " \"reply\": null, \"plan\": {\"nodes\": []}}"),
-                respond(VALID_ENVELOPE));
-        ListSink sink = new ListSink();
-
-        DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
-                .plan("问题", "", "trace-14", sink);
-
-        assertTrue(outcome.plan().isPresent());
-        assertEquals(2, llm.seenMessages.size());
-        assertTrue(sink.events.stream()
-                .filter(e -> e.eventType().equals("PLAN"))
-                .anyMatch(e -> e.error() != null && e.error().contains("plan 不包含任何节点")));
-    }
-
-    @Test
-    void longReasoningReplyWithoutPlanTriggersRepair() {
-        // 模型把推理过程倒进 reply 且没给 plan：协议误用，必须 repair 而不是透传
-        FakeLlmClient llm = new FakeLlmClient(
-                respond("{\"in_domain\": true,  \"intent\": \"MARKET_LOOKUP\","
-                        + " \"reply\": \"" + "推理".repeat(60) + "\"}"),
-                respond(VALID_ENVELOPE));
-        ListSink sink = new ListSink();
-
-        DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
-                .plan("问题", "", "trace-15", sink);
-
-        assertTrue(outcome.plan().isPresent());
-        assertEquals(2, llm.seenMessages.size());
-        List<ChatMessage> secondCall = llm.seenMessages.get(1);
-        assertTrue(secondCall.get(secondCall.size() - 1).content().contains("推理过程"));
-    }
-
-    @Test
-    void longReasoningReplyWithEmptyNodesTriggersRepair() {
-        // 空 nodes + 超长 reply 同理：不能透传
-        FakeLlmClient llm = new FakeLlmClient(
-                respond("{\"in_domain\": true,  \"intent\": \"MARKET_LOOKUP\","
-                        + " \"reply\": \"" + "推理".repeat(60) + "\", \"plan\": {\"nodes\": []}}"),
-                respond(VALID_ENVELOPE));
-        ListSink sink = new ListSink();
-
-        DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
-                .plan("问题", "", "trace-16", sink);
-
-        assertTrue(outcome.plan().isPresent());
-        assertEquals(2, llm.seenMessages.size());
-    }
-
-    @Test
-    void longReasoningReplyDroppedWhenPlanValid() {
-        // plan 合法但 reply 是推理 dump：直接丢弃 reply，不为它浪费 repair
-        FakeLlmClient llm = new FakeLlmClient(respond(
-                "{\"in_domain\": true,  \"intent\": \"MARKET_LOOKUP\","
-                        + " \"reply\": \"" + "推理".repeat(60) + "\","
-                        + " \"plan\": {\"nodes\": [{\"id\": \"n1\", \"tool\": \"echo_tool\", \"args\": {}}]}}"));
-        ListSink sink = new ListSink();
-
-        DagPlanner.PlanOutcome outcome = planner(llm, new DagConfig())
-                .plan("问题", "", "trace-17", sink);
-
-        assertTrue(outcome.plan().isPresent());
-        assertNull(outcome.reply());
-        assertNull(outcome.lastError());
-        assertEquals(1, llm.seenMessages.size());
-    }
-
-    @Test
-    void nodeMissingArgsTriggersRepair() {
-        // 节点只有 tool 没有 args：校验报缺少必填参数，走 repair 后修好
-        StubTool tickerTool = new StubTool() {
-            @Override
-            public String name() {
-                return "get_ticker";
-            }
-
-            @Override
-            public JsonNode inputSchema() {
-                return ToolSchemas.parse("""
-                        {"type": "object", "properties": {
-                          "symbol": {"type": "string"}
-                        }, "required": ["symbol"]}
-                        """);
-            }
-        };
-        ToolRegistry registry = com.cexpilot.runtime.TestTools.registry(List.of(tickerTool));
-        DagConfig dagConfig = new DagConfig();
-        FakeLlmClient llm = new FakeLlmClient(
-                respond("{\"in_domain\": true,  \"intent\": \"MARKET_LOOKUP\", \"reply\": null,"
-                        + " \"plan\": {\"nodes\": [{\"id\": \"n1\", \"tool\": \"get_ticker\"}]}}"),
-                respond("{\"in_domain\": true,  \"intent\": \"MARKET_LOOKUP\", \"reply\": null,"
-                        + " \"plan\": {\"nodes\": [{\"id\": \"n1\", \"tool\": \"get_ticker\","
-                        + " \"args\": {\"symbol\": \"BTC\"}, \"depends_on\": []}]}}"));
-        DagPlanner planner = new DagPlanner(llm, registry,
-                new IntentRegistry(new DefaultResourceLoader()), new LlmConfig(), dagConfig,
-                new PromptStore(new DefaultResourceLoader()),
-                new PlanValidator(registry, dagConfig));
-
-        DagPlanner.PlanOutcome outcome = planner.plan("问题", "", "trace-18", new ListSink());
-
-        assertTrue(outcome.plan().isPresent());
-        assertEquals(2, llm.seenMessages.size());
-        List<ChatMessage> secondCall = llm.seenMessages.get(1);
-        assertTrue(secondCall.get(secondCall.size() - 1).content().contains("缺少必填参数: symbol"));
-    }
-
-    @Test
-    void plannerResponseFormatToleratesQuotedValue() {
-        // 运维层（.env / docker env-file）可能不剥引号，带引号的值应按 json_schema 处理
-        DagConfig dagConfig = new DagConfig();
-        dagConfig.setPlannerResponseFormat("\"json_schema\"");
-        FakeLlmClient llm = new FakeLlmClient(respond(VALID_ENVELOPE));
-
-        DagPlanner.PlanOutcome outcome = planner(llm, dagConfig)
-                .plan("问题", "", "trace-19", new ListSink());
-
-        assertTrue(outcome.plan().isPresent());
-    }
-
-    @Test
-    void plannerResponseFormatBuildsJsonSchema() {
-        DagConfig dagConfig = new DagConfig();
-        dagConfig.setPlannerResponseFormat("json_schema");
-        FakeLlmClient llm = new FakeLlmClient(respond(VALID_ENVELOPE));
-
-        DagPlanner.PlanOutcome outcome = planner(llm, dagConfig)
-                .plan("问题", "", "trace-12", new ListSink());
-
-        assertTrue(outcome.plan().isPresent());
+        var p=scalarPlan();calculation(p,"c2","difference","{\"left\":\"{{c1.value}}\",\"right\":1}");
+        calculation(p,"c1","avg","{\"kind\":\"values\",\"values\":[\"{{m1.binance.value}}\",100]}");
+        assertTrue(planner(new Script(envelope(p)),registry(),new DagConfig()).plan("问题","","t",x->{}).plan().isPresent());
+        ((ObjectNode)p.at("/calculations/1/input")).set("values",json("[\"{{c2.value}}\",100]"));
+        var config=new DagConfig();config.setPlannerMaxRetries(0);
+        var cycle=planner(new Script(envelope(p)),registry(),config).plan("问题","","t",x->{});
+        assertTrue(cycle.plan().isEmpty());assertTrue(cycle.lastError().contains("环"));
     }
 }

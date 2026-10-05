@@ -1,0 +1,137 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "in_domain": {
+      "type": "boolean"
+    },
+    "intent": {
+      "type": "string"
+    },
+    "reply": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "plan": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "metrics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "metric": {
+                "type": "string"
+              },
+              "exchanges": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "binance",
+                    "okx"
+                  ]
+                }
+              },
+              "instrument": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "market_type": {
+                    "type": "string"
+                  },
+                  "base": {
+                    "type": "string"
+                  },
+                  "quote": {
+                    "type": "string"
+                  },
+                  "settle": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "market_type",
+                  "base",
+                  "quote"
+                ]
+              },
+              "query_shape": {
+                "type": "string",
+                "enum": [
+                  "range_statistic",
+                  "time_series"
+                ]
+              },
+              "time": {
+                "type": "object"
+              },
+              "interval": {
+                "type": "string",
+                "enum": [
+                  "5m",
+                  "15m",
+                  "1h"
+                ]
+              },
+              "include_unclosed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "metric",
+              "exchanges",
+              "instrument",
+              "query_shape",
+              "time"
+            ]
+          }
+        },
+        "calculations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "operator": {
+                "type": "string"
+              },
+              "input": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "id",
+              "operator",
+              "input"
+            ]
+          }
+        }
+      },
+      "required": [
+        "metrics",
+        "calculations"
+      ]
+    }
+  },
+  "required": [
+    "in_domain",
+    "intent",
+    "reply",
+    "plan"
+  ]
+}

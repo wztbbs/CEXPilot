@@ -151,17 +151,18 @@ class CalculationDagTest {
 
     @Test
     void annualizationRequiresExplicitMethodAndPassesResolvedFactsToAnswer() throws Exception {
-        var registry = registry(source("get_funding_rate_statistics", """
-                {"coverage":{"range_complete":true},"statistics":{"sum":"0.007","observation_seconds":604800}}
-                """));
-        String valid = """
-                {"in_domain":true,"intent":"MARKET_ANALYSIS","reply":null,"plan":{"nodes":[
-                 {"id":"s","tool":"get_funding_rate_statistics","args":{"symbol":"BTC","time":{"type":"rolling_window","duration":{"value":7,"unit":"day"}}}},
-                 {"id":"a","tool":"annualize","args":{"input":{"basis":"cumulative_rate","method":"simple",
-                  "rate":"{{s.data.statistics.sum}}","rate_unit":"ratio",
-                  "period":{"value":"{{s.data.statistics.observation_seconds}}","unit":"second"}}},"depends_on":["s"]}
-                ]}}
-                """;
+        var registry = MetricTestSupport.registry();
+        var provider = MetricTestSupport.provider((q,c) -> {
+            var result = (com.cexpilot.metric.MetricResult.Scalar)MetricTestSupport.metricResult(q,c,24,true);
+            return new com.cexpilot.metric.MetricResult.Scalar(result.metadata(),new java.math.BigDecimal("0.7"),
+                    new java.math.BigDecimal("604800"),result.actualRange());
+        });
+        var logical = MetricTestSupport.plan(MetricTestSupport.metric("m1", "price.change_pct", "range_statistic", "binance"));
+        MetricTestSupport.calculation(logical, "a", "annualize", """
+                {"basis":"holding_return","method":"simple","rate":"{{m1.binance.value}}","rate_unit":"percent",
+                 "period":{"value":"{{m1.binance.observation_seconds}}","unit":"second"}}
+                """);
+        String valid = MetricTestSupport.envelope(logical);
         List<List<ChatMessage>> seen = new ArrayList<>();
         List<TraceEvent> events = new ArrayList<>();
         LlmClient llm = (messages, tools) -> {
@@ -178,14 +179,14 @@ class CalculationDagTest {
         var config = new DagConfig();
         var planner = new DagPlanner(llm, registry, intents, new LlmConfig(), config, prompts,
                 new PlanValidator(registry, config));
-        var executor = new DagExecutor(registry, config);
+        var executor = new DagExecutor(registry, config, MetricTestSupport.providers(provider));
         try {
             var result = new DagRuntime(llm, planner, executor, prompts, intents, Clock.systemUTC()).execute(
-                    "币安 BTC 过去7天累计资金费率简单年化多少？", "", "annual", events::add);
+                    "币安 BTC 过去7天价格区间收益率简单年化多少？", "", "annual", events::add);
             assertEquals(3, seen.size());
             assertEquals(2, result.toolCallCount());
             assertTrue(seen.get(1).get(seen.get(1).size() - 1).content().contains("method 必须明确填写"));
-            assertTrue(seen.get(0).get(0).content().contains("annualize："));
+            assertTrue(seen.get(0).get(0).content().contains("annualize:"));
             assertFalse(seen.get(0).get(0).content().contains("暂不支持年化"));
             var trace = events.stream().filter(e -> "annualize".equals(e.name())).findFirst().orElseThrow();
             assertEquals(604800, MAPPER.readTree(trace.inputJson()).at("/args/input/period/value").asInt());
@@ -225,16 +226,11 @@ class CalculationDagTest {
 
     @Test
     void malformedPlansAreRepairedAndCalculationFactsReachAnswer() throws Exception {
-        var registry = registry(source("get_market_statistics", """
-                {"coverage":{"range_complete":true},"statistics":{"quote_volume":"120"}}
-                """));
-        String goodPlan = """
-                {"in_domain":true,"intent":"MARKET_ANALYSIS","reply":null,"plan":{"nodes":[
-                  {"id":"s","tool":"get_market_statistics","args":{"symbol":"BTC","time":{"type":"calendar_period","unit":"day","offset":-1}}},
-                  {"id":"c","tool":"relative_change","args":{"input":{"current":"{{s.data.statistics.quote_volume}}","baseline":100}},"depends_on":["s"]},
-                  {"id":"a","tool":"avg","args":{"input":{"kind":"values","values":["{{s.data.statistics.quote_volume}}",100]}},"depends_on":["s"]}
-                ]}}
-                """;
+        var registry = MetricTestSupport.registry();
+        var logical = MetricTestSupport.scalarPlan();
+        MetricTestSupport.calculation(logical, "c", "relative_change", "{\"current\":\"{{m1.binance.value}}\",\"baseline\":100}");
+        MetricTestSupport.calculation(logical, "a", "avg", "{\"kind\":\"values\",\"values\":[\"{{m1.binance.value}}\",100]}");
+        String goodPlan = MetricTestSupport.envelope(logical);
         List<List<ChatMessage>> seen = new ArrayList<>();
         List<TraceEvent> events = new ArrayList<>();
         LlmClient llm = (messages, tools) -> {
@@ -252,7 +248,7 @@ class CalculationDagTest {
         var config = new DagConfig();
         var planner = new DagPlanner(llm, registry, intents, new LlmConfig(), config, prompts,
                 new PlanValidator(registry, config));
-        var executor = new DagExecutor(registry, config);
+        var executor = new DagExecutor(registry, config, MetricTestSupport.providers());
         try {
             var result = new DagRuntime(llm, planner, executor, prompts, intents, Clock.systemUTC()).execute(
                     "币安 BTC 昨日成交额相对我给定的 100 USDT 基准增长多少？两者等权平均是多少？", "", "facts", events::add);
@@ -260,8 +256,8 @@ class CalculationDagTest {
             assertEquals(3, result.toolCallCount());
             assertTrue(seen.get(1).get(seen.get(1).size() - 1).content().contains("baseline 必须大于 0"));
             String plannerPrompt = seen.get(0).get(0).content();
-            assertTrue(plannerPrompt.contains("avg："));
-            assertTrue(plannerPrompt.contains("relative_change："));
+            assertTrue(plannerPrompt.contains("avg:"));
+            assertTrue(plannerPrompt.contains("relative_change:"));
             assertFalse(plannerPrompt.contains("暂时无法计算同比"));
             String answerInput = seen.get(2).get(1).content();
             JsonNode facts = MAPPER.readTree(answerInput.substring(
