@@ -16,6 +16,10 @@ public class RelativeChangeTool extends CalculationTool {
     @Override
     public void validateArguments(JsonNode args, boolean allowReferences) {
         JsonNode input = input(args);
+        if (input.has("left") || input.has("right")) {
+            throw new IllegalArgumentException("relative_change 的 input 必须使用 {current, baseline}，"
+                    + "例如 {\"current\":\"{{m1.binance.value}}\",\"baseline\":\"{{m2.okx.value}}\"}，不要写成 left/right");
+        }
         object(input, "input", Set.of("current", "baseline"));
         decimal(input.get("current"), "current", allowReferences);
         BigDecimal baseline = decimal(input.get("baseline"), "baseline", allowReferences);

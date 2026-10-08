@@ -134,7 +134,7 @@ class OutputReferenceTest {
     void allPlannerExamplesUseRealOutputPaths() throws Exception {
         var registry = MetricTestSupport.registry();
         var compiler = new com.cexpilot.metric.MetricPlanCompiler(new com.cexpilot.metric.MetricCatalog(LOADER), registry,
-                MetricTestSupport.providers());
+                MetricTestSupport.catalogProviders());
         var validator = new PlanValidator(registry, new DagConfig());
         String prompt;
         try (var stream = LOADER.getResource("classpath:prompts/dag_planner.txt").getInputStream()) {
@@ -149,7 +149,7 @@ class OutputReferenceTest {
             assertTrue(errors.isEmpty(), errors.toString());
             count++;
         }
-        assertEquals(3, count);
+        assertEquals(5, count);
         // 算子描述里出现的引用必须仍是标准指标/算子字段，防止目录改版后描述漂移回物理路径。
         for (String operator : List.of("avg", "sum", "min", "max", "compare", "difference", "ratio", "relative_change", "annualize")) {
             String description = DEFINITIONS.stream().filter(d -> d.name().equals(operator)).findFirst().orElseThrow().description();

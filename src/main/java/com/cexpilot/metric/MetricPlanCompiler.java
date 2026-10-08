@@ -128,8 +128,9 @@ public final class MetricPlanCompiler {
                     default -> "percent";
                 };
                 String provider = mapping.path("provider").asText();
+                String description = catalog.definition(name).path("description").asText(null);
                 MetricBinding binding = new MetricBinding(id, name, ex, shape, normalizedInstrument, unit, provider,
-                        providers.get(provider).selector(mapping.path("selector").asText()), catalog.version());
+                        providers.get(provider).selector(mapping.path("selector").asText()), catalog.version(), description);
                 MetricQuery query;
                 if (queryShape.requiresTime()) {
                     query = new TimeRangeQuery(binding, TimeSpecParser.parse(metric.get("time")),

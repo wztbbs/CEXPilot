@@ -20,6 +20,9 @@ public final class MetricResultJson {
         ObjectNode out = MAPPER.createObjectNode();
         out.put("group_id", binding.groupId()).put("metric", binding.metric()).put("exchange", binding.exchange())
                 .put("query_shape", binding.shape()).put("unit", binding.unit()).put("catalog_version", binding.catalogVersion());
+        if (binding.description() != null && !binding.description().isBlank()) {
+            out.put("description", binding.description());
+        }
         out.set("instrument", binding.instrument().deepCopy());
         out.putObject("source").put("provider", binding.provider()).put("selector", binding.selector().name());
         return out;

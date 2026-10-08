@@ -40,7 +40,7 @@ public class OiMetricProvider implements MetricProvider {
             if (info == null || info.oi() == null) throw new IllegalArgumentException("持仓量快照缺少数值");
             if (info.dataTime() <= 0) throw new IllegalArgumentException("持仓量快照缺少数据时间，不能标注 as_of");
             return new MetricResult.Point(new MetricResult.SnapshotMetadata(Instant.ofEpochMilli(info.dataTime()),
-                    context.userZone()), info.oi());
+                    context.userZone()), MarketCalculator.roundPlain(info.oi(), 10));
         }
         if (!(query instanceof TimeRangeQuery timeQuery)) {
             throw new IllegalArgumentException("oi Provider 仅支持时间区间与快照查询: " + query.getClass().getSimpleName());
@@ -53,7 +53,8 @@ public class OiMetricProvider implements MetricProvider {
         OiMetric selector = (OiMetric) query.binding().selector();
         if (!query.binding().isRangeStatistic()) {
             return new MetricResult.Series(metadata, result.points().stream()
-                    .map(p -> new MetricResult.Sample(Instant.ofEpochMilli(p.timestamp()), selector.sample(p))).toList());
+                    .map(p -> new MetricResult.Sample(Instant.ofEpochMilli(p.timestamp()),
+                            MarketCalculator.roundPlain(selector.sample(p), 10))).toList());
         }
         if (!result.coverage().rangeComplete()) {
             return new MetricResult.Omitted(metadata, "区间未完整覆盖，不提供指标 value");
@@ -64,7 +65,7 @@ public class OiMetricProvider implements MetricProvider {
         }
         long start = result.points().get(0).timestamp();
         long end = result.coverage().coveredUntilMs();
-        return new MetricResult.Scalar(metadata, selector.statistic(statistics),
+        return new MetricResult.Scalar(metadata, MarketCalculator.roundPlain(selector.statistic(statistics), 10),
                 BigDecimal.valueOf(end - start, 3),
                 new TimeRange(Instant.ofEpochMilli(start), Instant.ofEpochMilli(end), result.effective().range().timezone()));
     }
