@@ -3,6 +3,7 @@ package com.cexpilot.dag;
 import com.cexpilot.llm.ChatMessage;
 import com.cexpilot.llm.ChatResponse;
 import com.cexpilot.llm.LlmClient;
+import com.cexpilot.llm.LlmTraceSerializer;
 import com.cexpilot.prompt.PromptStore;
 import com.cexpilot.runtime.ExecutionResult;
 import com.cexpilot.runtime.RequestContext;
@@ -169,14 +170,14 @@ public class DagRuntime {
                     ? llm.chat(messages, null)
                     : llm.chatStream(messages, null, answerDelta);
             sink.record(TraceEvent.llmCall(traceId, "answer",
-                    answerEventInput(timeContext), answerEventOutput(response.content()),
+                    answerEventInput(messages, timeContext), LlmTraceSerializer.responseToJson(response),
                     System.currentTimeMillis() - start,
                     response.promptTokens(), response.completionTokens(),
                     response.ttftMs(), response.cachedTokens(), null));
             return response;
         } catch (Exception e) {
             sink.record(TraceEvent.llmCall(traceId, "answer",
-                    answerEventInput(timeContext), null,
+                    answerEventInput(messages, timeContext), null,
                     System.currentTimeMillis() - start, null, null, null, null, e.getMessage()));
             throw e;
         }
@@ -219,24 +220,13 @@ public class DagRuntime {
         }
     }
 
-    private static String answerEventInput(ObjectNode timeContext) {
+    private static String answerEventInput(List<ChatMessage> messages, ObjectNode timeContext) {
         ObjectNode node = MAPPER.createObjectNode();
         node.put("stage", "answer");
+        node.put("message_count", messages.size());
         node.set("time_context", timeContext);
+        node.set("messages", LlmTraceSerializer.messagesToArray(messages));
         return node.toString();
-    }
-
-    private static String answerEventOutput(String content) {
-        ObjectNode node = MAPPER.createObjectNode();
-        node.put("content", abbreviate(content));
-        return node.toString();
-    }
-
-    private static String abbreviate(String text) {
-        if (text == null) {
-            return null;
-        }
-        return text.length() <= 2000 ? text : text.substring(0, 2000) + "...";
     }
 
     public String promptVersion() {

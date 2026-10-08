@@ -18,7 +18,7 @@ public interface FundingRateSource {
     /** 数据源能力（单页上限、分页页数预算）；SeriesQueryPolicy 依据它检查查询要求。 */
     SeriesCapability capability();
 
-    /** 该合约的结算周期（毫秒），每次查询实时获取，不做缓存。 */
+    /** 当前/近期结算周期提示（毫秒），每次查询实时获取；不代表任一历史记录实际所属的周期。 */
     long fundingIntervalMs(String base);
 
     /**

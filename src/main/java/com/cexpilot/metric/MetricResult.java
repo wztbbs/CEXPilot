@@ -60,9 +60,9 @@ public sealed interface MetricResult {
     }
     /**
      * 最近 N 期形态的元数据：以期数取样，不做覆盖核对；样本不足时 sampleComplete=false，
-     * 由算子在引用前拦截。periodMs 是该指标的周期（如结算周期），4b 年化再开放为可引用字段。
+     * 由算子在引用前拦截。periodMs 仅用于已核实周期的单期样本；多期或未知周期为 null。
      */
-    record RecentMetadata(int requestedCount, int actualCount, boolean sampleComplete, long periodMs, ZoneId zone)
+    record RecentMetadata(int requestedCount, int actualCount, boolean sampleComplete, Long periodMs, ZoneId zone)
             implements Metadata {
         public RecentMetadata {
             Objects.requireNonNull(zone, "zone");

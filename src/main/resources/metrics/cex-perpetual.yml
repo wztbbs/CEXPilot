@@ -1,6 +1,6 @@
 version: cex-perpetual-v1
 concepts: |
-  本阶段查询 Binance/OKX 的 USDT 报价、USDT 结算永续：成交价格 K 线、持仓量、标记/指数价格、taker 成交流量的区间指标，以及最新成交价与当前持仓量的快照指标。
+  本阶段的可用取数能力由下方 metrics 的指标定义与 bindings 声明；查询形态、产品及交易所限制都必须满足，不能用其他口径替代。
   perpetual 是永续产品，不是现货；base 是基础币，quote 是报价币，settle 是结算币。
   price.open/close/high/low 是成交价格，不是标记价、指数价或当前实时价格；mark.* 是标记价格、index.* 是指数价格，二者都不是成交价，不可混用。
   trade.volume 是基础币成交量；trade.turnover 是真实报价币成交额，来自 K 线成交额累计，不用最新价估算。
@@ -10,8 +10,8 @@ concepts: |
   自然日由 time 和时区定义；滚动窗口不是自然日，也不保证等于交易所官方 24h ticker。
   成交 K 线与标记/指数价格粒度仅支持 5m/15m/1h；持仓量粒度支持 5m/15m/30m/1h/2h/4h/6h/12h/1d；用户未指定则省略，由程序选择。未对齐边界会外延，回答以实际窗口为准。
   默认排除未收盘（未完结）数据点；用户明确要求时才能 include_unclosed=true，并披露状态。
-  percent 是百分数（2 表示 2%），ratio 是 0~1 的比例（0.5 表示 50%），两者单位不同，不能直接比较或求差。
-  年化仅支持 price.change_pct 的区间收益率路径；mark/index 的 change_pct 和 oi.change_pct 不能进 annualize。
+  percent 是百分数（2 表示 2%），ratio 是小数比例（0.5 表示 50%），取值范围由指标定义决定：占总量的比例通常为 0~1，买卖之比可大于 1，资金费率也可为负，两者单位不同，不能直接比较或求差。
+  行情年化仅支持 price.change_pct 的区间收益率和 funding.rate_settled 的单期已结算费率；mark/index 的 change_pct、oi.change_pct 及中间计算结果不能进 annualize。
   snapshot 是当前时刻取值（最新成交价、当前持仓量、当前标记价/指数价），带 as_of 数据时间，不带区间、粒度与覆盖状态；"现在/当前"用 snapshot，"昨天/过去 N 天"用 range_statistic，不能互相替换。
   official_24h 是交易所官方滚动 24 小时口径（涨跌幅、成交量、成交额），窗口由交易所定义，不是自然日、也不能与 range_statistic 的窗口混用；"最近 24 小时"若指交易所官方口径才用它，否则按时间窗口取 range_statistic。
   trade.turnover_24h 仅 Binance：OKX 官方无成交额字段，不提供估算值冒充成交额。
@@ -19,7 +19,7 @@ concepts: |
   因此不提供挂单量指标，也不能把两所的挂单量放在一起比较或求和；不平衡度是同一所内部的买卖之比，可以跨所比较。
   funding.rate_settled 只有已结算费率：当前未结算/预测费率两所口径不同（Binance 是最近已结算值、OKX 是预测值），不接入，也不能用已结算费率冒充"当前费率"。
   recent_n 是期数语义（最近 N 期/笔），不是时间区间；count 必须明确给出，样本不足时 sample_complete=false 并披露实际期数，不能当完整样本用。
-  结算周期因合约而异（8h/4h 等），结果里带 period_seconds；只有 count=1 的单期费率能年化（basis=periodic_rate、rate_unit=ratio，period 引用同一结果的 period_seconds）。
+  结算周期因合约及历史时段而异；只有 count=1 且能从相邻历史结算记录核对该笔周期时才提供 period_seconds，用于单期年化（basis=periodic_rate、rate_unit=ratio，period.value 引用同一结果的 period_seconds，unit=second）。周期缺失不影响读取费率，但不能年化，不用当前/未来周期替代历史周期。
   历史费率区间序列与累计值暂不支持（变周期口径未核清），也不能用价格涨跌幅冒充费率。
   不支持逐笔明细和现货查询、链上查询，不能替换成已有指标。
 operators:
@@ -34,7 +34,7 @@ operators:
   annualize: >
     input 必填 basis、method、rate、rate_unit、period。basis=holding_return|periodic_rate|cumulative_rate，method=simple|compound，不默认方法。
     本阶段行情年化用 price.change_pct 的 range_statistic：basis=holding_return，rate_unit=percent，rate 引用 value，period={value:引用 observation_seconds,unit:second}。
-    单期/累计费率尚无取数能力，不用 K 线价格或成交额冒充费率。用户明确给出的周期收益率常量可以计算。
+    单期已结算费率先查 funding.rate_settled/recent_n/count=1：basis=periodic_rate，rate_unit=ratio，rate 引用 samples.0.value，period.value 引用同一结果的 period_seconds，unit=second；周期缺失时不能年化。累计费率尚无取数能力。用户明确给出的收益率及周期常量可以计算；不接受中间计算结果作为年化 rate。
     simple=rate_ratio*(year_days*86400/period_seconds)；compound=(1+rate_ratio)^(year_days*86400/period_seconds)-1。
     cumulative_rate 仅允许 simple；不猜年化方法、不按时间戳自行算时长；year_days 可省略，默认365，可选360/365/366。
     rate_unit=ratio|percent；period.unit=second|minute|hour|day。输出 value 为比例、percent 已乘100，须披露折算假设，不代表未来实际收益。
@@ -60,7 +60,7 @@ metrics:
     bindings:
       snapshot: {provider: orderbook, selector: SPREAD, depth: {default: 20, min: 5, max: 50}}
   orderbook.imbalance:
-    description: 买卖盘挂单量不平衡度=买方挂单量/卖方挂单量（0~1 的 ratio，不是百分数）；按实际可用档数计算，最多 10 档
+    description: 买卖盘挂单量不平衡度=买方挂单量/卖方挂单量（ratio 可大于1，>1 表示买盘量较多，<1 表示卖盘量较多，不是买量占总量的比例或百分数）；按实际可用档数计算，最多 10 档
     unit: ratio
     bindings:
       snapshot: {provider: orderbook, selector: IMBALANCE, depth: {default: 20, min: 5, max: 50}}

@@ -39,7 +39,7 @@ class FundingMetricProviderTest {
             points.add(new FundingRatePoint(new BigDecimal("0.0001").multiply(BigDecimal.valueOf(i + 1)),
                     FIRST.plusSeconds(i * INTERVAL_MS / 1000).toEpochMilli()));
         }
-        return new FundingRecentResult(points, INTERVAL_MS);
+        return new FundingRecentResult(points, count == 1 ? INTERVAL_MS : null);
     }
 
     private static FundingQueryService service(FundingRecentResult result) {
@@ -111,4 +111,19 @@ class FundingMetricProviderTest {
         assertEquals("2026-09-28 08:00:00",
                 MetricResultJson.write(binding, series).at("/samples/0/time").asText());
     }
+
+    @Test void missingPeriodPreservesFeeAndExplainsAnnualizationGap() {
+        var binding = binding(FundingMetric.RATE);
+        var raw = new FundingRecentResult(sample(1).points(), null);
+        var result = new FundingMetricProvider(service(raw)).query(new CountQuery(binding, 1),
+                new RequestContext(ZoneOffset.UTC, NOW));
+        var json = MetricResultJson.write(binding, result);
+        assertEquals(1, json.path("samples").size());
+        assertTrue(json.path("sample_complete").asBoolean());
+        assertFalse(json.has("period_seconds"));
+        assertTrue(json.path("period_unavailable_reason").asText().contains("无法核实"));
+        assertFalse(json.has("statistics_omitted"));
+        assertDoesNotThrow(() -> new com.cexpilot.calculation.AvgTool().validateSource(json));
+    }
+
 }

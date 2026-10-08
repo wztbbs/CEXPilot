@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -44,7 +45,24 @@ public class TraceController {
     }
 
     /**
-     * 排查用：按时间窗口捞 trace 列表（含每条 trace 的全部事件和反馈）。
+     * 完整回放：在 /trace/{traceId} 基础上额外返回两次 LLM 调用的完整 prompt 与 response。
+     * 完整内容从 trace_event 的 input_json / output_json 读取，不再截断。
+     */
+    @GetMapping("/trace_detail/{traceId}")
+    public ResponseEntity<?> traceDetail(@PathVariable String traceId) {
+        Map<String, Object> trace = traceRepository.findTrace(traceId);
+        if (trace == null) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(Map.of(
+                "trace", trace,
+                "events", traceRepository.findEvents(traceId)));
+    }
+
+    /**
+     * 排查用：按时间窗口捞 trace 列表（含每条 trace 的事件元数据和反馈）。
+     * 为避免批量返回体过大，事件列表会剔除 input_json / output_json 两个重字段；
+     * 需要查看完整 prompt/response 请使用 /api/trace_detail/{traceId}。
      * 例：/api/traces?beginHour=4&endHour=0 捞最近 4 小时；beginHour=12&endHour=8 捞 12 小时前到 8 小时前。
      */
     @GetMapping("/traces")
@@ -70,7 +88,7 @@ public class TraceController {
         Map<String, List<Map<String, Object>>> feedbackByTrace = traceRepository.findFeedbackByTraceIds(traceIds);
         for (Map<String, Object> trace : traces) {
             String traceId = (String) trace.get("trace_id");
-            trace.put("events", eventsByTrace.getOrDefault(traceId, List.of()));
+            trace.put("events", stripHeavyFields(eventsByTrace.getOrDefault(traceId, List.of())));
             trace.put("feedback", feedbackByTrace.getOrDefault(traceId, List.of()));
         }
 
@@ -81,6 +99,17 @@ public class TraceController {
         body.put("count", traces.size());
         body.put("traces", traces);
         return ResponseEntity.ok(body);
+    }
+
+    private static List<Map<String, Object>> stripHeavyFields(List<Map<String, Object>> events) {
+        List<Map<String, Object>> light = new ArrayList<>(events.size());
+        for (Map<String, Object> event : events) {
+            Map<String, Object> copy = new LinkedHashMap<>(event);
+            copy.remove("input_json");
+            copy.remove("output_json");
+            light.add(copy);
+        }
+        return light;
     }
 
     static String validateWindow(double beginHour, double endHour) {

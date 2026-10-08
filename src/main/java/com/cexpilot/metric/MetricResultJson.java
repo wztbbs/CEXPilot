@@ -44,8 +44,15 @@ public final class MetricResultJson {
             out.put("requested_count", recent.requestedCount());
             out.put("actual_count", recent.actualCount());
             out.put("sample_complete", recent.sampleComplete());
-            // 结算周期是年化的依据；只能来自本次取数，不能由调用方假设。
-            out.put("period_seconds", BigDecimal.valueOf(recent.periodMs(), 3));
+            // 只有完整单期样本且周期可核实时才开放；缺周期不等于缺费率。
+            if (recent.requestedCount() == 1 && recent.sampleComplete()) {
+                if (recent.periodMs() != null && recent.periodMs() > 0) {
+                    out.put("period_seconds", BigDecimal.valueOf(recent.periodMs(), 3));
+                    out.put("period_source", "adjacent_settlement_times");
+                } else {
+                    out.put("period_unavailable_reason", "缺少相邻结算记录或时间间隔异常，无法核实该笔费率周期，不支持年化");
+                }
+            }
         }
         out.put("estimated", false).put("truncated", false);
         if (result instanceof MetricResult.Scalar scalar) {

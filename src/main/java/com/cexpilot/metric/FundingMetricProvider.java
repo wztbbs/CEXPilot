@@ -30,10 +30,10 @@ public class FundingMetricProvider implements MetricProvider {
         if (result == null) throw new IllegalArgumentException("资金费率取样失败");
         if (result.points().isEmpty()) {
             return new MetricResult.Omitted(new MetricResult.RecentMetadata(count.count(), 0, false,
-                    result.intervalMs(), context.userZone()), "未取到已结算费率样本，不提供指标 value");
+                    result.singlePeriodMs(), context.userZone()), "未取到已结算费率样本，不提供指标 value");
         }
         var metadata = new MetricResult.RecentMetadata(count.count(), result.points().size(),
-                result.points().size() == count.count(), result.intervalMs(), context.userZone());
+                result.points().size() == count.count(), result.singlePeriodMs(), context.userZone());
         FundingMetric selector = (FundingMetric) query.binding().selector();
         return new MetricResult.Series(metadata, result.points().stream()
                 .map(point -> new MetricResult.Sample(Instant.ofEpochMilli(point.fundingTime()),

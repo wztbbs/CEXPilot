@@ -16,10 +16,12 @@ description: >
   不支持含义不固定的 month/year；时长由上游事实或用户明确给出的周期提供，不猜默认 8 小时、不按时间戳自行计算。
   year_days 是整数 360/365/366，省略时由代码默认 365；固定日数年基准，不自动按闰年或交易日换算，输出会标注基准及来源。
   输入缺少对象、观察范围、方法或无法确定周期时先反问用户；不能仅因需要补充口径就声称没有年化能力。
-  本阶段只有成交价格区间涨跌幅是可年化的取数路径：资金费率、标记价涨跌幅、持仓量变化率都没有可用的周期 fact，不能冒充费率年化。
+  本阶段行情年化仅允许直接引用 price.change_pct 的区间收益率，或 funding.rate_settled 的完整单期样本（recent_n/count=1）。标记价涨跌幅、持仓量变化率和中间计算结果不得用于年化。
   示例1：历史价格区间涨跌幅做复利年化，先查 price.change_pct 的 range_statistic，再 input={"basis":"holding_return",
   "method":"compound","rate":"{{m1.binance.value}}","rate_unit":"percent","period":{"value":"{{m1.binance.observation_seconds}}","unit":"second"}}。
-  示例2：同一结果做简单年化，只改 method=simple，rate 与 period 引用不变。
+  示例2：单期已结算费率年化，先查 funding.rate_settled 的 recent_n/count=1，再 input={"basis":"periodic_rate",
+  "method":"simple","rate":"{{m1.binance.samples.0.value}}","rate_unit":"ratio","period":{"value":"{{m1.binance.period_seconds}}","unit":"second"}}。
+  两条行情路径都必须引用同一结果的周期且 unit=second；period_seconds 仅在该笔历史结算周期可核实时提供，缺失时不可年化。
   observation_seconds 是实际参与统计的时长，不能用请求窗口长度或 samples 首末点之差替代。
   不能把成交额、成交量或金额当收益率；用户给出的周期收益率常量可以写常量。
   行情数值必须引用本轮指标事实，常量仅限用户明确给定或 year_days 的公开默认值。

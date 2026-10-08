@@ -158,6 +158,7 @@ class OutputReferenceTest {
                 assertFalse(ref.path().contains("statistics"), operator + " " + ref.path());
                 assertFalse(ref.path().contains("columns"), operator + " " + ref.path());
                 assertTrue(ref.path().endsWith(".value") || ref.path().endsWith(".observation_seconds")
+                        || ref.path().endsWith(".period_seconds")
                         || ref.path().endsWith(".samples") || ref.path().matches(".*\\.samples(\\.\\d+)?\\.value")
                         || ref.path().endsWith(".percent"), operator + " " + ref.path());
             }

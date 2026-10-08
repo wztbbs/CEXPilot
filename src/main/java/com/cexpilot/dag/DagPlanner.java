@@ -10,6 +10,7 @@ import com.cexpilot.llm.ChatMessage;
 import com.cexpilot.llm.ChatResponse;
 import com.cexpilot.llm.LlmClient;
 import com.cexpilot.llm.LlmJson;
+import com.cexpilot.llm.LlmTraceSerializer;
 import com.cexpilot.prompt.PromptStore;
 import com.cexpilot.runtime.ToolRegistry;
 import com.cexpilot.runtime.TraceEvent;
@@ -122,7 +123,7 @@ public class DagPlanner {
         try {
             parsed = LlmJson.parse(content);
         } catch (Exception e) {
-            return repairDecision(traceId, sink, rawOutput(content), "输出 JSON 解析失败: " + e.getMessage());
+            return repairDecision(traceId, sink, planOutput(content), "输出 JSON 解析失败: " + e.getMessage());
         }
 
         if (!parsed.isObject() || !parsed.path("in_domain").isBoolean()) {
@@ -277,14 +278,14 @@ public class DagPlanner {
         try {
             ChatResponse response = llm.chat(messages, null, responseFormat);
             sink.record(TraceEvent.llmCall(traceId, TRACE_NAME,
-                    eventInput(attempt, messages.size()), rawOutput(response.content()),
+                    eventInput(attempt, messages), LlmTraceSerializer.responseToJson(response),
                     System.currentTimeMillis() - start,
                     response.promptTokens(), response.completionTokens(),
                     response.ttftMs(), response.cachedTokens(), null));
             return response;
         } catch (Exception e) {
             sink.record(TraceEvent.llmCall(traceId, TRACE_NAME,
-                    eventInput(attempt, messages.size()), null,
+                    eventInput(attempt, messages), null,
                     System.currentTimeMillis() - start, null, null, null, null, e.getMessage()));
             throw e;
         }
@@ -294,25 +295,19 @@ public class DagPlanner {
         return node.isTextual() ? node.asText() : null;
     }
 
-    private static String eventInput(int attempt, int messageCount) {
+    private static String eventInput(int attempt, List<ChatMessage> messages) {
         ObjectNode node = MAPPER.createObjectNode();
         node.put("stage", TRACE_NAME);
         node.put("attempt", attempt);
-        node.put("message_count", messageCount);
+        node.put("message_count", messages.size());
+        node.set("messages", LlmTraceSerializer.messagesToArray(messages));
         return node.toString();
     }
 
-    /** 把 LLM 原始输出包成 JSON 对象落 trace（output_json 是 JSON 列，原始文本可能不是合法 JSON）。 */
-    private static String rawOutput(String content) {
+    /** 把 planner 原始输出包成 JSON 对象落 trace（PLAN 事件的 output_json）。 */
+    private static String planOutput(String content) {
         ObjectNode node = MAPPER.createObjectNode();
-        node.put("content", abbreviate(content));
+        node.put("content", content);
         return node.toString();
-    }
-
-    private static String abbreviate(String text) {
-        if (text == null) {
-            return null;
-        }
-        return text.length() <= 2000 ? text : text.substring(0, 2000) + "...";
     }
 }

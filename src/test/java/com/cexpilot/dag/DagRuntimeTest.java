@@ -203,4 +203,40 @@ class DagRuntimeTest {
         assertEquals("2026-09-25",timeContext(llm).path("current_date").asText());
         assertEquals("default",timeContext(llm).path("timezone_source").asText());verify(clock,times(1)).instant();
     }
+
+    @Test void priceAnnualizationRequiresSameSourceSecondsAndRejectsDerivedRates() {
+        for (String period : List.of(
+                "{\"value\":86400,\"unit\":\"second\"}",
+                "{\"value\":\"{{m1.binance.observation_seconds}}\",\"unit\":\"hour\"}",
+                "{\"value\":\"{{m2.okx.observation_seconds}}\",\"unit\":\"second\"}")) {
+            var p = plan(metric("m1", "price.change_pct", "range_statistic", "binance"),
+                    metric("m2", "price.change_pct", "range_statistic", "okx"));
+            calculation(p, "c", "annualize", "{\"basis\":\"holding_return\",\"method\":\"simple\","
+                    + "\"rate\":\"{{m1.binance.value}}\",\"rate_unit\":\"percent\",\"period\":" + period + "}");
+            var r = runtime(new Script(envelope(p), "缺少合法周期"), registry()).execute("年化", "", "t", e -> {});
+            assertFalse(result(r, "c").path("ok").asBoolean(), period);
+            assertTrue(result(r, "c").path("error").asText().contains("同一结果"));
+        }
+        var p = plan(metric("m1", "price.change_pct", "range_statistic", "binance"));
+        calculation(p, "a", "avg", "{\"kind\":\"values\",\"values\":[\"{{m1.binance.value}}\"]}");
+        calculation(p, "c", "annualize", """
+                {"basis":"holding_return","method":"simple","rate":"{{a.value}}",
+                 "rate_unit":"percent","period":{"value":1,"unit":"day"}}
+                """);
+        var r = runtime(new Script(envelope(p), "不可年化"), registry()).execute("年化", "", "t", e -> {});
+        assertTrue(result(r, "a").path("ok").asBoolean());
+        assertFalse(result(r, "c").path("ok").asBoolean());
+        assertTrue(result(r, "c").path("error").asText().contains("中间计算结果"));
+    }
+    @Test void explicitConstantRateAndPeriodStillAnnualize() {
+        var p = plan();
+        calculation(p, "c", "annualize", """
+                {"basis":"periodic_rate","method":"simple","rate":0.0001,
+                 "rate_unit":"ratio","period":{"value":8,"unit":"hour"}}
+                """);
+        var r = runtime(new Script(envelope(p), "10.95%"), registry()).execute("每8小时0.01%，简单年化", "", "t", e -> {});
+        assertTrue(result(r, "c").path("ok").asBoolean());
+        assertEquals("10.95", result(r, "c").at("/data/percent").asText());
+    }
+
 }

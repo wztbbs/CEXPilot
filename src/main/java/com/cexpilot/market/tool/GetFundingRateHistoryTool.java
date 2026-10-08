@@ -88,7 +88,9 @@ public class GetFundingRateHistoryTool extends AbstractMarketTool {
         facts.put("exchange", exchange.displayName());
         facts.put("symbol", base);
         facts.put("mode", "recent_count");
-        facts.put("funding_interval_hours", result.intervalMs() / 3_600_000L);
+        if (result.singlePeriodMs() != null) {
+            facts.put("funding_interval_hours", result.singlePeriodMs() / 3_600_000L);
+        }
         facts.put("requested_count", count);
         facts.put("actual_count", result.points().size());
         facts.put("sample_complete", result.points().size() == count);

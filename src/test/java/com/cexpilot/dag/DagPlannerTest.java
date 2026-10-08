@@ -45,6 +45,19 @@ class DagPlannerTest {
         for (String old : List.of("get_ticker", "get_market_statistics", "get_klines", "get_funding_rate", "statistics.quote_volume",
                 "intent", "MARKET_LOOKUP", "MARKET_ANALYSIS", "EXCHANGE_COMPARE", "意图归类")) assertFalse(prompt.contains(old), old);
     }
+    @Test void renderedPromptUsesCatalogCapabilitiesWithoutLegacyBlanketRefusals() {
+        var llm = new Script(envelope(scalarPlan()));
+        planner(llm, registry(), new DagConfig()).plan("最近10期已结算费率", "", "test", e -> {});
+        String prompt = llm.calls.get(0).get(0).content();
+        for (String capability : List.of("funding.rate_settled", "recent_n", "price.last", "orderbook.spread",
+                "period_seconds", "买卖之比可大于 1")) {
+            assertTrue(prompt.contains(capability), capability);
+        }
+        for (String obsolete : List.of("如现货、资金费率、当前实时报价、盘口", "单期/累计费率尚无取数能力",
+                "年化仅支持 price.change_pct 的区间收益率路径", "ratio 是 0~1 的比例", "买方挂单量/卖方挂单量（0~1")) {
+            assertFalse(prompt.contains(obsolete), obsolete);
+        }
+    }
     @ParameterizedTest
     @ValueSource(strings={"{}", "[]", "not json", "{\"plan\":{\"metrics\":[],\"calculations\":[]}}", "{\"in_domain\":true,\"reply\":null,\"plan\":null}", "{\"in_domain\":true,\"plan\":{\"nodes\":[]}}"})
     void malformedEnvelopeOrLegacyProtocolRepairs(String bad) {

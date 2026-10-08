@@ -101,28 +101,45 @@ public class FundingQueryService {
         if (source == null) {
             throw new IllegalArgumentException("交易所暂无资金费率数据源: " + exchange.displayName());
         }
-        long intervalMs = source.fundingIntervalMs(base);
+        // 当前周期只作为查询窗口的估算提示，绝不作为历史费率的年化依据。
+        long lookbackIntervalMs = source.fundingIntervalMs(base);
+        if (lookbackIntervalMs <= 0) throw new IllegalArgumentException("无法估算资金费率回溯窗口：周期必须为正数");
         long nowMs = requestTime.toEpochMilli();
         List<FundingRatePoint> points = List.of();
-        long lookbackMs = (long) count * intervalMs * 2;
-        long maxLookbackMs = source.capability().budget() * intervalMs;
-        while (lookbackMs <= maxLookbackMs) {
+        // 单期查询额外取得前一次结算，以核对这笔已结算费率实际所属的周期。
+        int needed = count == 1 ? 2 : count;
+        long maxLookbackMs = source.capability().budget() * lookbackIntervalMs;
+        long lookbackMs = Math.min((long) needed * lookbackIntervalMs * 2, maxLookbackMs);
+        while (true) {
             FundingRateSource.FetchResult fetch = source.fetch(
-                    base, intervalMs, nowMs - lookbackMs, nowMs);
+                    base, lookbackIntervalMs, nowMs - lookbackMs, nowMs);
             if (fetch.abortReason() != null) {
                 throw new IllegalArgumentException("资金费率样本拉取中止，无法确认最近 "
                         + count + " 期完整性: " + fetch.abortReason());
             }
             points = fetch.points();
-            if (points.size() >= count || lookbackMs == maxLookbackMs) {
-                break;
-            }
+            if (points.size() >= needed || lookbackMs == maxLookbackMs) break;
             lookbackMs = Math.min(lookbackMs * 2, maxLookbackMs);
         }
+        Long singlePeriodMs = count == 1 ? singleSettlementPeriod(points) : null;
         if (points.size() > count) {
             points = points.subList(points.size() - count, points.size());
         }
-        return new FundingRecentResult(points, intervalMs);
+        return new FundingRecentResult(List.copyOf(points), singlePeriodMs);
+    }
+
+    /**
+     * 使用完整拉取结果中最近两次结算的间隔；当前快照周期可以不同。
+     * 仅归一化整小时附近的时间戳抖动；缺前一期或异常时间间隔时保留费率、不给年化周期。
+     */
+    private static Long singleSettlementPeriod(List<FundingRatePoint> points) {
+        if (points.size() < 2) return null;
+        long interval = points.get(points.size() - 1).fundingTime()
+                - points.get(points.size() - 2).fundingTime();
+        long hourMs = 3_600_000L;
+        long rounded = Math.round(interval / (double) hourMs) * hourMs;
+        if (rounded <= 0 || Math.abs(interval - rounded) > SettlementGridSnap.TOLERANCE_MS) return null;
+        return rounded;
     }
 
     /** 相邻结算间隔必须与当前周期一致（容差同结算时间网格吸附）。 */

@@ -195,4 +195,55 @@ class FundingQueryServiceTest {
                         + "\"end\":{\"day_offset\":-1,\"time\":\"02:00:00\"}}"),
                 NOW, Exchange.BINANCE, "BTC"));
     }
+
+    private static FundingRateSource historicalSource(long hintMs, List<FundingRatePoint> history) {
+        return new FundingRateSource() {
+            public Exchange exchange() { return Exchange.OKX; }
+            public SeriesCapability capability() { return new SeriesCapability(Set.of(), 100, 2); }
+            public long fundingIntervalMs(String base) { return hintMs; }
+            public FetchResult fetch(String base, long intervalMs, long startMs, long endMs) {
+                return new FetchResult(history.stream().filter(p -> p.fundingTime() >= startMs
+                        && p.fundingTime() < endMs).toList(), null);
+            }
+        };
+    }
+    private static FundingRatePoint point(String time) {
+        return new FundingRatePoint(new BigDecimal("0.0001"), Instant.parse(time).toEpochMilli());
+    }
+    @Test void singlePeriodUsesHistoryInsteadOfCurrentOrUpcomingCycle() {
+        var history = List.of(point("2026-09-23T16:00:00Z"), point("2026-09-24T00:00:00Z"),
+                point("2026-09-24T08:00:00Z"));
+        for (long hint : new long[]{3_600_000L, 4 * 3_600_000L, 8 * 3_600_000L}) {
+            var r = service(historicalSource(hint, history)).queryRecent(Exchange.OKX, "BTC", 1, NOW);
+            assertEquals(List.of(history.get(2)), r.points());
+            assertEquals(Long.valueOf(EIGHT_H_MS), r.singlePeriodMs());
+        }
+        // 周期已实际缩短时，应使用这笔记录与前一次结算之间的 4h，而不是旧 8h。
+        var changed = List.of(point("2026-09-24T00:00:00Z"), point("2026-09-24T08:00:00Z"),
+                point("2026-09-24T12:00:00Z"));
+        var r = service(historicalSource(EIGHT_H_MS, changed)).queryRecent(Exchange.OKX, "BTC", 1, NOW);
+        assertEquals(Long.valueOf(4 * 3_600_000L), r.singlePeriodMs());
+    }
+    @Test void unknownHistoricalPeriodDoesNotDiscardSettledRate() {
+        var latest = point("2026-09-24T08:00:00Z");
+        for (var history : List.of(List.of(latest),
+                List.of(point("2026-09-24T03:20:00Z"), latest))) {
+            var r = service(historicalSource(EIGHT_H_MS, history)).queryRecent(Exchange.OKX, "BTC", 1, NOW);
+            assertEquals(List.of(latest), r.points());
+            org.junit.jupiter.api.Assertions.assertNull(r.singlePeriodMs());
+        }
+    }
+    @Test void multiPeriodSamplesDoNotClaimOneSharedSettlementCycle() {
+        var history = List.of(point("2026-09-24T00:00:00Z"), point("2026-09-24T08:00:00Z"),
+                point("2026-09-24T12:00:00Z"));
+        var r = service(historicalSource(EIGHT_H_MS, history)).queryRecent(Exchange.OKX, "BTC", 3, NOW);
+        assertEquals(history, r.points());
+        org.junit.jupiter.api.Assertions.assertNull(r.singlePeriodMs());
+    }
+    @Test void smallSettlementTimestampJitterIsNormalizedToSecondsOfWholeHours() {
+        var history = List.of(point("2026-09-24T00:00:00.001Z"), point("2026-09-24T08:00:00.002Z"));
+        var r = service(historicalSource(EIGHT_H_MS, history)).queryRecent(Exchange.OKX, "BTC", 1, NOW);
+        assertEquals(Long.valueOf(EIGHT_H_MS), r.singlePeriodMs());
+    }
+
 }

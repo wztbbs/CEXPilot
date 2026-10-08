@@ -51,14 +51,18 @@ class Stage4RecentAccessTest {
         }
         var service = mock(FundingQueryService.class);
         when(service.queryRecent(any(Exchange.class), anyString(), anyInt(), any(Instant.class)))
-                .thenReturn(new FundingRecentResult(points, INTERVAL_MS));
+                .thenReturn(new FundingRecentResult(points, sampleCount == 1 ? INTERVAL_MS : null));
         return service;
     }
 
     private ExecutionResult run(ObjectNode plan, int sampleCount) {
+        return run(plan, funding(sampleCount));
+    }
+
+    private ExecutionResult run(ObjectNode plan, FundingQueryService service) {
         var llm = new Script(envelope(plan), "回答");
         var config = new DagConfig();
-        var providers = new MetricProviderRegistry(List.of(new FundingMetricProvider(funding(sampleCount))));
+        var providers = new MetricProviderRegistry(List.of(new FundingMetricProvider(service)));
         var executor = new DagExecutor(registry(), config, providers);
         executors.add(executor);
         return new DagRuntime(llm, planner(llm, registry(), config), executor,
@@ -171,4 +175,48 @@ class Stage4RecentAccessTest {
             assertFalse(node.args().has("time"));
         }
     }
+
+    @Test void secondsCannotBeRelabeledAsHoursAndFailureKeepsOriginalFacts() {
+        var plan = plan(recent("m1", "funding.rate_settled", 1, "binance"));
+        calculation(plan, "c1", "annualize", """
+                {"basis":"periodic_rate","method":"simple","rate":"{{m1.binance.samples.0.value}}",
+                 "rate_unit":"ratio","period":{"value":"{{m1.binance.period_seconds}}","unit":"hour"}}
+                """);
+        var r = run(plan, 1);
+        assertTrue(result(r, "metric_0").path("ok").asBoolean());
+        assertFalse(result(r, "c1").path("ok").asBoolean());
+        assertTrue(result(r, "c1").path("error").asText().contains("second"));
+    }
+
+    @Test void unavailableHistoricalCycleBlocksOnlyAnnualization() {
+        var service = funding(1);
+        when(service.queryRecent(any(Exchange.class), anyString(), anyInt(), any(Instant.class)))
+                .thenReturn(new FundingRecentResult(List.of(new FundingRatePoint(new BigDecimal("0.0001"),
+                        FIRST.toEpochMilli())), null));
+        var plan = plan(recent("m1", "funding.rate_settled", 1, "binance"));
+        calculation(plan, "c1", "annualize", """
+                {"basis":"periodic_rate","method":"simple","rate":"{{m1.binance.samples.0.value}}",
+                 "rate_unit":"ratio","period":{"value":"{{m1.binance.period_seconds}}","unit":"second"}}
+                """);
+        var r = run(plan, service);
+        assertTrue(result(r, "metric_0").path("ok").asBoolean());
+        assertTrue(result(r, "metric_0").at("/data/sample_complete").asBoolean());
+        assertFalse(result(r, "c1").path("ok").asBoolean());
+        assertTrue(result(r, "c1").path("error").asText().contains("缺少可核实"));
+    }
+    @Test void intermediateAverageCannotBypassSinglePeriodRestriction() {
+        var plan = plan(recent("m1", "funding.rate_settled", 10, "binance"));
+        calculation(plan, "a", "avg", """
+                {"kind":"field","collection":"{{m1.binance.samples}}","field":"value"}
+                """);
+        calculation(plan, "c1", "annualize", """
+                {"basis":"periodic_rate","method":"simple","rate":"{{a.value}}",
+                 "rate_unit":"ratio","period":{"value":8,"unit":"hour"}}
+                """);
+        var r = run(plan, 10);
+        assertTrue(result(r, "a").path("ok").asBoolean());
+        assertFalse(result(r, "c1").path("ok").asBoolean());
+        assertTrue(result(r, "c1").path("error").asText().contains("中间计算结果"));
+    }
+
 }

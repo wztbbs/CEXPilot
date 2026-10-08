@@ -17,7 +17,8 @@ import java.util.TreeMap;
 /**
  * OKX 资金费率历史数据源：参数映射（BTC → BTC-USDT-SWAP）、after 游标从区间右端
  * 向过去翻页、结算时间网格吸附、按 fundingTime 去重排序。
- * 结算周期 = fundingRate 接口的 nextFundingTime - fundingTime。
+ * 查询周期提示 = fundingRate 接口的 nextFundingTime - fundingTime，代表当前快照中的未来间隔。
+ * 已结算记录的年化周期由 FundingQueryService 从相邻历史结算记录核对，不直接使用此提示。
  */
 @Component
 public class OkxFundingRateSource implements FundingRateSource {
