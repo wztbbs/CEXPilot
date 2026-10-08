@@ -73,8 +73,15 @@
                   "recent_n"
                 ]
               },
+              "count": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100,
+                "description": "最近 N 期的期数；query_shape=recent_n 时必填，没有默认值"
+              },
               "time": {
-                "type": "object"
+                "type": "object",
+                "description": "时间窗口，仅 range_statistic / time_series 需要；query_shape=recent_n 时必须完全省略"
               },
               "interval": {
                 "type": "string",
@@ -98,12 +105,6 @@
                 "minimum": 5,
                 "maximum": 50,
                 "description": "盘口档位数，仅声明 depth 的指标可用"
-              },
-              "count": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 100,
-                "description": "最近 N 期的期数，仅 recent_n 形态必填"
               }
             },
             "required": [
