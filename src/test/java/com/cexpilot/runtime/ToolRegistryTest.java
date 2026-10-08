@@ -10,7 +10,6 @@ import com.cexpilot.ethereum.tool.GetTransactionTool;
 import com.cexpilot.llm.ChatMessage;
 import com.cexpilot.llm.ChatResponse;
 import com.cexpilot.market.MarketDataService;
-import com.cexpilot.market.tool.*;
 import com.cexpilot.prompt.PromptStore;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -154,12 +153,7 @@ class ToolRegistryTest {
     @Test
     void allRealToolExecutorsBindToYamlThroughSpring() {
         MarketDataService market = mock(MarketDataService.class);
-        List<AgentTool> executors = List.of(new GetTickerTool(market),
-                new GetFundingRateTool(market),
-                new GetFundingRateHistoryTool(market, mock(com.cexpilot.market.funding.FundingQueryService.class)),
-                new GetFundingRateStatisticsTool(market, mock(com.cexpilot.market.funding.FundingQueryService.class)),
-                new GetOrderbookTool(market), new GetRecentTradesTool(market),
-                new GetTradeHistoryTool(market, mock(com.cexpilot.market.trade.TradeQueryService.class)),
+        List<AgentTool> executors = List.of(
                 new com.cexpilot.calculation.AvgTool(), new com.cexpilot.calculation.RelativeChangeTool(),
                 new com.cexpilot.calculation.AnnualizeTool(), new com.cexpilot.calculation.CompareTool(),
                 new com.cexpilot.calculation.DifferenceTool(), new com.cexpilot.calculation.RatioTool(),
@@ -192,30 +186,14 @@ class ToolRegistryTest {
             context.registerBean(com.cexpilot.llm.LlmClient.class, () -> mock(com.cexpilot.llm.LlmClient.class));
             context.refresh();
             ToolRegistry registry = context.getBean(ToolRegistry.class);
-            assertEquals(17, registry.size());
+            assertEquals(10, registry.size());
             assertNotNull(context.getBean(DagPlanner.class));
             assertNotNull(context.getBean(com.cexpilot.dag.DagExecutor.class));
             assertNotNull(context.getBean(com.cexpilot.metric.MetricProviderRegistry.class).get("kline"));
             assertNotNull(context.getBean(com.cexpilot.metric.MetricProviderRegistry.class).get("ticker"),
                     "目录含快照指标后，ticker Provider 必须注册，否则启动校验失败");
-            assertEquals("binance", registry.prepareArguments("get_ticker", MAPPER.createObjectNode().put("symbol", "BTC")).path("exchange").asText());
             assertThrows(IllegalArgumentException.class, () -> registry.prepareArguments("get_transaction", MAPPER.createObjectNode().put("tx_hash", "0xabc")));
             assertDoesNotThrow(() -> registry.prepareArguments("get_transaction", MAPPER.createObjectNode().put("tx_hash", "0x" + "a".repeat(64))));
         }
-    }
-    @Test
-    void configuredDefaultsReachRealToolExecution() {
-        MarketDataService market = mock(MarketDataService.class);
-        org.mockito.Mockito.when(market.recentTrades(com.cexpilot.market.Exchange.BINANCE, "BTC", 50))
-                .thenReturn(List.of());
-        var definitions = ToolDefinitionLoader.load(new DefaultResourceLoader()).stream()
-                .filter(definition -> definition.name().equals("get_recent_trades")).toList();
-        AgentTool executor = new GetRecentTradesTool(market);
-        ToolRegistry registry = new ToolRegistry(List.of(executor), definitions);
-        var args = registry.prepareArguments(executor.name(), MAPPER.createObjectNode().put("symbol", "BTC"));
-        ToolResult result = executor.execute(args, new ToolContext("test", null));
-        assertTrue(result.ok());
-        assertTrue(result.data().path("recent_trades_columns").isArray());
-        org.mockito.Mockito.verify(market).recentTrades(com.cexpilot.market.Exchange.BINANCE, "BTC", 50);
     }
 }

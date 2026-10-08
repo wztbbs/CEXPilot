@@ -11,7 +11,6 @@ import com.cexpilot.market.model.OpenInterestInfo;
 import com.cexpilot.market.model.OrderBook;
 import com.cexpilot.market.model.TakerVolumePoint;
 import com.cexpilot.market.model.Ticker;
-import com.cexpilot.market.model.Trade;
 import com.cexpilot.market.model.TradePoint;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -221,22 +220,6 @@ public class OkxClient {
                 "contracts", item.path("ts").asLong(0));
     }
 
-    public List<Trade> trades(String instId, int limit) {
-        JsonNode data = get("/api/v5/market/trades?instId={i}&limit={l}", instId, limit);
-        List<Trade> trades = new ArrayList<>();
-        for (int i = data.size() - 1; i >= 0; i--) {
-            JsonNode item = data.get(i);
-            // sz 是合约张数，不是基础币数量
-            trades.add(new Trade(
-                    item.path("ts").asLong(),
-                    decimal(item, "px"),
-                    decimal(item, "sz"),
-                    "buy".equalsIgnoreCase(item.path("side").asText()),
-                    "contracts"));
-        }
-        return trades;
-    }
-
     /** mark 与 index 是两次顺序请求，各自保留来源时间戳，供基差处给出时间差。 */
     public MarkPrice markPrice(String instId, String indexInstId) {
         JsonNode markData = get("/api/v5/public/mark-price?instType=SWAP&instId={i}", instId);
@@ -289,33 +272,6 @@ public class OkxClient {
                     row.size() > 5 ? Boolean.valueOf("1".equals(row.get(5).asText())) : null));
         }
         return candles;
-    }
-
-    /**
-     * 区间历史逐笔成交：倒序返回（最新在前），单页上限 100。
-     * type=1（默认）：after/before 为 tradeId，after=<tradeId> 翻更早、before=<tradeId> 翻更新；
-     * type=2：after/before 为毫秒时间戳，用于按时间锚定首页（同一毫秒多笔时翻页必须用 type=1）。
-     * sz 为合约张数（基础币换算由调用方按 ctVal 处理）；side 为主动方。
-     * 跨页拉取由调用方（TradeSource）负责。
-     */
-    public List<TradePoint> historyTrades(String instId, String type,
-                                          String beforeTradeId, String afterValue, int limit) {
-        StringBuilder uri = new StringBuilder("/api/v5/market/history-trades?instId={i}&limit={l}");
-        List<Object> vars = new ArrayList<>(List.of(instId, limit));
-        if (type != null) {
-            uri.append("&type={t}");
-            vars.add(type);
-        }
-        if (beforeTradeId != null) {
-            uri.append("&before={bf}");
-            vars.add(beforeTradeId);
-        }
-        if (afterValue != null) {
-            uri.append("&after={af}");
-            vars.add(afterValue);
-        }
-        JsonNode data = get(uri.toString(), vars.toArray());
-        return parseHistoryTrades(data);
     }
 
     static List<TradePoint> parseHistoryTrades(JsonNode data) {

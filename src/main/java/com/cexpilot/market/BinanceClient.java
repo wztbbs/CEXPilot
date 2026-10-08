@@ -10,7 +10,6 @@ import com.cexpilot.market.model.OpenInterestInfo;
 import com.cexpilot.market.model.OrderBook;
 import com.cexpilot.market.model.TakerVolumePoint;
 import com.cexpilot.market.model.Ticker;
-import com.cexpilot.market.model.Trade;
 import com.cexpilot.market.model.TradePoint;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -179,41 +178,6 @@ public class BinanceClient {
         JsonNode node = get("/fapi/v1/depth?symbol={s}&limit={l}", symbol, mapDepth(limit));
         return new OrderBook(parseLevels(node.path("bids")), parseLevels(node.path("asks")),
                 "base", node.path("T").asLong(node.path("E").asLong(0)));
-    }
-
-    public List<Trade> trades(String symbol, int limit) {
-        JsonNode node = get("/fapi/v1/trades?symbol={s}&limit={l}", symbol, limit);
-        List<Trade> trades = new ArrayList<>();
-        for (JsonNode item : node) {
-            // isBuyerMaker=true 表示买方是挂单方，即主动方是卖方
-            trades.add(new Trade(
-                    item.path("time").asLong(),
-                    decimal(item, "price"),
-                    decimal(item, "qty"),
-                    !item.path("isBuyerMaker").asBoolean(true),
-                    "base"));
-        }
-        return trades;
-    }
-
-    /**
-     * 区间聚合成交（aggTrades）：升序返回窗口内最早 N 条，单页上限 1000。
-     * 一笔聚合成交可能含多笔原始成交（f~l 为原始成交 ID 区间）；q 为基础币数量；
-     * m=true 表示买方是挂单方，即主动方是卖方。跨页拉取由调用方（TradeSource）负责。
-     */
-    public List<TradePoint> aggTrades(String symbol, long startTimeMs, long endTimeMs, int limit) {
-        JsonNode node = get("/fapi/v1/aggTrades?symbol={s}&startTime={st}&endTime={et}&limit={l}",
-                symbol, startTimeMs, endTimeMs, limit);
-        return parseAggTrades(node);
-    }
-
-    /**
-     * 按聚合成交 ID 续页（fromId 含等值，升序返回），与 {@link #aggTrades} 同口径。
-     * 同一毫秒可能有多笔聚合成交，按时间戳翻页会漏同毫秒数据，跨页必须用 fromId。
-     */
-    public List<TradePoint> aggTradesFromId(String symbol, long fromId, int limit) {
-        JsonNode node = get("/fapi/v1/aggTrades?symbol={s}&fromId={f}&limit={l}", symbol, fromId, limit);
-        return parseAggTrades(node);
     }
 
     static List<TradePoint> parseAggTrades(JsonNode node) {

@@ -3,10 +3,8 @@ package com.cexpilot.dag;
 import com.cexpilot.config.DagConfig;
 import com.cexpilot.market.*;
 import com.cexpilot.market.kline.*;
-import com.cexpilot.market.funding.FundingQueryService;
 import com.cexpilot.market.model.Candle;
 import com.cexpilot.market.series.SeriesCapability;
-import com.cexpilot.market.tool.*;
 import com.cexpilot.metric.*;
 import com.cexpilot.prompt.PromptStore;
 import com.cexpilot.runtime.*;
@@ -96,37 +94,9 @@ class ToolCapabilityMigrationTest {
             }
         } finally{executor.shutdown();}
     }
-    @Test void oldToolsRemainRegisteredButCannotEnterNewPlanner() {
-        var market=mock(MarketDataService.class);
-        var registry=registry(new GetTickerTool(market),new GetFundingRateTool(market));
-        assertNotNull(registry.get("get_ticker"));
-        var llm=new Script("{\"in_domain\":true,\"plan\":{\"nodes\":[{\"id\":\"n1\",\"tool\":\"get_ticker\",\"args\":{\"symbol\":\"BTC\"}}]}}");
-        var config=new DagConfig();config.setPlannerMaxRetries(0);
-        assertTrue(planner(llm,registry,config).plan("当前价","","t",e->{}).plan().isEmpty());
-        verifyNoInteractions(market);
-    }
     @Test void missingProviderFailsStartupButOldKlineToolsAreNotRequired() {
         var catalog=new MetricCatalog(LOADER);
         assertDoesNotThrow(()->new MetricPlanCompiler(catalog,registry(),providers()));
         assertThrows(IllegalArgumentException.class,()->new MetricProviderRegistry(List.of(),catalog));
     }
-    @Test
-    void invalidCountsCannotBypassChecksViaDirectToolCalls() throws Exception {
-        var market = mock(MarketDataService.class);
-        var funding = mock(FundingQueryService.class);
-        var recentTool = new GetRecentTradesTool(market);
-        var fundingTool = new GetFundingRateHistoryTool(market, funding);
-        for (String count : List.of("0", "-1", "101", "2147483648", "1.5", "\"50\"", "null")) {
-            assertFalse(recentTool.execute(MAPPER.readTree("{\"symbol\":\"BTC\",\"exchange\":\"binance\",\"limit\":" + count + "}"), null).ok());
-            assertFalse(fundingTool.execute(MAPPER.readTree("{\"symbol\":\"BTC\",\"exchange\":\"binance\",\"count\":" + count + "}"), null).ok());
-        }
-        for (String symbol : List.of("BTC-USDC", "BTC/USDC", "BTCUSDC", "BTC-USD-SWAP", "BTC-USDT-261225")) {
-            assertFalse(recentTool.execute(MAPPER.createObjectNode().put("symbol", symbol).put("exchange", "binance"), null).ok());
-        }
-        // time/count 按字段是否提供互斥；无效 count 也不能被 time 模式静默忽略。
-        assertFalse(fundingTool.execute(MAPPER.readTree("{\"symbol\":\"BTC\",\"exchange\":\"binance\",\"count\":0,\"time\":" + DAY + "}"), null).ok());
-        verifyNoInteractions(market, funding);
-    }
-
-
 }

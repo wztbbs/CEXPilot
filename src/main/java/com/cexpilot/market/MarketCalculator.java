@@ -4,7 +4,6 @@ import com.cexpilot.market.model.Candle;
 import com.cexpilot.market.model.OiPoint;
 import com.cexpilot.market.model.OrderBook;
 import com.cexpilot.market.model.TakerVolumePoint;
-import com.cexpilot.market.model.Trade;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -180,29 +179,6 @@ public final class MarketCalculator {
             return null;
         }
         return book.asks().get(0).price().subtract(book.bids().get(0).price());
-    }
-
-    /** 成交统计：主动买占比。 */
-    public record TradesSummary(int count, int buyCount, BigDecimal buyVolumeRatio) {
-    }
-
-    public static TradesSummary tradesSummary(List<Trade> trades) {
-        if (trades == null || trades.isEmpty()) {
-            return null;
-        }
-        int buyCount = 0;
-        BigDecimal buyVol = BigDecimal.ZERO;
-        BigDecimal totalVol = BigDecimal.ZERO;
-        for (Trade trade : trades) {
-            totalVol = totalVol.add(trade.qty());
-            if (trade.buyAggressor()) {
-                buyCount++;
-                buyVol = buyVol.add(trade.qty());
-            }
-        }
-        BigDecimal ratio = totalVol.signum() == 0 ? null
-                : buyVol.divide(totalVol, 4, RoundingMode.HALF_UP);
-        return new TradesSummary(trades.size(), buyCount, ratio);
     }
 
     /**

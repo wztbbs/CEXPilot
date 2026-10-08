@@ -3,7 +3,6 @@ package com.cexpilot.market;
 import com.cexpilot.market.model.Candle;
 import com.cexpilot.market.model.OiPoint;
 import com.cexpilot.market.model.OrderBook;
-import com.cexpilot.market.model.Trade;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -157,17 +156,6 @@ class MarketCalculatorTest {
         assertNull(MarketCalculator.takerFlowStats(List.of(
                 new com.cexpilot.market.model.TakerVolumePoint(1, bd("0"), bd("0")))).buyVolumeRatio());
         assertNull(MarketCalculator.takerFlowStats(List.of()));
-    }
-
-    @Test
-    void tradesSummaryBuyRatio() {
-        List<Trade> trades = List.of(
-                new Trade(1, bd("100"), bd("1"), true, "base"),
-                new Trade(2, bd("100"), bd("3"), false, "base"));
-        MarketCalculator.TradesSummary summary = MarketCalculator.tradesSummary(trades);
-        assertEquals(2, summary.count());
-        assertEquals(1, summary.buyCount());
-        assertEquals(0, new BigDecimal("0.2500").compareTo(summary.buyVolumeRatio()));
     }
 
     @Test

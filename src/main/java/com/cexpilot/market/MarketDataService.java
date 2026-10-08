@@ -7,10 +7,8 @@ import com.cexpilot.market.model.MarkPrice;
 import com.cexpilot.market.model.OpenInterestInfo;
 import com.cexpilot.market.model.OrderBook;
 import com.cexpilot.market.model.Ticker;
-import com.cexpilot.market.model.Trade;
 import org.springframework.stereotype.Service;
 
-import java.math.BigDecimal;
 import java.util.List;
 
 /**
@@ -80,13 +78,6 @@ public class MarketDataService {
         return switch (exchange) {
             case BINANCE -> binance.depth(SymbolMapper.binanceSymbol(base), depth);
             case OKX -> okx.orderBook(SymbolMapper.okxInstId(base), depth);
-        };
-    }
-
-    public List<Trade> recentTrades(Exchange exchange, String base, int limit) {
-        return switch (exchange) {
-            case BINANCE -> binance.trades(SymbolMapper.binanceSymbol(base), limit);
-            case OKX -> okx.trades(SymbolMapper.okxInstId(base), limit);
         };
     }
 
