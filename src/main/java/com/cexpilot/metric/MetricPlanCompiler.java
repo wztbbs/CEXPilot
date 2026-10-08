@@ -65,6 +65,15 @@ public final class MetricPlanCompiler {
             QueryShape queryShape = QueryShape.from(shape);
             String name = text(metric, "metric");
             JsonNode mapping = catalog.binding(name, shape);
+            // recent_n/count 形态模型常会塞一个空 time；空对象静默剥离，非空则给可执行报错。
+            if (queryShape.requiresCount() && metric.has("time")) {
+                JsonNode time = metric.get("time");
+                if (time.isNull() || (time.isObject() && time.isEmpty())) {
+                    metric = ((ObjectNode) metric.deepCopy()).remove("time");
+                } else {
+                    fail("指标 " + name + " 的 " + shape + " 形态只接受 count，不接受 time 字段；请删除 time 并补充 count（整数期数，如 10）");
+                }
+            }
             // 字段白名单随形态收窄：快照不接受 time/interval/include_unclosed；depth 只有声明它的绑定可用。
             Set<String> fields = new LinkedHashSet<>(Set.of("id", "metric", "exchanges", "instrument", "query_shape"));
             if (queryShape.requiresTime()) fields.addAll(List.of("time", "interval", "include_unclosed"));
