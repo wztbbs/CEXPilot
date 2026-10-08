@@ -6,7 +6,7 @@ import java.math.BigDecimal;
 import java.util.function.Function;
 
 /** 目录中的稳定选择器，直接读取领域模型，不依赖 Tool JSON 字段名。 */
-public enum KlineMetric {
+public enum KlineMetric implements MetricSelector {
     OPEN(Candle::open, RangeStats::open),
     CLOSE(Candle::close, RangeStats::close),
     HIGH(Candle::high, RangeStats::high),
@@ -29,8 +29,9 @@ public enum KlineMetric {
     }
 
     public BigDecimal statistic(RangeStats stats) { return required(statistic.apply(stats)); }
-    public boolean supports(String shape) {
-        return "range_statistic".equals(shape) || "time_series".equals(shape) && sample != null;
+    @Override public boolean supports(String shape) {
+        return QueryShape.RANGE_STATISTIC.code().equals(shape)
+                || QueryShape.TIME_SERIES.code().equals(shape) && sample != null;
     }
     private static BigDecimal required(BigDecimal value) {
         if (value == null) throw new IllegalArgumentException("来源指标不是数值或缺失");

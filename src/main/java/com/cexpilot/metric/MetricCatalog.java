@@ -6,6 +6,7 @@ import com.cexpilot.runtime.ToolOutputSchema;
 import com.cexpilot.runtime.ToolRegistry;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ResourceLoader;
 import org.springframework.stereotype.Component;
 import org.yaml.snakeyaml.LoaderOptions;
@@ -22,15 +23,27 @@ public class MetricCatalog {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private final JsonNode document;
 
+    @Autowired
     public MetricCatalog(ResourceLoader loader) {
+        this(read(loader));
+    }
+
+    /** 测试注入：直接给定目录内容，用于校验尚未上线的形态与绑定；生产只走 ResourceLoader 构造。 */
+    private MetricCatalog(JsonNode document) {
+        if (!document.path("metrics").isObject() || document.path("metrics").isEmpty()
+                || !document.path("operators").isObject() || !document.path("concepts").isTextual()) {
+            throw new IllegalArgumentException("指标目录必须有 metrics/operators/concepts");
+        }
+        this.document = document;
+    }
+
+    static MetricCatalog of(JsonNode document) { return new MetricCatalog(document); }
+
+    private static JsonNode read(ResourceLoader loader) {
         LoaderOptions options = new LoaderOptions();
         options.setAllowDuplicateKeys(false);
-        try (var input = loader.getResource("classpath:metrics/kline.yml").getInputStream()) {
-            document = MAPPER.valueToTree(new Yaml(new SafeConstructor(options)).load(input));
-            if (!document.path("metrics").isObject() || document.path("metrics").isEmpty()
-                    || !document.path("operators").isObject() || !document.path("concepts").isTextual()) {
-                throw new IllegalArgumentException("指标目录必须有 metrics/operators/concepts");
-            }
+        try (var input = loader.getResource("classpath:metrics/cex-perpetual.yml").getInputStream()) {
+            return MAPPER.valueToTree(new Yaml(new SafeConstructor(options)).load(input));
         } catch (Exception e) {
             throw new IllegalStateException("加载指标目录失败", e);
         }
@@ -65,7 +78,13 @@ public class MetricCatalog {
             e.getValue().path("bindings").fieldNames().forEachRemaining(shapes::add);
             out.append("- ").append(e.getKey()).append(": ").append(e.getValue().path("description").asText())
                     .append("；unit=").append(e.getValue().path("unit").asText())
-                    .append("；query_shape=").append(String.join("|", shapes)).append('\n');
+                    .append("；query_shape=").append(String.join("|", shapes));
+            List<String> exchanges = new ArrayList<>();
+            e.getValue().path("bindings").forEach(binding -> binding.path("exchanges").forEach(exchange -> {
+                if (exchange.isTextual() && !exchanges.contains(exchange.asText())) exchanges.add(exchange.asText());
+            }));
+            if (!exchanges.isEmpty()) out.append("；仅支持交易所: ").append(String.join(", ", exchanges));
+            out.append('\n');
         });
         return out.toString();
     }
@@ -81,24 +100,20 @@ public class MetricCatalog {
         });
         return out.toString();
     }
-    /** 启动校验 Provider 选择器与形态，完全独立于旧 Tool 的注册和 JSON schema。 */
+    /** 启动校验目录结构；Provider 存在性与选择器语义由 MetricProviderRegistry.validate 校验。 */
     public void validateBindings() {
         for (String metric : names()) {
             JsonNode definition = definition(metric);
             if (!definition.path("description").isTextual()
-                    || !Set.of("base", "quote", "percent").contains(definition.path("unit").asText())
+                    || !Set.of("base", "quote", "percent", "ratio", "contract").contains(definition.path("unit").asText())
                     || !definition.path("bindings").isObject() || definition.path("bindings").isEmpty()) {
                 throw new IllegalStateException("指标定义无效: " + metric);
             }
             definition.path("bindings").fields().forEachRemaining(e -> {
                 JsonNode binding = e.getValue();
-                try {
-                    KlineMetric selector = KlineMetric.valueOf(binding.path("selector").asText());
-                    if (!KlineMetricProvider.NAME.equals(binding.path("provider").asText()) || !selector.supports(e.getKey())) {
-                        throw new IllegalArgumentException("不支持的 Provider 或查询形态");
-                    }
-                } catch (IllegalArgumentException ex) {
-                    throw new IllegalStateException("指标绑定不可用: " + metric + "/" + e.getKey(), ex);
+                if (!binding.path("provider").isTextual() || binding.path("provider").asText().isBlank()
+                        || !binding.path("selector").isTextual() || binding.path("selector").asText().isBlank()) {
+                    throw new IllegalStateException("指标绑定缺少 provider/selector: " + metric + "/" + e.getKey());
                 }
             });
         }

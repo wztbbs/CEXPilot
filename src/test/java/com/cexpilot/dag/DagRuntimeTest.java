@@ -1,7 +1,6 @@
 package com.cexpilot.dag;
 
 import com.cexpilot.config.DagConfig;
-import com.cexpilot.intent.IntentRegistry;
 import com.cexpilot.metric.*;
 import com.cexpilot.market.Times;
 import com.cexpilot.llm.*;
@@ -31,7 +30,7 @@ class DagRuntimeTest {
     }
     private DagRuntime runtime(Script llm,ToolRegistry registry,DagConfig config,Clock clock,MetricProvider provider) {
         var executor=new DagExecutor(registry,config,providers(provider));executors.add(executor);
-        return new DagRuntime(llm,planner(llm,registry,config),executor,new PromptStore(LOADER),new IntentRegistry(LOADER),clock);
+        return new DagRuntime(llm,planner(llm,registry,config),executor,new PromptStore(LOADER),clock);
     }
     private DagRuntime runtime(Script llm,ToolRegistry registry) {
         return runtime(llm,registry,new DagConfig(),Clock.fixed(Instant.parse("2026-09-29T10:00:00Z"),ZoneOffset.UTC));
@@ -47,7 +46,7 @@ class DagRuntimeTest {
         var p=plan(metric("m1","trade.turnover","range_statistic","binance","okx"));
         calculation(p,"c1","relative_change","{\"current\":\"{{m1.binance.value}}\",\"baseline\":\"{{m1.okx.value}}\"}");
         var llm=new Script(envelope(p),"币安比OKX高20%。");var trace=new ArrayList<TraceEvent>();
-        var r=runtime(llm,registry()).execute("比较成交额","","t",trace::add);
+        var r=runtime(llm,registry()).execute("比较两所成交额，并解释差异原因","","t",trace::add);
         assertEquals("币安比OKX高20%。",r.answer());assertEquals(3,r.toolCallCount());assertEquals(2,r.steps());
         assertEquals(20,r.promptTokens());assertEquals(10,r.completionTokens());
         assertEquals("20",result(r,"c1").at("/data/percent").asText());
@@ -61,7 +60,14 @@ class DagRuntimeTest {
         assertTrue(result(r,"metric_0").at("/data/source/provider").asText().equals("kline"));
         String answer=llm.calls.get(1).get(1).content();
         assertFalse(answer.contains("\"statistics\""));assertTrue(answer.contains("trade.turnover"));
-        assertTrue(llm.calls.get(1).get(0).content().contains("事实性结论只能来自 FACTS"));
+        String system = llm.calls.get(1).get(0).content();
+        assertTrue(system.contains("事实性结论只能来自 FACTS"));
+        assertTrue(system.contains("涉及跨所比较时，两侧必须是同一指标定义、可比单位和同一时间窗口"));
+        assertTrue(system.contains("标明依据的指标，并区分观测与推断"));
+        assertTrue(system.contains("只有单侧数据不能下跨所结论"));
+        assertTrue(system.contains("即使两侧数值都已返回，也不能冒充已有比较结果"));
+        assertFalse(system.contains("intent_guidance"));
+        assertFalse(system.contains("本轮问题归类为"));
     }
     @Test void sequenceAverageAndMultiLayerCalculationKeepProvenance() {
         var p=plan(metric("m1","price.close","time_series","binance","okx"));
@@ -99,7 +105,7 @@ class DagRuntimeTest {
         var p=plan(metric("m1","trade.turnover","range_statistic","binance","okx"));
         calculation(p,"c","compare","{\"left\":\"{{m1.binance.value}}\",\"right\":\"{{m1.okx.value}}\"}");
         var r=runtime(new Script(envelope(p),"只有币安结果"),registry(),provider((q,c)->{
-            if(q.exchange()==com.cexpilot.market.Exchange.OKX)throw new IllegalArgumentException("upstream timeout");
+            if(((com.cexpilot.metric.TimeRangeQuery)q).exchange()==com.cexpilot.market.Exchange.OKX)throw new IllegalArgumentException("upstream timeout");
             return metricResult(q,c,24,true);
         }))
                 .execute("比较","","t",e->{});

@@ -3,6 +3,7 @@ package com.cexpilot.metric;
 import com.cexpilot.market.MarketCalculator;
 import com.cexpilot.market.kline.KlineQueryService;
 import com.cexpilot.runtime.RequestContext;
+import com.cexpilot.time.CandleInterval;
 import com.cexpilot.time.TimeRange;
 import org.springframework.stereotype.Component;
 import java.math.BigDecimal;
@@ -17,17 +18,22 @@ public class KlineMetricProvider implements MetricProvider {
 
     public KlineMetricProvider(KlineQueryService service) { this.service = service; }
     @Override public String name() { return NAME; }
+    @Override public MetricSelector selector(String name) { return KlineMetric.valueOf(name); }
 
     @Override
     public MetricResult query(MetricQuery query, RequestContext context) {
         Objects.requireNonNull(context, "请求时间上下文不能为空");
         Objects.requireNonNull(context.requestTime(), "请求时间不能为空");
         Objects.requireNonNull(context.userZone(), "请求时区不能为空");
-        var result = service.query(context.userZone(), query.time(), context.requestTime(),
-                query.exchange(), query.base(), query.interval(), query.includeUnclosed());
-        var metadata = new MetricResult.Metadata(result.requested().range(), result.effective().range(),
-                result.coverage(), result.effective().interval(), query.interval() == null, result.candles().size());
-        KlineMetric selector = query.binding().selector();
+        if (!(query instanceof TimeRangeQuery timeQuery)) {
+            throw new IllegalArgumentException("kline Provider 仅支持时间区间查询: " + query.getClass().getSimpleName());
+        }
+        CandleInterval interval = timeQuery.intervalCode() == null ? null : CandleInterval.parse(timeQuery.intervalCode());
+        var result = service.query(context.userZone(), timeQuery.time(), context.requestTime(),
+                timeQuery.exchange(), timeQuery.base(), interval, timeQuery.includeUnclosed());
+        var metadata = new MetricResult.SeriesMetadata(result.requested().range(), result.effective().range(),
+                result.coverage(), result.effective().interval().code(), interval == null, result.candles().size());
+        KlineMetric selector = (KlineMetric) query.binding().selector();
         if (!query.binding().isRangeStatistic()) {
             return new MetricResult.Series(metadata, result.candles().stream()
                     .map(c -> new MetricResult.Sample(Instant.ofEpochMilli(c.openTime()), selector.sample(c))).toList());

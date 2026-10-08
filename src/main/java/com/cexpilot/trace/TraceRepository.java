@@ -31,16 +31,16 @@ public class TraceRepository {
 
     public void finishTrace(String traceId, String status, String answer, int llmSteps, int toolCalls,
                             Integer promptTokens, Integer completionTokens, Double cost,
-                            long durationMs, String error, String intent) {
+                            long durationMs, String error) {
         jdbc.update("""
                         UPDATE ask_trace
                         SET status = ?, answer = ?, llm_steps = ?, tool_calls = ?,
                             prompt_tokens = ?, completion_tokens = ?, cost = ?, duration_ms = ?,
-                            error = ?, intent = ?, finished_at = NOW()
+                            error = ?, finished_at = NOW()
                         WHERE trace_id = ?
                         """,
                 status, answer, llmSteps, toolCalls, promptTokens, completionTokens, cost,
-                durationMs, error, intent, traceId);
+                durationMs, error, traceId);
     }
 
     public void appendEvent(String traceId, TraceEvent event) {

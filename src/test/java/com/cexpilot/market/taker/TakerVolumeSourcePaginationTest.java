@@ -3,10 +3,15 @@ package com.cexpilot.market.taker;
 import com.cexpilot.market.Exchange;
 import com.cexpilot.market.model.TakerVolumePoint;
 import com.cexpilot.market.series.SeriesRangeFilter;
-import com.cexpilot.market.tool.GetTradeFlowStatisticsTool;
-import com.cexpilot.runtime.ToolContext;
+import com.cexpilot.metric.MetricBinding;
+import com.cexpilot.metric.MetricResult;
+import com.cexpilot.metric.TakerMetric;
+import com.cexpilot.metric.TakerMetricProvider;
+import com.cexpilot.metric.TimeRangeQuery;
+import com.cexpilot.runtime.RequestContext;
 import com.cexpilot.time.TimeRange;
 import com.cexpilot.time.TimeRangeResolver;
+import com.cexpilot.time.TimeSpecParser;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
@@ -16,6 +21,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -52,7 +58,7 @@ class TakerVolumeSourcePaginationTest {
     }
 
     @Test
-    void wholeDayLastPeriodReachesToolStatisticsDespiteRoundedEndTime() throws Exception {
+    void wholeDayLastPeriodReachesProviderStatisticsDespiteRoundedEndTime() throws Exception {
         long end = START + 288 * STEP;
         var data = sequence(START - 2 * STEP, 292);
         // 旧参数 end-1 确实漏掉末根，且原始条数 288 不能证明覆盖完整。
@@ -62,22 +68,29 @@ class TakerVolumeSourcePaginationTest {
         var source = new BinanceTakerVolumeSource((symbol, startTime, endTime, limit) ->
                 binancePage(data, startTime, endTime, limit));
         var service = new TakerVolumeQueryService(List.of(source), new TimeRangeResolver(Clock.fixed(NOW, ZoneOffset.UTC)));
-        var args = new ObjectMapper().readTree("""
-                {"exchange":"binance","symbol":"BTC","time":{
-                  "type":"absolute_range","timezone":"UTC",
+        var time = new ObjectMapper().readTree("""
+                {"type":"absolute_range","timezone":"UTC",
                   "start":{"year":2026,"month":9,"day":24,"time":"00:00:00"},
-                  "end":{"year":2026,"month":9,"day":25,"time":"00:00:00"},"end_mode":"exclusive"}}
+                  "end":{"year":2026,"month":9,"day":25,"time":"00:00:00"},"end_mode":"exclusive"}
                 """);
-        var result = new GetTradeFlowStatisticsTool(null, service).execute(args, new ToolContext("test", null, ZoneOffset.UTC, NOW));
-        assertTrue(result.ok(), result.error());
-        assertTrue(result.data().at("/coverage/range_complete").asBoolean());
-        assertEquals(288, result.data().at("/coverage/actual_count").asInt());
-        assertEquals(0, result.data().at("/coverage/unexpected_count").asInt());
-        assertEquals(288, result.data().at("/statistics/buy_volume").asInt());
-        assertEquals(288, result.data().at("/statistics/sell_volume").asInt());
-        assertEquals(0, new BigDecimal("0.5").compareTo(result.data().at("/statistics/buy_volume_ratio").decimalValue()));
-        assertEquals("2026-09-24 23:55:00", result.data().at("/statistics/actual_range/end_inclusive").asText());
-        assertFalse(result.data().has("statistics_omitted"));
+        var provider = new TakerMetricProvider(service);
+        var context = new RequestContext(ZoneOffset.UTC, NOW);
+        Map<TakerMetric, String> expected = Map.of(TakerMetric.BUY_VOLUME, "288", TakerMetric.SELL_VOLUME, "288",
+                TakerMetric.BUY_RATIO, "0.5");
+        for (var entry : expected.entrySet()) {
+            var binding = new MetricBinding("m1", "taker." + entry.getKey().name().toLowerCase(), "binance",
+                    "range_statistic", new ObjectMapper().createObjectNode().put("market_type", "perpetual")
+                            .put("base", "BTC").put("quote", "USDT").put("settle", "USDT"),
+                    "BTC", TakerMetricProvider.NAME, entry.getKey(), "test-v1");
+            var scalar = assertInstanceOf(MetricResult.Scalar.class,
+                    provider.query(new TimeRangeQuery(binding, TimeSpecParser.parse(time), null, false), context));
+            assertEquals(0, new BigDecimal(entry.getValue()).compareTo(scalar.value()), entry.getKey().name());
+            var metadata = assertInstanceOf(MetricResult.SeriesMetadata.class, scalar.metadata());
+            assertTrue(metadata.coverage().rangeComplete());
+            assertEquals(288, metadata.candleCount());
+            assertEquals("5m", metadata.interval());
+            assertTrue(metadata.automaticInterval(), "taker 为固定 5m 官方口径，不接受粒度参数");
+        }
     }
 
     @Test

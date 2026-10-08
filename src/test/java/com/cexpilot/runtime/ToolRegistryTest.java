@@ -7,7 +7,6 @@ import com.cexpilot.dag.DagPlanner;
 import com.cexpilot.dag.PlanValidator;
 import com.cexpilot.ethereum.TxAnalysisService;
 import com.cexpilot.ethereum.tool.GetTransactionTool;
-import com.cexpilot.intent.IntentRegistry;
 import com.cexpilot.llm.ChatMessage;
 import com.cexpilot.llm.ChatResponse;
 import com.cexpilot.market.MarketDataService;
@@ -156,20 +155,11 @@ class ToolRegistryTest {
     void allRealToolExecutorsBindToYamlThroughSpring() {
         MarketDataService market = mock(MarketDataService.class);
         List<AgentTool> executors = List.of(new GetTickerTool(market),
-                new GetKlinesTool(market, mock(com.cexpilot.market.kline.KlineQueryService.class)),
-                new GetMarketStatisticsTool(market, mock(com.cexpilot.market.kline.KlineQueryService.class)),
                 new GetFundingRateTool(market),
                 new GetFundingRateHistoryTool(market, mock(com.cexpilot.market.funding.FundingQueryService.class)),
                 new GetFundingRateStatisticsTool(market, mock(com.cexpilot.market.funding.FundingQueryService.class)),
-                new GetOpenInterestTool(market),
-                new GetOpenInterestHistoryTool(market, mock(com.cexpilot.market.oi.OiQueryService.class)),
-                new GetOpenInterestStatisticsTool(market, mock(com.cexpilot.market.oi.OiQueryService.class)),
-                new GetMarkPriceTool(market),
-                new GetMarkPriceHistoryTool(market, mock(com.cexpilot.market.markprice.MarkPriceQueryService.class)),
-                new GetMarkPriceStatisticsTool(market, mock(com.cexpilot.market.markprice.MarkPriceQueryService.class)),
                 new GetOrderbookTool(market), new GetRecentTradesTool(market),
                 new GetTradeHistoryTool(market, mock(com.cexpilot.market.trade.TradeQueryService.class)),
-                new GetTradeFlowStatisticsTool(market, mock(com.cexpilot.market.taker.TakerVolumeQueryService.class)),
                 new com.cexpilot.calculation.AvgTool(), new com.cexpilot.calculation.RelativeChangeTool(),
                 new com.cexpilot.calculation.AnnualizeTool(), new com.cexpilot.calculation.CompareTool(),
                 new com.cexpilot.calculation.DifferenceTool(), new com.cexpilot.calculation.RatioTool(),
@@ -182,17 +172,32 @@ class ToolRegistryTest {
             }
             context.register(ToolRegistry.class, com.cexpilot.metric.MetricCatalog.class,
                     DagPlanner.class, PlanValidator.class, DagConfig.class, LlmConfig.class,
-                    PromptStore.class, IntentRegistry.class, com.cexpilot.dag.DagExecutor.class,
-                    com.cexpilot.metric.MetricProviderRegistry.class, com.cexpilot.metric.KlineMetricProvider.class);
+                    PromptStore.class, com.cexpilot.dag.DagExecutor.class,
+                    com.cexpilot.metric.MetricProviderRegistry.class, com.cexpilot.metric.KlineMetricProvider.class,
+                    com.cexpilot.metric.OiMetricProvider.class, com.cexpilot.metric.MarkPriceMetricProvider.class,
+                    com.cexpilot.metric.TakerMetricProvider.class, com.cexpilot.metric.TickerMetricProvider.class,
+                    com.cexpilot.metric.OrderBookMetricProvider.class, com.cexpilot.metric.FundingMetricProvider.class);
+            context.registerBean(com.cexpilot.market.MarketDataService.class,
+                    () -> mock(com.cexpilot.market.MarketDataService.class));
             context.registerBean(com.cexpilot.market.kline.KlineQueryService.class,
                     () -> mock(com.cexpilot.market.kline.KlineQueryService.class));
+            context.registerBean(com.cexpilot.market.oi.OiQueryService.class,
+                    () -> mock(com.cexpilot.market.oi.OiQueryService.class));
+            context.registerBean(com.cexpilot.market.markprice.MarkPriceQueryService.class,
+                    () -> mock(com.cexpilot.market.markprice.MarkPriceQueryService.class));
+            context.registerBean(com.cexpilot.market.taker.TakerVolumeQueryService.class,
+                    () -> mock(com.cexpilot.market.taker.TakerVolumeQueryService.class));
+            context.registerBean(com.cexpilot.market.funding.FundingQueryService.class,
+                    () -> mock(com.cexpilot.market.funding.FundingQueryService.class));
             context.registerBean(com.cexpilot.llm.LlmClient.class, () -> mock(com.cexpilot.llm.LlmClient.class));
             context.refresh();
             ToolRegistry registry = context.getBean(ToolRegistry.class);
-            assertEquals(26, registry.size());
+            assertEquals(17, registry.size());
             assertNotNull(context.getBean(DagPlanner.class));
             assertNotNull(context.getBean(com.cexpilot.dag.DagExecutor.class));
             assertNotNull(context.getBean(com.cexpilot.metric.MetricProviderRegistry.class).get("kline"));
+            assertNotNull(context.getBean(com.cexpilot.metric.MetricProviderRegistry.class).get("ticker"),
+                    "目录含快照指标后，ticker Provider 必须注册，否则启动校验失败");
             assertEquals("binance", registry.prepareArguments("get_ticker", MAPPER.createObjectNode().put("symbol", "BTC")).path("exchange").asText());
             assertThrows(IllegalArgumentException.class, () -> registry.prepareArguments("get_transaction", MAPPER.createObjectNode().put("tx_hash", "0xabc")));
             assertDoesNotThrow(() -> registry.prepareArguments("get_transaction", MAPPER.createObjectNode().put("tx_hash", "0x" + "a".repeat(64))));

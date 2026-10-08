@@ -5,9 +5,6 @@
     "in_domain": {
       "type": "boolean"
     },
-    "intent": {
-      "type": "string"
-    },
     "reply": {
       "type": [
         "string",
@@ -70,7 +67,10 @@
                 "type": "string",
                 "enum": [
                   "range_statistic",
-                  "time_series"
+                  "time_series",
+                  "snapshot",
+                  "official_24h",
+                  "recent_n"
                 ]
               },
               "time": {
@@ -81,11 +81,29 @@
                 "enum": [
                   "5m",
                   "15m",
-                  "1h"
+                  "30m",
+                  "1h",
+                  "2h",
+                  "4h",
+                  "6h",
+                  "12h",
+                  "1d"
                 ]
               },
               "include_unclosed": {
                 "type": "boolean"
+              },
+              "depth": {
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 50,
+                "description": "盘口档位数，仅声明 depth 的指标可用"
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100,
+                "description": "最近 N 期的期数，仅 recent_n 形态必填"
               }
             },
             "required": [
@@ -93,8 +111,7 @@
               "metric",
               "exchanges",
               "instrument",
-              "query_shape",
-              "time"
+              "query_shape"
             ]
           }
         },
@@ -130,7 +147,6 @@
   },
   "required": [
     "in_domain",
-    "intent",
     "reply",
     "plan"
   ]

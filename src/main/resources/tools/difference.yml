@@ -2,16 +2,16 @@ name: difference
 enabled: true
 description: >
   计算两个十进制数值的带符号差值 left - right，结果与输入同单位、同口径。
-  input 示例（n1、n2 均为 get_ticker）为 {"left":"{{n1.data.last_price}}","right":"{{n2.data.last_price}}"}，left、right 两项必填。
+  input 示例（m1 为含 binance、okx 的同一指标查询组）为 {"left":"{{m1.binance.value}}","right":"{{m1.okx.value}}"}，left、right 两项必填。
   "A 比 B 高/多多少"绑定 left=A、right=B；value 为正表示 left 更高，为负表示 left 更低，不取绝对值、不交换顺序。
   输入允许 JSON number 或无单位的十进制字符串（包括科学计数法），不接受百分号、千位分隔符、表达式、布尔值、null、对象或数组；left、right 均可为零或负数。
-  输入为 percent 口径时（如两个 statistics.change_pct 或 relative_change 的 percent 输出），value 即相差的百分点数，不是百分比变化率。
+  输入为 percent 口径时（如两个 price.change_pct 的 value，或 relative_change 的 percent 输出），value 即相差的百分点数，不是百分比变化率。
   输出 left、right 回显实际数值；value 是十进制字符串，value_unit=same_as_inputs；formula=left - right。
   使用 BigDecimal 精确相减，无舍入；单值最多 100 位有效数字，scale 绝对值不超过 1000。
   适用示例：币安与 OKX 同一时刻 BTC 的价差（USDT）；两所昨天成交额相差多少；今天持仓量比昨天增减多少；两个涨跌幅相差多少个百分点。
   不适用：相对变化率（用 relative_change）、倍数或占比（用 ratio）、大小判断（用 compare）、多期累计（用 sum）。
   输入必须使用同指标、同单位及可比时间窗口；跨所价差使用同一时刻或同一窗口的快照，代码不会仅凭两个裸数证明业务口径相同。
-  行情值必须引用本轮查询结果，只有用户明确提供的数值可写常量；所有引用必须声明 depends_on。
+  行情值必须引用本轮查询结果，只有用户明确提供的数值可写常量。
   DAG 会拒绝标明 coverage.range_complete=false、sample_complete=false、complete=false 或 statistics_omitted 的引用源。
 input_schema:
   type: object

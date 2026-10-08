@@ -2,7 +2,7 @@ name: relative_change
 enabled: true
 description: >
   计算 current 相对于 baseline 的相对变化比例，公式固定为 (current-baseline)/baseline，baseline 是分母。
-  input 示例（n1、n2 均为 get_market_statistics）为 {"current":"{{n1.data.statistics.quote_volume}}","baseline":"{{n2.data.statistics.quote_volume}}"}，两项必填。
+  input 示例（m1 为含两所的 trade.turnover 区间查询组）为 {"current":"{{m1.binance.value}}","baseline":"{{m1.okx.value}}"}，两项必填。
   输入允许 JSON number 或无单位的十进制字符串（包括科学计数法），不接受百分号、千位分隔符、表达式、布尔值、null、对象或数组。
   baseline 必须大于 0；零或负基准均失败，不能取绝对值、交换输入或改公式绕过；current 可以为零或负数。
   输出 current、baseline 保留用于计算的数值；value 是小数比例，value_unit=ratio；percent 是已乘 100 的百分数值，展示时只加百分号。
@@ -14,7 +14,7 @@ description: >
   同比或环比（查询用户指定的当前期与明确基准期，再引用同名指标）。
   不适用：绝对差值、多少倍、两个涨跌幅的百分点差、排名、年化；不能以此替代未提供的其他算子。
   比较方向或基准期不明确时先追问；同比基准日期受保留期或时间表达能力限制时说明缺口，不用最近样本替代。
-  行情值必须引用本轮查询结果，只有用户明确提供的数值可写常量；所有引用必须声明 depends_on。
+  行情值必须引用本轮查询结果，只有用户明确提供的数值可写常量。
   输入必须使用同单位、同指标定义及可比窗口；跨期允许不同日期，跨所同期比较要对齐窗口；代码不会仅凭两个裸数证明业务口径相同。
   DAG 会拒绝标明 coverage.range_complete=false、sample_complete=false、complete=false 或 statistics_omitted 的引用源。
 input_schema:

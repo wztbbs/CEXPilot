@@ -18,6 +18,17 @@ import java.util.Set;
 public final class MetricCalculationContext {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Set<String> SAME_UNIT = Set.of("avg", "sum", "min", "max", "compare", "difference", "ratio", "relative_change");
+
+    /**
+     * 行情年化的合法输入规则：指标 + 引用路径 + basis + rate_unit。
+     * 单期费率还要求 count=1（否则 samples.0 是最旧一期，不是"最近一期"），
+     * 且周期必须引用同一结果的 period_seconds，不接受默认 8 小时。
+     */
+    private record AnnualizeInput(String metric, String refPath, String basis, String rateUnit, boolean singlePeriod) {}
+    private static final List<AnnualizeInput> ANNUALIZE_INPUTS = List.of(
+            new AnnualizeInput("price.change_pct", ".data.value", "holding_return", "percent", false),
+            new AnnualizeInput("funding.rate_settled", ".data.samples.0.value", "periodic_rate", "ratio", true));
+
     private MetricCalculationContext() {}
 
     public static void validate(PlanNode node, DagContext context) {
@@ -26,17 +37,54 @@ public final class MetricCalculationContext {
             throw new IllegalArgumentException("计算输入单位不一致: " + units);
         }
         if ("annualize".equals(node.tool())) {
-            JsonNode rate = node.args().path("input").path("rate");
-            for (ReferenceResolver.Ref ref : ReferenceResolver.findRefs(rate)) {
-                JsonNode data = context.get(ref.nodeId()).data();
-                if (data != null && data.has("metric") && (!"price.change_pct".equals(data.path("metric").asText())
-                        || !".data.value".equals(ref.path())
-                        || !"holding_return".equals(node.args().path("input").path("basis").asText())
-                        || !"percent".equals(node.args().path("input").path("rate_unit").asText()))) {
-                    throw new IllegalArgumentException("K 线年化需引用 price.change_pct.value，basis=holding_return，rate_unit=percent");
-                }
+            validateAnnualize(node, context);
+        }
+    }
+
+    private static void validateAnnualize(PlanNode node, DagContext context) {
+        JsonNode input = node.args().path("input");
+        List<ReferenceResolver.Ref> periodRefs = ReferenceResolver.findRefs(input.path("period"));
+        for (ReferenceResolver.Ref ref : ReferenceResolver.findRefs(input.path("rate"))) {
+            JsonNode data = context.get(ref.nodeId()).data();
+            if (data == null || !data.has("metric")) continue;
+            AnnualizeInput rule = annualizeRule(data.path("metric").asText(), ref.path(), input);
+            if (rule == null) {
+                throw new IllegalArgumentException("年化只支持：price.change_pct 的 value（basis=holding_return，rate_unit=percent）"
+                        + "，或 funding.rate_settled 单期的 samples.0.value（count=1，basis=periodic_rate，rate_unit=ratio）");
+            }
+            if (!rule.singlePeriod()) continue;
+            if (data.path("requested_count").asInt() != 1 || !data.path("sample_complete").asBoolean(true)) {
+                throw new IllegalArgumentException("单期费率年化只能引用 count=1 的取样结果：samples 按结算时间升序，"
+                        + "取多期时 samples.0 是最旧一期，不是最近一期");
+            }
+            // 结算周期因合约而异，本次取数已给出 period_seconds；不接受"默认 8 小时"之类的常量。
+            if (periodRefs.isEmpty()) {
+                throw new IllegalArgumentException("单期费率年化的 period 必须引用同一结果的 period_seconds，"
+                        + "不能用默认周期常量外推");
+            }
+            requireSameSourcePeriod(ref, periodRefs);
+        }
+    }
+
+    /** 周期要么由用户明确给出常量，要么引用同一结果的 period_seconds；不允许用默认周期外推。 */
+    private static void requireSameSourcePeriod(ReferenceResolver.Ref rateRef, List<ReferenceResolver.Ref> periodRefs) {
+        for (ReferenceResolver.Ref periodRef : periodRefs) {
+            if (!periodRef.nodeId().equals(rateRef.nodeId()) || !".data.period_seconds".equals(periodRef.path())) {
+                throw new IllegalArgumentException("单期费率年化的 period 必须引用同一结果的 period_seconds，"
+                        + "不接受默认 8 小时或跨结果的周期");
             }
         }
+    }
+
+    private static AnnualizeInput annualizeRule(String metric, String refPath, JsonNode input) {
+        for (AnnualizeInput rule : ANNUALIZE_INPUTS) {
+            if (rule.metric().equals(metric) && rule.refPath().equals(refPath)
+                    && rule.basis().equals(input.path("basis").asText())
+                    && rule.rateUnit().equals(input.path("rate_unit").asText())) {
+                return rule;
+            }
+        }
+        return null;
     }
 
     public static ToolResult attach(PlanNode node, DagContext context, ToolResult result) {
@@ -74,7 +122,7 @@ public final class MetricCalculationContext {
         for (ReferenceResolver.Ref ref : ReferenceResolver.findRefs(node.args())) {
             JsonNode data = context.get(ref.nodeId()).data();
             if (data == null || !data.has("unit")) continue;
-            if (ref.path().equals(".data.observation_seconds")) units.add("second");
+            if (ref.path().equals(".data.observation_seconds") || ref.path().equals(".data.period_seconds")) units.add("second");
             else if (ref.path().equals(".data.percent")) units.add("percent");
             else if (ref.path().equals(".data.value") || ref.path().equals(".data.samples")
                     || ref.path().matches("\\.data\\.samples\\.[0-9]+\\.value")) units.add(data.get("unit").asText());

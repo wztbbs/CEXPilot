@@ -3,8 +3,6 @@ package com.cexpilot.api;
 import com.cexpilot.config.LlmConfig;
 import com.cexpilot.conversation.ConversationService;
 import com.cexpilot.dag.DagRuntime;
-import com.cexpilot.intent.IntentRegistry;
-import com.cexpilot.intent.UnmatchedQueryRepository;
 import com.cexpilot.runtime.ExecutionResult;
 import com.cexpilot.runtime.RequestContext;
 import com.cexpilot.trace.DbTraceSink;
@@ -21,8 +19,7 @@ import java.time.ZoneId;
 import java.util.UUID;
 
 /**
- * 一次问答的编排：对话上下文 → 建 trace → DagRuntime（一次 LLM 调用完成领域判断 +
- * intent 归类 + 查询规划，随后执行 DAG 并生成回答）→ 落 trace / 记 Query。
+ * 一次问答的编排：对话上下文 → 建 trace → DagRuntime（一次 LLM 调用完成领域判断 + 查询规划，随后执行 DAG 并生成回答）→ 落 trace / 记 Query。
  */
 @Service
 public class AskService {
@@ -31,7 +28,6 @@ public class AskService {
 
     private final ConversationService conversation;
     private final DagRuntime runtime;
-    private final UnmatchedQueryRepository unmatchedQueryRepository;
     private final TraceRepository traceRepository;
     private final DbTraceSink traceSink;
     private final LlmConfig llmConfig;
@@ -41,7 +37,6 @@ public class AskService {
 
     public AskService(ConversationService conversation,
                       DagRuntime runtime,
-                      UnmatchedQueryRepository unmatchedQueryRepository,
                       TraceRepository traceRepository,
                       DbTraceSink traceSink,
                       LlmConfig llmConfig,
@@ -49,7 +44,6 @@ public class AskService {
                       ObjectProvider<BuildProperties> buildProperties) {
         this.conversation = conversation;
         this.runtime = runtime;
-        this.unmatchedQueryRepository = unmatchedQueryRepository;
         this.traceRepository = traceRepository;
         this.traceSink = traceSink;
         this.llmConfig = llmConfig;
@@ -128,22 +122,17 @@ public class AskService {
         long start = System.currentTimeMillis();
         try {
             // 4. 执行 DAG（合并规划 → 并行执行 → 生成回答），成功后收尾：trace 置为 SUCCESS，
-            //    记录答案、intent 归类（统计 hint）、层数、工具调用数、token 用量与成本；
+            //    记录答案、层数、工具调用数、token 用量与成本；
             //    本次 Query 写入 conversation_query，成为后续追问的上下文。
-            //    intent 归类为 UNKNOWN 的 query 落 unmatched_query，作为能力缺口数据集。
             ExecutionResult result = runtime.execute(question, conversationContext, traceId, traceSink,
                     listener == null ? null : listener::onDelta, requestContext,
                     listener == null ? null : listener::onProgress);
             long durationMs = System.currentTimeMillis() - start;
             double cost = computeCost(result.promptTokens(), result.completionTokens());
 
-            if (IntentRegistry.UNKNOWN.equals(result.intent())) {
-                unmatchedQueryRepository.save(traceId, resolvedConversationId, question,
-                        "{\"intent\":\"UNKNOWN\"}");
-            }
             traceRepository.finishTrace(traceId, "SUCCESS", result.answer(), result.steps(),
                     result.toolCallCount(), result.promptTokens(), result.completionTokens(),
-                    cost, durationMs, null, result.intent());
+                    cost, durationMs, null);
             conversation.recordQuery(resolvedConversationId, question, result.answer(), traceId);
 
             // 5. evidence（工具产出的事实集）随答案一起返回，前端可展示"答案引用了哪些数据"。
@@ -158,7 +147,7 @@ public class AskService {
             long durationMs = System.currentTimeMillis() - start;
             log.warn("问答失败 traceId={}: {}", traceId, e.getMessage());
             traceRepository.finishTrace(traceId, "FAILED", null, 0, 0,
-                    null, null, null, durationMs, e.getMessage(), null);
+                    null, null, null, durationMs, e.getMessage());
             throw e;
         }
     }

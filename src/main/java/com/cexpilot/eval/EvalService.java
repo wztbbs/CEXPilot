@@ -129,10 +129,12 @@ public class EvalService {
         }
     }
 
+    /** 指标查询不再产生 TOOL_CALL，改为按指标名记录取数；两类事件都算"实际用到了什么"。 */
     private Set<String> actualTools(String traceId) {
         Set<String> tools = new LinkedHashSet<>();
         for (Map<String, Object> event : traceRepository.findEvents(traceId)) {
-            if ("TOOL_CALL".equals(event.get("event_type"))) {
+            String type = String.valueOf(event.get("event_type"));
+            if ("TOOL_CALL".equals(type) || "METRIC_RESULT".equals(type)) {
                 tools.add(String.valueOf(event.get("name")));
             }
         }

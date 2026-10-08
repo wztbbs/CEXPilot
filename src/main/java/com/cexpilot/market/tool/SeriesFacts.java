@@ -11,7 +11,7 @@ import java.util.List;
 
 /**
  * 历史序列类 tool 共享的 facts 片段：请求/生效区间与覆盖核对的 JSON 结构，
- * 保证 get_klines、get_market_statistics 等返回口径一致。
+ * 保证仍在 tool 层取数的历史类工具返回口径一致。
  */
 final class SeriesFacts {
 

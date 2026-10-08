@@ -1,7 +1,6 @@
 package com.cexpilot.market;
 
 import com.cexpilot.config.ExchangeConfig;
-import com.cexpilot.market.tool.GetOpenInterestTool;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
@@ -44,21 +43,12 @@ class OpenInterestContractTest {
             config.getBinance().setBaseUrl(url);
             config.getOkx().setBaseUrl(url);
             MarketDataService service = new MarketDataService(new BinanceClient(config), new OkxClient(config));
-            GetOpenInterestTool tool = new GetOpenInterestTool(service);
-            for (String exchange : List.of("binance", "okx")) {
-                var result = tool.execute(MAPPER.createObjectNode().put("symbol", "BTC").put("exchange", exchange), null);
-                assertTrue(result.ok(), result.error());
-                var facts = result.data();
-                assertEquals("BTC", facts.path("unit").asText());
-                assertEquals(exchange.equals("okx") ? "BTC-USDT-SWAP" : "BTCUSDT", facts.path("instrument").asText());
-                assertEquals(Times.readable(1726765200000L), facts.path("data_time_utc8").asText());
-                assertEquals(new BigDecimal(exchange.equals("okx") ? "29645.9406" : "104091.102"),
-                        facts.path("open_interest").decimalValue());
-                assertTrue(facts.has("snapshot_time_utc8"));
-                // 快照不再夹带历史序列与变化统计
-                assertFalse(facts.has("open_interest_series"));
-                assertFalse(facts.has("oi_change_pct"));
-                assertFalse(facts.has("window_coverage"));
+            for (Exchange exchange : Exchange.values()) {
+                var snapshot = service.oiSnapshot(exchange, "BTC");
+                assertEquals("BTC", snapshot.unit());
+                assertEquals(new BigDecimal(exchange == Exchange.OKX ? "29645.9406" : "104091.102"), snapshot.oi());
+                assertEquals(Times.readable(1726765200000L), Times.readable(snapshot.dataTime()));
+                assertTrue(snapshot.snapshotTime() >= snapshot.dataTime(), "快照采集时间不早于数据时间");
             }
             assertEquals(List.of(
                     "/fapi/v1/openInterest?symbol=BTCUSDT",

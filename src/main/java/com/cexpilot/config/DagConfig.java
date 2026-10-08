@@ -22,7 +22,7 @@ public class DagConfig {
     /**
      * planner 调用的结构化输出约束（OpenAI 兼容 response_format）：
      * 空 = 不下发（默认）；json_object = 约束输出合法 JSON 对象；
-     * json_schema = 强制输出符合信封 schema（in_domain/intent/reply/plan）。
+     * json_schema = 强制输出符合信封 schema（in_domain/reply/plan）。
      * 上线前先对目标模型实测支持情况，不支持会被服务端 400 拒绝。
      */
     private String plannerResponseFormat = "";

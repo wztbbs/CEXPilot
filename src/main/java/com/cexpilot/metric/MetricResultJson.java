@@ -6,6 +6,7 @@ import com.cexpilot.time.TimeRange;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.math.BigDecimal;
 import java.time.ZoneId;
 import java.util.List;
 
@@ -27,15 +28,28 @@ public final class MetricResultJson {
     public static ObjectNode write(MetricBinding binding, MetricResult result) {
         ObjectNode out = identity(binding);
         var metadata = result.metadata();
-        ZoneId zone = metadata.effectiveRange().timezone();
-        out.set("requested_range", range(metadata.requestedRange()));
-        if (!metadata.effectiveRange().equals(metadata.requestedRange())) out.set("effective_range", range(metadata.effectiveRange()));
-        out.set("coverage", coverage(metadata.coverage(), zone));
-        out.put("candle_interval", metadata.interval().code());
-        out.put("interval_source", metadata.automaticInterval() ? "automatic" : "explicit");
+        if (metadata.requestedRange() != null) {
+            ZoneId zone = metadata.effectiveRange().timezone();
+            out.set("requested_range", range(metadata.requestedRange()));
+            if (!metadata.effectiveRange().equals(metadata.requestedRange())) out.set("effective_range", range(metadata.effectiveRange()));
+            if (metadata instanceof MetricResult.SeriesMetadata series) {
+                out.set("coverage", coverage(series.coverage(), zone));
+                out.put("candle_interval", series.interval());
+                out.put("interval_source", series.automaticInterval() ? "automatic" : "explicit");
+            }
+        } else if (metadata instanceof MetricResult.SnapshotMetadata snapshot) {
+            // 快照没有窗口，只有数据时间；时区由 Provider 在取数时从请求上下文带入。
+            out.put("as_of", Times.readable(snapshot.asOf().toEpochMilli(), snapshot.zone()));
+        } else if (metadata instanceof MetricResult.RecentMetadata recent) {
+            out.put("requested_count", recent.requestedCount());
+            out.put("actual_count", recent.actualCount());
+            out.put("sample_complete", recent.sampleComplete());
+            // 结算周期是年化的依据；只能来自本次取数，不能由调用方假设。
+            out.put("period_seconds", BigDecimal.valueOf(recent.periodMs(), 3));
+        }
         out.put("estimated", false).put("truncated", false);
         if (result instanceof MetricResult.Scalar scalar) {
-            out.put("candle_count", metadata.candleCount());
+            if (metadata instanceof MetricResult.SeriesMetadata series) out.put("candle_count", series.candleCount());
             out.put("value", scalar.value());
             out.put("observation_seconds", scalar.observationSeconds());
             ObjectNode actual = range(scalar.actualRange());
@@ -44,11 +58,15 @@ public final class MetricResultJson {
         } else if (result instanceof MetricResult.Omitted omitted) {
             out.put("statistics_omitted", omitted.reason());
         } else if (result instanceof MetricResult.Series series) {
-            out.put("candle_count", metadata.candleCount());
+            if (metadata instanceof MetricResult.SeriesMetadata seriesMetadata) out.put("candle_count", seriesMetadata.candleCount());
+            ZoneId zone = metadata instanceof MetricResult.RecentMetadata recent ? recent.zone()
+                    : metadata.effectiveRange().timezone();
             var samples = out.putArray("samples");
             for (var sample : series.samples()) {
                 samples.addObject().put("time", Times.readable(sample.time().toEpochMilli(), zone)).put("value", sample.value());
             }
+        } else if (result instanceof MetricResult.Point point) {
+            out.put("value", point.value());
         }
         return out;
     }
@@ -81,15 +99,27 @@ public final class MetricResultJson {
     static JsonNode outputSchema(MetricBinding binding) {
         ObjectNode schema = objectSchema();
         ObjectNode properties = (ObjectNode) schema.get("properties");
-        if (binding.isRangeStatistic()) {
-            properties.putObject("value").put("type", "number");
-            properties.putObject("observation_seconds").put("type", "number");
-        } else {
-            ObjectNode array = properties.putObject("samples").put("type", "array");
-            ObjectNode item = objectSchema();
-            ((ObjectNode) item.get("properties")).putObject("time").put("type", "string");
-            ((ObjectNode) item.get("properties")).putObject("value").put("type", "number");
-            array.set("items", item);
+        switch (QueryShape.from(binding.shape())) {
+            case RANGE_STATISTIC -> {
+                properties.putObject("value").put("type", "number");
+                properties.putObject("observation_seconds").put("type", "number");
+            }
+            case SNAPSHOT, OFFICIAL_24H -> properties.putObject("value").put("type", "number");
+            case TIME_SERIES -> {
+                ObjectNode array = properties.putObject("samples").put("type", "array");
+                ObjectNode item = objectSchema();
+                ((ObjectNode) item.get("properties")).putObject("time").put("type", "string");
+                ((ObjectNode) item.get("properties")).putObject("value").put("type", "number");
+                array.set("items", item);
+            }
+            case RECENT_N -> {
+                ObjectNode array = properties.putObject("samples").put("type", "array");
+                ObjectNode item = objectSchema();
+                ((ObjectNode) item.get("properties")).putObject("time").put("type", "string");
+                ((ObjectNode) item.get("properties")).putObject("value").put("type", "number");
+                array.set("items", item);
+                properties.putObject("period_seconds").put("type", "number");
+            }
         }
         return schema;
     }

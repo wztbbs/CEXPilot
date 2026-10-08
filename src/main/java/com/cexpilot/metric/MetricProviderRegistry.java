@@ -32,9 +32,21 @@ public class MetricProviderRegistry {
         return provider;
     }
 
+    /** 校验绑定指向已注册 Provider、选择器可解析且支持对应查询形态。 */
     public void validate(MetricCatalog catalog) {
         for (String metric : catalog.names()) {
-            catalog.definition(metric).path("bindings").forEach(binding -> get(binding.path("provider").asText()));
+            catalog.definition(metric).path("bindings").fields().forEachRemaining(e -> {
+                MetricProvider provider = get(e.getValue().path("provider").asText());
+                MetricSelector selector;
+                try {
+                    selector = provider.selector(e.getValue().path("selector").asText());
+                } catch (IllegalArgumentException ex) {
+                    throw new IllegalStateException("指标绑定不可用: " + metric + "/" + e.getKey(), ex);
+                }
+                if (!selector.supports(e.getKey())) {
+                    throw new IllegalStateException("指标绑定不可用: " + metric + "/" + e.getKey());
+                }
+            });
         }
     }
 }

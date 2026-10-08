@@ -3,10 +3,12 @@ package com.cexpilot.metric;
 import com.cexpilot.market.Exchange;
 import com.cexpilot.market.MarketDataService;
 import com.cexpilot.market.kline.*;
+import com.cexpilot.market.markprice.MarkPriceQueryService;
 import com.cexpilot.market.model.Candle;
+import com.cexpilot.market.oi.OiQueryService;
+import com.cexpilot.market.series.SeriesCapability;
 import com.cexpilot.market.series.SeriesCoverage;
-import com.cexpilot.market.tool.GetKlinesTool;
-import com.cexpilot.market.tool.GetMarketStatisticsTool;
+import com.cexpilot.market.taker.TakerVolumeQueryService;
 import com.cexpilot.runtime.*;
 import com.cexpilot.time.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -24,15 +26,16 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-/** 类型化 Provider + 假查询结果；旧 Tool 仅作为兼容性对照，不进入新执行链。 */
+/** 类型化 Provider + 假查询结果；期望值为手算常量，不再依赖对照实现。 */
 class KlineMetricProviderTest {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Instant START = Instant.parse("2026-09-28T00:00:00Z");
     private static final RequestContext CONTEXT = new RequestContext(ZoneOffset.UTC, START.plusSeconds(86400));
     private static final TimeRange RANGE = new TimeRange(START, START.plusSeconds(7200), ZoneOffset.UTC);
-    private static final Map<KlineMetric,String> FIELDS = Map.of(KlineMetric.OPEN,"open",KlineMetric.CLOSE,"close",
-            KlineMetric.HIGH,"high",KlineMetric.LOW,"low",KlineMetric.CHANGE_PCT,"change_pct",
-            KlineMetric.VOLUME,"volume",KlineMetric.TURNOVER,"quote_volume");
+    /** 两根蜡烛的手算期望值：open 取首根、close 取末根、high/low 取极值、volume/turnover 为两根之和。 */
+    private static final Map<KlineMetric,String> EXPECTED_STATISTICS = Map.of(KlineMetric.OPEN,"100",
+            KlineMetric.CLOSE,"110",KlineMetric.HIGH,"112",KlineMetric.LOW,"98",KlineMetric.CHANGE_PCT,"10",
+            KlineMetric.VOLUME,"5",KlineMetric.TURNOVER,"530");
 
     private static ObjectNode args() throws Exception {
         return (ObjectNode) JSON.readTree("""
@@ -40,12 +43,15 @@ class KlineMetricProviderTest {
                  "time":{"type":"calendar_period","unit":"day","offset":-1,"segment":"full","extent":"full_period"}}
                 """);
     }
-    private static MetricQuery query(KlineMetric selector, String shape) throws Exception {
+    private static TimeRangeQuery query(KlineMetric selector, String shape) throws Exception {
+        return query(selector, shape, TimeSpecParser.parse(args().get("time")), "1h");
+    }
+    private static TimeRangeQuery query(KlineMetric selector, String shape, TimeSpec time, String interval) {
         var instrument=JSON.createObjectNode().put("market_type","perpetual").put("base","BTC").put("quote","USDT").put("settle","USDT");
         var binding=new MetricBinding("m1","test.metric","binance",shape,instrument,
                 selector==KlineMetric.VOLUME?"BTC":selector==KlineMetric.CHANGE_PCT?"percent":"USDT",
                 "kline",selector,"test-v1");
-        return new MetricQuery(binding,TimeSpecParser.parse(args().get("time")),CandleInterval.parse("1h"),false);
+        return new TimeRangeQuery(binding,time,interval,false);
     }
     private static KlineQueryResult data(boolean complete, boolean quoteMissing) {
         var candles=List.of(
@@ -63,37 +69,68 @@ class KlineMetricProviderTest {
 
     @ParameterizedTest @EnumSource(KlineMetric.class)
     void scalarMetricsMatchExistingDomainStatisticsAndQualityFields(KlineMetric selector) throws Exception {
-        var service=service(data(true,false));
-        var q=query(selector,"range_statistic");
-        var result=new KlineMetricProvider(service).query(q,CONTEXT);
-        var scalar=assertInstanceOf(MetricResult.Scalar.class,result);
-        assertEquals(new BigDecimal("7200.000"),scalar.observationSeconds());
-        var actual=MetricResultJson.write(q.binding(),result);
-        verify(service,times(1)).query(CONTEXT.userZone(),q.time(),CONTEXT.requestTime(),Exchange.BINANCE,"BTC",q.interval(),false);
-        var old=new GetMarketStatisticsTool(mock(MarketDataService.class),service).execute(args(),new ToolContext("test",null,CONTEXT.userZone(),CONTEXT.requestTime()));
-        assertTrue(old.ok(),old.error());
-        assertEquals(old.data().path("statistics").get(FIELDS.get(selector)),actual.get("value"));
-        assertEquals(old.data().get("coverage"),actual.get("coverage"));
-        assertEquals(old.data().get("requested_range"),actual.get("requested_range"));
-        assertEquals(old.data().at("/statistics/actual_range"),actual.get("actual_range"));
-        assertEquals("kline",actual.at("/source/provider").asText());
-        assertFalse(actual.path("source").has("tool"));
+        var service = service(data(true, false));
+        var q = query(selector, "range_statistic");
+        var result = new KlineMetricProvider(service).query(q, CONTEXT);
+        var scalar = assertInstanceOf(MetricResult.Scalar.class, result);
+        assertEquals(new BigDecimal("7200.000"), scalar.observationSeconds());
+        var actual = MetricResultJson.write(q.binding(), result);
+        verify(service, times(1)).query(CONTEXT.userZone(), q.time(), CONTEXT.requestTime(), Exchange.BINANCE, "BTC",
+                CandleInterval.parse(q.intervalCode()), false);
+        assertEquals(0, new BigDecimal(EXPECTED_STATISTICS.get(selector)).compareTo(actual.get("value").decimalValue()));
+        assertTrue(actual.at("/coverage/range_complete").asBoolean());
+        assertEquals("2026-09-28 00:00:00", actual.at("/requested_range/start_inclusive").asText());
+        assertEquals("2026-09-28 02:00:00", actual.at("/actual_range/end_exclusive").asText());
+        assertEquals("kline", actual.at("/source/provider").asText());
+        assertEquals(selector.name(), actual.at("/source/selector").asText());
         assertFalse(actual.has("statistics"));
     }
 
-    @ParameterizedTest @CsvSource({"OPEN,1","HIGH,2","LOW,3","CLOSE,4","VOLUME,5"})
-    void seriesUsesTypedCandlesAndMatchesLegacyProjection(KlineMetric selector,int column) throws Exception {
-        var service=service(data(true,false));var q=query(selector,"time_series");
-        var result=new KlineMetricProvider(service).query(q,CONTEXT);
-        var series=assertInstanceOf(MetricResult.Series.class,result);
-        assertEquals(START,series.samples().get(0).time());
-        var actual=MetricResultJson.write(q.binding(),result);
-        var old=new GetKlinesTool(mock(MarketDataService.class),service).execute(args(),new ToolContext("t",null,CONTEXT.userZone(),CONTEXT.requestTime()));
-        for(int i=0;i<2;i++) {
-            assertEquals(old.data().path("candles").get(i).get(column),actual.path("samples").get(i).get("value"));
-            assertEquals(old.data().path("candles").get(i).get(0),actual.path("samples").get(i).get("time"));
-        }
-        assertFalse(actual.has("candles"));assertFalse(actual.has("value"));
+    @ParameterizedTest @CsvSource({"OPEN,100,104", "HIGH,105,112", "LOW,98,103", "CLOSE,104,110", "VOLUME,2,3"})
+    void seriesUsesTypedCandlesWithoutExposingRawRows(KlineMetric selector, String first, String second) throws Exception {
+        var service = service(data(true, false));
+        var q = query(selector, "time_series");
+        var result = new KlineMetricProvider(service).query(q, CONTEXT);
+        var series = assertInstanceOf(MetricResult.Series.class, result);
+        assertEquals(START, series.samples().get(0).time());
+        var actual = MetricResultJson.write(q.binding(), result);
+        assertEquals(0, new BigDecimal(first).compareTo(actual.path("samples").get(0).get("value").decimalValue()));
+        assertEquals(0, new BigDecimal(second).compareTo(actual.path("samples").get(1).get("value").decimalValue()));
+        assertTrue(actual.path("samples").get(0).has("time"));
+        assertFalse(actual.has("candles"));
+        assertFalse(actual.has("value"));
+    }
+
+    @Test void requestZoneDrivesWindowResolutionCoverageAndRendering() throws Exception {
+        var zone = ZoneId.of("America/New_York");
+        Instant requestTime = Instant.parse("2026-09-24T15:30:00Z");
+        KlineSource source = new KlineSource() {
+            public Exchange exchange() { return Exchange.BINANCE; }
+            public SeriesCapability capability() { return new SeriesCapability(Set.of(CandleInterval.values()), 1500, 4); }
+            public FetchResult fetch(KlineQueryRequest r) {
+                long step = r.interval().duration().toMillis();
+                var rows = new ArrayList<Candle>();
+                for (long t = r.range().startInclusive().toEpochMilli();
+                     t < r.range().endExclusive().toEpochMilli(); t += step) {
+                    rows.add(new Candle(t, BigDecimal.TEN, BigDecimal.valueOf(11), BigDecimal.valueOf(9),
+                            BigDecimal.TEN, BigDecimal.ONE, BigDecimal.TEN, true));
+                }
+                return new FetchResult(rows, null);
+            }
+        };
+        var service = new KlineQueryService(List.of(source), new TimeRangeResolver(Clock.fixed(requestTime, ZoneOffset.UTC)));
+        var time = JSON.readTree("{\"type\":\"relative_day_range\",\"timezone\":null,"
+                + "\"start\":{\"day_offset\":0,\"time\":\"10:00:00\"},\"end\":{\"day_offset\":0,\"time\":\"11:00:00\"}}");
+        var q = query(KlineMetric.CLOSE, "time_series", TimeSpecParser.parse(time), "5m");
+        var rendered = MetricResultJson.write(q.binding(),
+                new KlineMetricProvider(service).query(q, new RequestContext(zone, requestTime)));
+        // 请求时区参与 TimeSpec 消解，结果的窗口渲染与序列时间戳也必须用它，不回落到 UTC。
+        assertEquals("America/New_York", rendered.at("/requested_range/timezone").asText());
+        assertEquals("2026-09-24 10:00:00", rendered.at("/requested_range/start_inclusive").asText());
+        assertEquals("2026-09-24 11:00:00", rendered.at("/requested_range/end_exclusive").asText());
+        assertEquals(12, rendered.at("/coverage/expected_count").asInt());
+        assertEquals(12, rendered.path("samples").size());
+        assertEquals("2026-09-24 10:00:00", rendered.at("/samples/0/time").asText());
     }
 
     @Test void incompleteRangeOmitsValueButKeepsSeriesAndBlocksCalculation() throws Exception {
@@ -131,9 +168,10 @@ class KlineMetricProviderTest {
         var coverage=new SeriesCoverage(2,2,List.of(),List.of(),List.of(),true,true,"page budget",START.plusSeconds(7100).toEpochMilli(),true);
         var result=new KlineQueryResult(requested,original.effective(),original.candles(),coverage);
         var q=query(KlineMetric.CLOSE,"time_series");
-        q=new MetricQuery(q.binding(),q.time(),null,true);
+        q=new TimeRangeQuery(q.binding(),q.time(),null,true);
         var value=new KlineMetricProvider(service(result)).query(q,CONTEXT);
-        assertSame(coverage,value.metadata().coverage());assertSame(requestedRange,value.metadata().requestedRange());
+        var metadata=assertInstanceOf(MetricResult.SeriesMetadata.class,value.metadata());
+        assertSame(coverage,metadata.coverage());assertSame(requestedRange,metadata.requestedRange());
         var json=MetricResultJson.write(q.binding(),value);
         assertTrue(json.has("effective_range"));assertEquals("automatic",json.path("interval_source").asText());
         assertTrue(json.at("/coverage/contains_unclosed").asBoolean());assertTrue(json.at("/coverage/dropped_unclosed").asBoolean());
@@ -154,6 +192,14 @@ class KlineMetricProviderTest {
         assertThrows(IllegalArgumentException.class,()->new MetricProviderRegistry(List.of(),catalog));
         var provider=new KlineMetricProvider(mock(KlineQueryService.class));
         assertThrows(IllegalStateException.class,()->new MetricProviderRegistry(List.of(provider,provider)));
-        assertDoesNotThrow(()->new MetricProviderRegistry(List.of(provider),catalog));
+        // 目录含 oi/mark_price/taker/ticker/orderbook/funding 域后，只注册 kline 也视为缺 Provider，启动拒绝
+        assertThrows(IllegalArgumentException.class,()->new MetricProviderRegistry(List.of(provider),catalog));
+        assertDoesNotThrow(()->new MetricProviderRegistry(List.of(provider,
+                new OiMetricProvider(mock(OiQueryService.class), mock(MarketDataService.class)),
+                new MarkPriceMetricProvider(mock(MarkPriceQueryService.class), mock(MarketDataService.class)),
+                new TakerMetricProvider(mock(TakerVolumeQueryService.class)),
+                new TickerMetricProvider(mock(MarketDataService.class)),
+                new OrderBookMetricProvider(mock(MarketDataService.class)),
+                new FundingMetricProvider(mock(com.cexpilot.market.funding.FundingQueryService.class))),catalog));
     }
 }

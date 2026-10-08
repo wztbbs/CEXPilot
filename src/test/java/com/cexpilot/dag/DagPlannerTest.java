@@ -42,7 +42,8 @@ class DagPlannerTest {
         planner(llm, registry(), new DagConfig()).plan("昨天成交额", "", "test", e -> {});
         String prompt = llm.calls.get(0).get(0).content();
         for (String expected : List.of("trade.turnover", "price.close", "avg:", "annualize:", "metrics", "samples", "K 线")) assertTrue(prompt.contains(expected), expected);
-        for (String old : List.of("get_ticker", "get_market_statistics", "get_klines", "get_funding_rate", "statistics.quote_volume")) assertFalse(prompt.contains(old), old);
+        for (String old : List.of("get_ticker", "get_market_statistics", "get_klines", "get_funding_rate", "statistics.quote_volume",
+                "intent", "MARKET_LOOKUP", "MARKET_ANALYSIS", "EXCHANGE_COMPARE", "意图归类")) assertFalse(prompt.contains(old), old);
     }
     @ParameterizedTest
     @ValueSource(strings={"{}", "[]", "not json", "{\"plan\":{\"metrics\":[],\"calculations\":[]}}", "{\"in_domain\":true,\"reply\":null,\"plan\":null}", "{\"in_domain\":true,\"plan\":{\"nodes\":[]}}"})
@@ -56,7 +57,7 @@ class DagPlannerTest {
     }
     @ParameterizedTest @ValueSource(booleans={true,false})
     void domainAndClarificationShortCircuit(boolean inDomain) {
-        var llm = new Script("{\"in_domain\":"+inDomain+",\"intent\":\"UNKNOWN\",\"plan\":null,\"reply\":\"请明确查询范围\"}");
+        var llm = new Script("{\"in_domain\":"+inDomain+",\"plan\":null,\"reply\":\"请明确查询范围\"}");
         var result = planner(llm, registry(), new DagConfig()).plan("问题", "", "t", e -> {});
         assertEquals(inDomain,result.inDomain());
         assertEquals("请明确查询范围",result.reply());
@@ -81,9 +82,7 @@ class DagPlannerTest {
         assertTrue(planner(repair,registry(),new DagConfig()).plan("问题","","t",x -> {}).plan().isPresent());
         assertEquals(2,repair.calls.size());
     }
-    @Test void unknownIntentAndRetryExhaustion() {
-        ObjectNode e=(ObjectNode)json(envelope(scalarPlan()));e.put("intent","INVENTED");
-        assertEquals("UNKNOWN",planner(new Script(e.toString()),registry(),new DagConfig()).plan("问题","","t",x -> {}).intent());
+    @Test void retryExhaustion() {
         var config=new DagConfig();config.setPlannerMaxRetries(1);
         var llm=new Script("bad","bad");
         var result=planner(llm,registry(),config).plan("问题","","t",x -> {});
@@ -95,13 +94,18 @@ class DagPlannerTest {
         var llm=new Script(envelope(scalarPlan()));
         assertTrue(planner(llm,registry(),config).plan("问题","","t",x -> {}).plan().isPresent());
         if (format.contains("schema")) {
+            var schema = llm.format.at("/json_schema/schema");
+            assertFalse(schema.path("properties").has("intent"));
+            var required = new java.util.HashSet<String>();
+            schema.path("required").forEach(field -> required.add(field.asText()));
+            assertEquals(java.util.Set.of("in_domain", "plan", "reply"), required);
             var properties=llm.format.at("/json_schema/schema/properties/plan/properties");
             assertTrue(properties.has("metrics"));assertTrue(properties.has("calculations"));assertFalse(properties.has("nodes"));
             assertTrue(properties.at("/metrics/items/properties/metric/enum").toString().contains("price.close"));
         } else assertEquals("json_object",llm.format.path("type").asText());
     }
     @Test void unsupportedMetricsMarketsShapesAndUnknownFieldsFailBeforeExecution() {
-        var registry=registry();var compiler=new MetricPlanCompiler(new MetricCatalog(LOADER),registry);
+        var registry=registry();var compiler=new MetricPlanCompiler(new MetricCatalog(LOADER),registry,providers());
         List<ObjectNode> bad=new ArrayList<>();
         var p=scalarPlan();((ObjectNode)p.at("/metrics/0")).put("metric","funding.rate");bad.add(p);
         p=scalarPlan();((ObjectNode)p.at("/metrics/0/instrument")).put("market_type","spot");bad.add(p);
@@ -118,7 +122,7 @@ class DagPlannerTest {
         var llm=new Script(envelope(bad),envelope(valid));
         assertTrue(planner(llm,registry(),new DagConfig()).plan("问题","","t",x->{}).plan().isPresent());
         assertEquals(2,llm.calls.size());
-        var compiler=new MetricPlanCompiler(new MetricCatalog(LOADER),registry());
+        var compiler=new MetricPlanCompiler(new MetricCatalog(LOADER),registry(),providers());
         assertThrows(IllegalArgumentException.class,()->compiler.compile(plan(metric("m1","price.close","range_statistic","binance","okx")),1));
     }
     @Test void referencesAndCyclesAreValidatedAndForwardReferencesAllowed() {

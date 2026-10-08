@@ -194,7 +194,6 @@
       + '<div class="question-text">' + esc(trace.question) + '</div>'
       + '<div class="meta-grid">'
       + '<span class="badge ' + statusClass + '">' + esc(trace.status) + '</span>'
-      + metaItem('intent', trace.intent)
       + metaItem('visitor', trace.visitor_id && String(trace.visitor_id).slice(0, 8) + '…')
       + metaItem('model', trace.model)
       + metaItem('commit', trace.build_commit)
@@ -204,9 +203,9 @@
       + metaItem('时间', trace.created_at)
       + '</div></div>';
 
-    /* ② 规划输出（意图识别 + Plan 的合并 LLM 调用，可能含 repair 多次尝试） */
+    /* ② 规划输出（单次 LLM 生成指标计划，可能含 repair 多次尝试） */
     var plannerCalls = events.filter(function (e) { return e.event_type === 'LLM_CALL' && e.name === 'dag_planner'; });
-    html += '<div class="section"><h2><span class="no">2</span>意图识别 & 规划输出</h2>';
+    html += '<div class="section"><h2><span class="no">2</span>指标规划输出</h2>';
     if (!plannerCalls.length) {
       html += '<div class="dag-empty">没有规划调用记录</div>';
     }

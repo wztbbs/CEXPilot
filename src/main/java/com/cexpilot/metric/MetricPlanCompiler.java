@@ -20,10 +20,12 @@ public final class MetricPlanCompiler {
     private static final Pattern REF = Pattern.compile("\\{\\{([A-Za-z][A-Za-z0-9_]*)(\\.[A-Za-z0-9_]+)+}}");
     private final MetricCatalog catalog;
     private final ToolRegistry registry;
+    private final MetricProviderRegistry providers;
 
-    public MetricPlanCompiler(MetricCatalog catalog, ToolRegistry registry) {
+    public MetricPlanCompiler(MetricCatalog catalog, ToolRegistry registry, MetricProviderRegistry providers) {
         this.catalog = catalog;
         this.registry = registry;
+        this.providers = providers;
         catalog.validateBindings();
     }
 
@@ -59,11 +61,17 @@ public final class MetricPlanCompiler {
         Map<String, String> calcIds = new LinkedHashMap<>();
         List<PlanNode> nodes = new ArrayList<>();
         for (JsonNode metric : metrics) {
-            object(metric, Set.of("id", "metric", "exchanges", "instrument", "query_shape", "time", "interval", "include_unclosed"), "metric");
-            String id = id(metric, ids);
-            String name = text(metric, "metric");
             String shape = text(metric, "query_shape");
+            QueryShape queryShape = QueryShape.from(shape);
+            String name = text(metric, "metric");
             JsonNode mapping = catalog.binding(name, shape);
+            // 字段白名单随形态收窄：快照不接受 time/interval/include_unclosed；depth 只有声明它的绑定可用。
+            Set<String> fields = new LinkedHashSet<>(Set.of("id", "metric", "exchanges", "instrument", "query_shape"));
+            if (queryShape.requiresTime()) fields.addAll(List.of("time", "interval", "include_unclosed"));
+            if (queryShape.requiresCount()) fields.add("count");
+            if (mapping.has("depth")) fields.add("depth");
+            object(metric, fields, "metric");
+            String id = id(metric, ids);
             JsonNode instrument = metric.path("instrument");
             object(instrument, Set.of("market_type", "base", "quote", "settle"), "instrument");
             if (!"perpetual".equals(text(instrument, "market_type")) || !"USDT".equals(text(instrument, "quote"))
@@ -72,35 +80,66 @@ public final class MetricPlanCompiler {
             }
             String base = text(instrument, "base");
             if (!base.matches("[A-Z0-9]{1,20}")) fail("instrument.base 必须是大写基础币代码");
-            validateTime(metric.path("time"));
-            if (metric.has("interval") && (!metric.get("interval").isTextual()
-                    || !Set.of("5m", "15m", "1h").contains(metric.get("interval").asText()))) fail("interval 仅支持 5m/15m/1h");
+            if (queryShape.requiresTime()) validateTime(metric.path("time"));
+            List<String> intervals = new ArrayList<>();
+            mapping.path("intervals").forEach(node -> intervals.add(node.asText()));
+            if (metric.has("interval")) {
+                if (!metric.get("interval").isTextual()) fail("interval 必须是字符串");
+                if (intervals.isEmpty()) fail("指标 " + name + " 为固定口径统计，不支持指定粒度参数");
+                if (!intervals.contains(metric.get("interval").asText())) {
+                    fail("interval 仅支持 " + String.join("/", intervals));
+                }
+            }
             if (metric.has("include_unclosed") && !metric.get("include_unclosed").isBoolean()) fail("include_unclosed 必须是布尔值");
+            if (intervals.isEmpty() && metric.path("include_unclosed").asBoolean(false)) {
+                fail("指标 " + name + " 为固定口径统计，不支持 include_unclosed 参数");
+            }
+            Integer depth = depth(mapping, metric, name);
+            Integer count = count(mapping, metric, queryShape);
             Map<String, String> expanded = new LinkedHashMap<>();
             JsonNode exchanges = array(metric, "exchanges");
             if (exchanges.isEmpty()) fail("exchanges 不能为空");
             for (JsonNode exchange : exchanges) {
                 if (!exchange.isTextual() || !Set.of("binance", "okx").contains(exchange.asText())) fail("exchanges 仅支持 binance/okx");
                 String ex = exchange.asText();
+                List<String> allowed = new ArrayList<>();
+                mapping.path("exchanges").forEach(node -> allowed.add(node.asText()));
+                if (!allowed.isEmpty() && !allowed.contains(ex)) fail("指标 " + name + " 的 " + shape + " 暂不支持交易所 " + ex);
                 String physicalId = "metric_" + nodes.size();
                 if (expanded.putIfAbsent(ex, physicalId) != null) fail("exchanges 不能重复: " + ex);
                 ObjectNode args = MAPPER.createObjectNode().put("exchange", ex).put("symbol", base)
                         .put("market_type", "perpetual").put("quote_asset", "USDT");
-                args.set("time", metric.get("time").deepCopy());
-                for (String option : List.of("interval", "include_unclosed")) if (metric.has(option)) args.set(option, metric.get(option).deepCopy());
+                // args 只用于 trace 回显；快照形态没有时间窗口，也不进时间相关字段。
+                if (queryShape.requiresTime()) {
+                    args.set("time", metric.get("time").deepCopy());
+                    for (String option : List.of("interval", "include_unclosed")) if (metric.has(option)) args.set(option, metric.get(option).deepCopy());
+                } else if (queryShape.requiresCount()) {
+                    args.put("count", count);
+                } else if (depth != null) {
+                    args.put("depth", depth);
+                }
                 ObjectNode normalizedInstrument = instrument.deepCopy();
                 normalizedInstrument.put("settle", "USDT");
                 String unit = switch (catalog.definition(name).path("unit").asText()) {
                     case "base" -> base;
                     case "quote" -> "USDT";
+                    case "ratio" -> "ratio";
+                    case "contract" -> "contract:" + ex + ":" + base + "-USDT";
                     default -> "percent";
                 };
                 String provider = mapping.path("provider").asText();
                 MetricBinding binding = new MetricBinding(id, name, ex, shape, normalizedInstrument, unit, provider,
-                        KlineMetric.valueOf(mapping.path("selector").asText()), catalog.version());
-                MetricQuery query = new MetricQuery(binding, TimeSpecParser.parse(metric.get("time")),
-                        metric.has("interval") ? com.cexpilot.time.CandleInterval.parse(metric.get("interval").asText()) : null,
-                        metric.path("include_unclosed").asBoolean(false));
+                        providers.get(provider).selector(mapping.path("selector").asText()), catalog.version());
+                MetricQuery query;
+                if (queryShape.requiresTime()) {
+                    query = new TimeRangeQuery(binding, TimeSpecParser.parse(metric.get("time")),
+                            metric.has("interval") ? metric.get("interval").asText() : null,
+                            metric.path("include_unclosed").asBoolean(false));
+                } else if (queryShape.requiresCount()) {
+                    query = new CountQuery(binding, count);
+                } else {
+                    query = new SnapshotQuery(binding, depth);
+                }
                 nodes.add(new PlanNode(physicalId, null, args, List.of(), query));
                 if (nodes.size() + calculations.size() > maxNodes) fail("展开后的执行节点超过上限 " + maxNodes);
             }
@@ -157,6 +196,40 @@ public final class MetricPlanCompiler {
             return copy;
         }
         return node.deepCopy();
+    }
+
+    /** 最近 N 期的期数：必须显式给出，不能由程序猜 N；上下限由绑定声明。 */
+    private static Integer count(JsonNode mapping, JsonNode metric, QueryShape shape) {
+        if (!shape.requiresCount()) {
+            return null;
+        }
+        JsonNode value = metric.get("count");
+        if (value == null || !value.isInt()) {
+            fail("recent_n 必须指定 count（整数期数，表示最近多少期，不是时间跨度）");
+        }
+        int min = mapping.path("count").path("min").asInt(1);
+        int max = mapping.path("count").path("max").asInt(100);
+        if (value.asInt() < min || value.asInt() > max) {
+            fail("count 必须在 " + min + "~" + max + " 之间");
+        }
+        return value.asInt();
+    }
+
+    /** 盘口档位数：绑定声明时才可用，未指定取绑定默认值。 */
+    private static Integer depth(JsonNode mapping, JsonNode metric, String metricName) {
+        if (!mapping.has("depth")) {
+            return null;
+        }
+        int min = mapping.path("depth").path("min").asInt(5);
+        int max = mapping.path("depth").path("max").asInt(50);
+        if (!metric.has("depth")) {
+            return mapping.path("depth").path("default").asInt(20);
+        }
+        JsonNode value = metric.get("depth");
+        if (!value.isInt() || value.asInt() < min || value.asInt() > max) {
+            fail("depth 必须是 " + min + "~" + max + " 的整数");
+        }
+        return value.asInt();
     }
 
     private static void validateTime(JsonNode time) {

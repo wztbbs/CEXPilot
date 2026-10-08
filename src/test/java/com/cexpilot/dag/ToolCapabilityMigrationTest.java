@@ -1,7 +1,6 @@
 package com.cexpilot.dag;
 
 import com.cexpilot.config.DagConfig;
-import com.cexpilot.intent.IntentRegistry;
 import com.cexpilot.market.*;
 import com.cexpilot.market.kline.*;
 import com.cexpilot.market.funding.FundingQueryService;
@@ -52,7 +51,7 @@ class ToolCapabilityMigrationTest {
         var catalog=new MetricCatalog(LOADER);
         Map<String,String> expected=Map.of("price.open","100","price.close","102","price.high","103","price.low","99",
                 "price.change_pct","2","trade.volume","240","trade.turnover","28800");
-        var compiler=new MetricPlanCompiler(catalog,registry);
+        var compiler=new MetricPlanCompiler(catalog,registry,providers());
         var executor=new DagExecutor(registry,new DagConfig(),providers(new KlineMetricProvider(service)));
         try {
             for(var entry:expected.entrySet()) {
@@ -75,7 +74,7 @@ class ToolCapabilityMigrationTest {
             calculation(p,"c1","relative_change","{\"current\":\"{{m1.binance.value}}\",\"baseline\":\"{{m1.okx.value}}\"}");
             var llm=new Script(envelope(p),"回答");var config=new DagConfig();var executor=new DagExecutor(registry,config,providers(new KlineMetricProvider(service)));
             try {
-                var result=new DagRuntime(llm,planner(llm,registry,config),executor,new PromptStore(LOADER),new IntentRegistry(LOADER),Clock.fixed(NOW,ZoneOffset.UTC))
+                var result=new DagRuntime(llm,planner(llm,registry,config),executor,new PromptStore(LOADER),Clock.fixed(NOW,ZoneOffset.UTC))
                         .execute("昨天两所成交额比较","","test",e->{},null,new RequestContext(ZoneOffset.UTC,NOW));
                 var calculation=result.evidence().get(2);
                 assertEquals(!missing,calculation.path("ok").asBoolean());
@@ -88,7 +87,7 @@ class ToolCapabilityMigrationTest {
     @Test void realSeriesProjectionKeepsTimestampAndOnlySelectedMetric() {
         var service=new KlineQueryService(List.of(source(Exchange.BINANCE,false)),new TimeRangeResolver(Clock.fixed(NOW,ZoneOffset.UTC)));
         var market=mock(MarketDataService.class);var registry=registry();
-        var compiler=new MetricPlanCompiler(new MetricCatalog(LOADER),registry);var executor=new DagExecutor(registry,new DagConfig(),providers(new KlineMetricProvider(service)));
+        var compiler=new MetricPlanCompiler(new MetricCatalog(LOADER),registry,providers());var executor=new DagExecutor(registry,new DagConfig(),providers(new KlineMetricProvider(service)));
         try {
             for(String metric:List.of("price.open","price.close","price.high","price.low","trade.volume")) {
                 var result=executor.execute(compiler.compile(plan(metric("m",metric,"time_series","binance")),8),"test",e->{},new RequestContext(ZoneOffset.UTC,NOW)).context().get("metric_0");
@@ -108,7 +107,7 @@ class ToolCapabilityMigrationTest {
     }
     @Test void missingProviderFailsStartupButOldKlineToolsAreNotRequired() {
         var catalog=new MetricCatalog(LOADER);
-        assertDoesNotThrow(()->new MetricPlanCompiler(catalog,registry()));
+        assertDoesNotThrow(()->new MetricPlanCompiler(catalog,registry(),providers()));
         assertThrows(IllegalArgumentException.class,()->new MetricProviderRegistry(List.of(),catalog));
     }
     @Test

@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS ask_trace (
     trace_id          VARCHAR(64)   NOT NULL PRIMARY KEY,
     conversation_id   VARCHAR(64)   NULL,
     question          TEXT          NOT NULL,
-    intent            VARCHAR(64)   NULL, -- planner 归类的统计 hint（intent 名 / UNKNOWN；出域为 NULL）
+    intent            VARCHAR(64)   NULL, -- 历史意图标签，仅兼容旧数据；当前流程不再写入
     visitor_id        VARCHAR(64)   NULL, -- 访客标识（cexpilot_uid cookie）
     status            VARCHAR(16)   NOT NULL DEFAULT 'RUNNING',
     answer            MEDIUMTEXT    NULL,
@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS feedback (
     KEY idx_feedback_trace (trace_id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
--- in-domain 但未命中任何 intent 的 query（能力缺口数据集，供离线聚类与产品优先级用）
+-- 历史未分类 query 表，保留旧数据；当前流程不再写入
 CREATE TABLE IF NOT EXISTS unmatched_query (
     id              BIGINT       NOT NULL AUTO_INCREMENT PRIMARY KEY,
     trace_id        VARCHAR(64)  NOT NULL,

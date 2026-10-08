@@ -1,7 +1,5 @@
 package com.cexpilot.dag;
 
-import com.cexpilot.intent.IntentDefinition;
-import com.cexpilot.intent.IntentRegistry;
 import com.cexpilot.llm.ChatMessage;
 import com.cexpilot.llm.ChatResponse;
 import com.cexpilot.llm.LlmClient;
@@ -26,11 +24,9 @@ import java.util.Map;
 import java.util.function.Consumer;
 
 /**
- * DAG 运行时（替代原 ReAct 循环）：一次问答 = DagPlanner 合并调用（领域判断 + intent 归类
- * + 规划）→ DagExecutor 并行执行 → 汇总 evidence → 1 次不带工具的 LLM 调用生成最终回答。
+ * DAG 运行时（替代原 ReAct 循环）：一次问答 = DagPlanner 合并调用（领域判断 + 规划）→ DagExecutor 并行执行 → 汇总 evidence → 1 次不带工具的 LLM 调用生成最终回答。
  *
- * 工具返回的完整 evidence 直接作为回答的 FACTS，不在回答前删除明细；所有意图共享同一事实约束模板，
- * 命中意图时追加该意图的 evidence_policy.rules 作为回答要求。
+ * 工具返回的完整 evidence 直接作为回答的 FACTS，不在回答前删除明细；统一按问题与证据适用事实约束。
  * 出域直接返回边界话术；planner 有意不规划且给出 reply（追问/能力缺口）时直接透传为答案；
  * 规划失败或没有计划时也直接返回，禁止再让 Answer 用空事实生成答案。
  */
@@ -48,16 +44,14 @@ public class DagRuntime {
     private final DagPlanner planner;
     private final DagExecutor executor;
     private final PromptStore prompts;
-    private final IntentRegistry intentRegistry;
     private final Clock clock;
 
     public DagRuntime(LlmClient llm, DagPlanner planner, DagExecutor executor, PromptStore prompts,
-                      IntentRegistry intentRegistry, Clock clock) {
+                      Clock clock) {
         this.llm = llm;
         this.planner = planner;
         this.executor = executor;
         this.prompts = prompts;
-        this.intentRegistry = intentRegistry;
         this.clock = clock;
     }
 
@@ -105,7 +99,7 @@ public class DagRuntime {
                 answerDelta.accept(answer);
             }
             return new ExecutionResult(answer, MAPPER.createArrayNode(), 0, 0,
-                    totalPromptTokens, totalCompletionTokens, null);
+                    totalPromptTokens, totalCompletionTokens);
         }
 
         // 没有获准执行的计划，就没有 Answer 调用；拒答也走同一个 SSE 返回路径。
@@ -118,7 +112,7 @@ public class DagRuntime {
                 answerDelta.accept(answer);
             }
             return new ExecutionResult(answer, MAPPER.createArrayNode(), 0, 0,
-                    totalPromptTokens, totalCompletionTokens, outcome.intent());
+                    totalPromptTokens, totalCompletionTokens);
         }
 
         ArrayNode evidence = MAPPER.createArrayNode();
@@ -149,8 +143,7 @@ public class DagRuntime {
 
         String systemPrompt = prompts.render(ANSWER_PROMPT_NAME, Map.of(
                 "time_context", timeContext.toString(),
-                "conversation_context", conversationContext == null ? "" : conversationContext,
-                "intent_guidance", intentGuidance(outcome.intent())));
+                "conversation_context", conversationContext == null ? "" : conversationContext));
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(ChatMessage.system(systemPrompt));
         messages.add(ChatMessage.user(userContent));
@@ -159,7 +152,7 @@ public class DagRuntime {
         totalCompletionTokens += answer.completionTokens() == null ? 0 : answer.completionTokens();
 
         return new ExecutionResult(answer.content(), evidence, toolCallCount, steps,
-                totalPromptTokens, totalCompletionTokens, outcome.intent());
+                totalPromptTokens, totalCompletionTokens);
     }
 
     private static void emit(Consumer<String> progress, String text) {
@@ -204,26 +197,6 @@ public class DagRuntime {
         node.put("request_time_local", localTime.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
         node.put("current_date", localTime.toLocalDate().toString());
         return node;
-    }
-
-    /** 命中意图时，把该意图的证据规则注入回答 prompt；未命中或无规则时为空。 */
-    private String intentGuidance(String intent) {
-        IntentDefinition definition = intentRegistry.find(intent);
-        if (definition == null) {
-            return "";
-        }
-        StringBuilder sb = new StringBuilder();
-        sb.append("本轮问题归类为 ").append(definition.name());
-        if (definition.description() != null && !definition.description().isBlank()) {
-            sb.append("（").append(definition.description().trim()).append("）");
-        }
-        if (!definition.evidenceRules().isEmpty()) {
-            sb.append("。该类别问题的回答要求：");
-            for (String rule : definition.evidenceRules()) {
-                sb.append("\n- ").append(rule);
-            }
-        }
-        return sb.toString();
     }
 
     private void appendEvidence(ArrayNode evidence, PlanNode node, ToolResult result) {

@@ -16,17 +16,13 @@ description: >
   不支持含义不固定的 month/year；时长由上游事实或用户明确给出的周期提供，不猜默认 8 小时、不按时间戳自行计算。
   year_days 是整数 360/365/366，省略时由代码默认 365；固定日数年基准，不自动按闰年或交易日换算，输出会标注基准及来源。
   输入缺少对象、观察范围、方法或无法确定周期时先反问用户；不能仅因需要补充口径就声称没有年化能力。
-  当前 get_funding_rate 没有提供对应费率的可靠周期字段，不用 next_funding_time 与快照时间之差冒充周期；
-  用户明确要最近一期已结算费率外推时，可用 get_funding_rate_history(count=1) 的 rates.0.1 与 funding_interval_hours。
-  示例1：最近一期已结算费率简单年化，input={"basis":"periodic_rate","method":"simple",
-  "rate":"{{n1.data.rates.0.1}}","rate_unit":"ratio","period":{"value":"{{n1.data.funding_interval_hours}}","unit":"hour"}}。
-  示例2：过去7天累计资金费率简单年化，先查询 get_funding_rate_statistics，然后用 basis=cumulative_rate、method=simple、
-  rate={{n1.data.statistics.sum}}、rate_unit=ratio、period.value={{n1.data.statistics.observation_seconds}}、period.unit=second；
-  observation_seconds 是完整查询窗口长度，不能使用 actual_range 中首末结算点之差（会少算一个周期）。
-  示例3：历史价格区间涨跌幅做几何年化，get_market_statistics 的 statistics.change_pct 配 rate_unit=percent、
-  basis=holding_return、method=compound，周期引用 statistics.observation_seconds（实际 K 线覆盖时长）；
-  不能用请求窗口长度替代实际窗口，也不能把成交额、成交量或金额当收益率。
-  所有引用必须声明 depends_on，行情数值必须引用本轮事实，常量仅限用户明确给定或 year_days 的公开默认值。
+  本阶段只有成交价格区间涨跌幅是可年化的取数路径：资金费率、标记价涨跌幅、持仓量变化率都没有可用的周期 fact，不能冒充费率年化。
+  示例1：历史价格区间涨跌幅做复利年化，先查 price.change_pct 的 range_statistic，再 input={"basis":"holding_return",
+  "method":"compound","rate":"{{m1.binance.value}}","rate_unit":"percent","period":{"value":"{{m1.binance.observation_seconds}}","unit":"second"}}。
+  示例2：同一结果做简单年化，只改 method=simple，rate 与 period 引用不变。
+  observation_seconds 是实际参与统计的时长，不能用请求窗口长度或 samples 首末点之差替代。
+  不能把成交额、成交量或金额当收益率；用户给出的周期收益率常量可以写常量。
+  行情数值必须引用本轮指标事实，常量仅限用户明确给定或 year_days 的公开默认值。
   输出 value 是年化小数比例，percent 是已乘100的百分数值，均为十进制字符串；展示百分比只给 percent 加 %。
   同时输出 basis、method、input_rate、input_rate_unit、rate_ratio、period_seconds、year_days、year_days_source、annual_factor、formula 和计算假设。
   负费率保留正负号；资金费率正数仍表示多头付费给空头，不自动转成多头收益。

@@ -3,20 +3,20 @@ enabled: true
 description: >
   在一个非空数值集合中找最小值，并返回该值对应的元素位置和原始行，回答"最低是多少、出现在哪个对象/哪个时刻"。
   input 恰好使用以下一种结构：
-  1) 数值集合（n1、n2 均为 get_ticker）：{"kind":"values","values":["{{n1.data.last_price}}","{{n2.data.last_price}}"]}；也可以把 values 整体引用为上游数值数组。
+  1) 数值集合（m1 为含 binance、okx 的同一指标查询组）：{"kind":"values","values":["{{m1.binance.value}}","{{m1.okx.value}}"]}；也可以把 values 整体引用为上游数值数组。
   2) 对象集合（用户给定数值示例）：{"kind":"field","collection":[{"price":10},{"price":20}],"field":"price"}；field 是直接字段名，不支持嵌套路径。行情 collection 必须引用上游契约中的真实数组字段。
-  3) 表格列（n1 为 get_funding_rate_history）：{"kind":"field","collection":"{{n1.data.rates}}","columns":"{{n1.data.rates_columns}}","field":"rate"}；
-     现有历史工具多返回二维数组及对应 *_columns，必须同时引用列名数组，按真实列名选择，不能猜下标或把整行当数字。
+  3) 表格列（m1 为 time_series 查询组）：{"kind":"field","collection":"{{m1.binance.samples}}","field":"value"}；
+     samples 是 {time,value} 对象数组，不再需要 columns；按 field 取值，不猜下标，也不把整行当数字。
   数值允许 JSON number 或无单位的十进制字符串（包括科学计数法）；不接受百分号、千位分隔符、算术表达式、布尔值或 null。
   输出 value 为最小值十进制字符串（与输入同单位）、count 为实际参与元素数、method=minimum；
   index 是最小值在输入集合中的 0 基位置；kind=field 时附 item 为命中的原始行（对象或数组，含时间等其他字段，用于说明"哪个对象/哪个时刻"）。
   多个元素并列最小值时取位置最靠前者，不声称唯一；需要完整排名时不适用。
   使用 BigDecimal 精确比较，无舍入。集合最多 10000 项；单值最多 100 位有效数字，scale 绝对值不超过 1000。
   空集合、字段缺失、null、非数值、重复列名、表格行列长度不符都失败，不跳过元素、不填零、不展开嵌套集合。
-  适用示例：两所当前资金费率哪个更低（kind=values 引用两侧费率，用 index 对应交易所顺序）；最近 10 期资金费率的最低值及对应结算时间
-  （get_funding_rate_history → 表格 rate 列，item 中含 settle_time）；最近 50 笔成交的最低成交价。
+  适用示例：两所同期成交额哪个更低（kind=values 引用两侧 value，用 index 对应交易所顺序）；
+  某区间收盘价 samples 的最低值及对应时间（field=value，item 中含 time）。
   不适用：最大值（用 max）、两值大小关系（用 compare）、均值或合计（用 avg / sum）、按时间窗口过滤（先由查询工具限定窗口）。
-  行情值必须引用本轮查询结果，不能抄写、猜测或预先计算；只有用户明确提供的数值可以写常量，所有引用必须声明 depends_on。
+  行情值必须引用本轮查询结果，不能抄写、猜测或预先计算；只有用户明确提供的数值可以写常量。
   DAG 会拒绝标明 coverage.range_complete=false、sample_complete=false、complete=false 或 statistics_omitted 的引用源；
   不得为了绕过完整性检查把不完整来源改写为常量。
 input_schema:

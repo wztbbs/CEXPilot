@@ -6,8 +6,6 @@ import com.cexpilot.metric.MetricPlanCompiler;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.DefaultResourceLoader;
 import com.cexpilot.config.LlmConfig;
-import com.cexpilot.intent.IntentDefinition;
-import com.cexpilot.intent.IntentRegistry;
 import com.cexpilot.llm.ChatMessage;
 import com.cexpilot.llm.ChatResponse;
 import com.cexpilot.llm.LlmClient;
@@ -38,7 +36,6 @@ public class DagPlanner {
 
     private final LlmClient llm;
     private final ToolRegistry registry;
-    private final IntentRegistry intentRegistry;
     private final LlmConfig llmConfig;
     private final DagConfig dagConfig;
     private final PromptStore prompts;
@@ -46,22 +43,22 @@ public class DagPlanner {
     private final MetricCatalog catalog;
     private final MetricPlanCompiler compiler;
 
-    public DagPlanner(LlmClient llm, ToolRegistry registry, IntentRegistry intentRegistry,
+    public DagPlanner(LlmClient llm, ToolRegistry registry,
                       LlmConfig llmConfig, DagConfig dagConfig, PromptStore prompts,
-                      PlanValidator validator) {
-        this(llm, registry, intentRegistry, llmConfig, dagConfig, prompts, validator,
-                new MetricCatalog(new DefaultResourceLoader()));
+                      PlanValidator validator, com.cexpilot.metric.MetricProviderRegistry metricProviders) {
+        this(llm, registry, llmConfig, dagConfig, prompts, validator,
+                new MetricCatalog(new DefaultResourceLoader()), metricProviders);
     }
 
     @Autowired
-    public DagPlanner(LlmClient llm, ToolRegistry registry, IntentRegistry intentRegistry,
+    public DagPlanner(LlmClient llm, ToolRegistry registry,
                       LlmConfig llmConfig, DagConfig dagConfig, PromptStore prompts,
-                      PlanValidator validator, MetricCatalog catalog) {
+                      PlanValidator validator, MetricCatalog catalog,
+                      com.cexpilot.metric.MetricProviderRegistry metricProviders) {
         this.catalog = catalog;
-        this.compiler = new MetricPlanCompiler(catalog, registry);
+        this.compiler = new MetricPlanCompiler(catalog, registry, metricProviders);
         this.llm = llm;
         this.registry = registry;
-        this.intentRegistry = intentRegistry;
         this.llmConfig = llmConfig;
         this.dagConfig = dagConfig;
         this.prompts = prompts;
@@ -72,7 +69,7 @@ public class DagPlanner {
      * 规划结果。inDomain=false 时 reply 为边界话术；inDomain=true 且 plan 为空表示
      * 模型判断工具不足以回答（reply 说明缺口）或 repair 耗尽（lastError 非空）。
      */
-    public record PlanOutcome(boolean inDomain, String intent, String reply,
+    public record PlanOutcome(boolean inDomain, String reply,
                               Optional<DagPlan> plan, int promptTokens, int completionTokens,
                               String lastError) {
     }
@@ -103,18 +100,18 @@ public class DagPlanner {
             appendRepair(messages, response.content(), lastError);
         }
         // repair 耗尽：runtime 直接返回固定失败话术，禁止继续生成无事实答案。
-        return new PlanOutcome(true, IntentRegistry.UNKNOWN, null,
+        return new PlanOutcome(true, null,
                 Optional.empty(), promptTokens, completionTokens, lastError);
     }
 
     /** 单轮判断不负责 token 累计；error 非空时由 plan 统一追加修复消息并重试。 */
-    private record PlanDecision(boolean inDomain, String intent, String reply, DagPlan plan, String error) {
-        private static PlanDecision accepted(boolean inDomain, String intent, String reply, DagPlan plan) {
-            return new PlanDecision(inDomain, intent, reply, plan, null);
+    private record PlanDecision(boolean inDomain, String reply, DagPlan plan, String error) {
+        private static PlanDecision accepted(boolean inDomain, String reply, DagPlan plan) {
+            return new PlanDecision(inDomain, reply, plan, null);
         }
 
         private PlanOutcome toOutcome(int promptTokens, int completionTokens) {
-            return new PlanOutcome(inDomain, intent, reply, Optional.ofNullable(plan),
+            return new PlanOutcome(inDomain, reply, Optional.ofNullable(plan),
                     promptTokens, completionTokens, error);
         }
     }
@@ -129,29 +126,28 @@ public class DagPlanner {
         }
 
         if (!parsed.isObject() || !parsed.path("in_domain").isBoolean()) {
-            String error = "输出缺少信封：必须输出完整 JSON 对象 {\"in_domain\", \"intent\", \"reply\", \"plan\"}，"
+            String error = "输出缺少信封：必须输出完整 JSON 对象 {\"in_domain\", \"reply\", \"plan\"}，"
                     + "不要直接输出指标数组或旧版 nodes";
             return repairDecision(traceId, sink, parsed.toString(), error);
         }
         if (!parsed.path("in_domain").asBoolean(false)) {
             sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
-            return PlanDecision.accepted(false, null, textOrNull(parsed.path("reply")), null);
+            return PlanDecision.accepted(false, textOrNull(parsed.path("reply")), null);
         }
         return evaluateInDomainResponse(parsed, maxToolCalls, traceId, sink);
     }
 
     private PlanDecision evaluateInDomainResponse(JsonNode parsed, int maxToolCalls,
                                                   String traceId, TraceSink sink) {
-        String intent = normalizeIntent(parsed.path("intent"));
         String reply = textOrNull(parsed.path("reply"));
         JsonNode planNode = parsed.path("plan");
         if (!planNode.isObject()) {
-            return evaluateReplyWithoutPlan(parsed, intent, reply, traceId, sink);
+            return evaluateReplyWithoutPlan(parsed, reply, traceId, sink);
         }
-        return validatePlan(parsed, intent, reply, maxToolCalls, traceId, sink);
+        return validatePlan(parsed, reply, maxToolCalls, traceId, sink);
     }
 
-    private PlanDecision evaluateReplyWithoutPlan(JsonNode parsed, String intent, String reply,
+    private PlanDecision evaluateReplyWithoutPlan(JsonNode parsed, String reply,
                                                   String traceId, TraceSink sink) {
         if (reply == null || reply.isBlank()) {
             // plan 缺失且无任何话术 = 协议违约，必须 repair。
@@ -167,16 +163,16 @@ public class DagPlanner {
         }
         // plan=null 或空 metrics/calculations + 非空 reply：模型有意不规划，直接接受不 repair。
         sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
-        return PlanDecision.accepted(true, intent, reply, null);
+        return PlanDecision.accepted(true, reply, null);
     }
 
-    private PlanDecision validatePlan(JsonNode parsed, String intent, String reply, int maxToolCalls,
+    private PlanDecision validatePlan(JsonNode parsed, String reply, int maxToolCalls,
                                       String traceId, TraceSink sink) {
         String error;
         try {
             DagPlan plan = compiler.compile(parsed.path("plan"), Math.min(dagConfig.getMaxNodes(), maxToolCalls));
             if (plan.nodes().isEmpty() && reply != null && !reply.isBlank()) {
-                return evaluateReplyWithoutPlan(parsed, intent, reply, traceId, sink);
+                return evaluateReplyWithoutPlan(parsed, reply, traceId, sink);
             }
             List<String> errors = validator.validate(plan, compiler.allowedTools(), maxToolCalls);
             if (errors.isEmpty()) {
@@ -186,7 +182,7 @@ public class DagPlanner {
                         plan.toJson().toString(), null, null, null, null, null, null));
                 // plan 已合法时，超长 reply 直接丢弃，不再为 reply 重试。
                 String effectiveReply = isReasoningDump(reply) ? null : reply;
-                return PlanDecision.accepted(true, intent, effectiveReply, plan);
+                return PlanDecision.accepted(true, effectiveReply, plan);
             }
             error = planValidationError(compiler.logicalErrors(plan, errors));
         } catch (Exception e) {
@@ -202,7 +198,7 @@ public class DagPlanner {
 
     private PlanDecision repairDecision(String traceId, TraceSink sink, String output, String error) {
         sink.record(TraceEvent.plan(traceId, output, error));
-        return new PlanDecision(true, null, null, null, error);
+        return new PlanDecision(true, null, null, error);
     }
 
     /** 判断 reply 是否是推理 dump：合法话术很短，超长即视为协议误用。 */
@@ -257,7 +253,6 @@ public class DagPlanner {
 
     private String systemPrompt(String conversationContext) {
         return prompts.render(PROMPT_NAME, Map.of(
-                "intents", renderIntentList(),
                 "concepts", catalog.concepts(),
                 "metrics", catalog.describeMetrics(),
                 "operators", catalog.describeOperators(registry),
@@ -266,20 +261,9 @@ public class DagPlanner {
                 "conversation_context", conversationContext == null ? "" : conversationContext));
     }
 
-    /** 不含每轮历史的有效规划提示词版本，包含指标目录（含绑定）、算子和意图配置。 */
+    /** 不含每轮历史的有效规划提示词版本，包含指标目录（含绑定）、算子配置。 */
     public String promptVersion() {
         return PromptStore.fingerprint(systemPrompt("") + catalog.version());
-    }
-
-    /** LLM 编造未注册的 intent 名时记 UNKNOWN，防止编造的名字进入统计。 */
-    private String normalizeIntent(JsonNode node) {
-        if (node.isTextual()) {
-            String name = node.asText();
-            if (IntentRegistry.UNKNOWN.equals(name) || intentRegistry.find(name) != null) {
-                return name;
-            }
-        }
-        return IntentRegistry.UNKNOWN;
     }
 
     private void appendRepair(List<ChatMessage> messages, String badOutput, String error) {
@@ -304,18 +288,6 @@ public class DagPlanner {
                     System.currentTimeMillis() - start, null, null, null, null, e.getMessage()));
             throw e;
         }
-    }
-
-    private String renderIntentList() {
-        StringBuilder sb = new StringBuilder();
-        for (IntentDefinition intent : intentRegistry.all()) {
-            sb.append("- ").append(intent.name());
-            if (intent.description() != null && !intent.description().isBlank()) {
-                sb.append("：").append(intent.description().trim());
-            }
-            sb.append('\n');
-        }
-        return sb.toString();
     }
 
     private static String textOrNull(JsonNode node) {

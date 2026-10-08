@@ -5,7 +5,6 @@ import com.cexpilot.calculation.AnnualizeTool;
 import com.cexpilot.calculation.RelativeChangeTool;
 import com.cexpilot.config.DagConfig;
 import com.cexpilot.config.LlmConfig;
-import com.cexpilot.intent.IntentRegistry;
 import com.cexpilot.llm.ChatMessage;
 import com.cexpilot.llm.ChatResponse;
 import com.cexpilot.llm.LlmClient;
@@ -175,13 +174,12 @@ class CalculationDagTest {
         };
         var loader = new DefaultResourceLoader();
         var prompts = new PromptStore(loader);
-        var intents = new IntentRegistry(loader);
         var config = new DagConfig();
-        var planner = new DagPlanner(llm, registry, intents, new LlmConfig(), config, prompts,
-                new PlanValidator(registry, config));
+        var planner = new DagPlanner(llm, registry, new LlmConfig(), config, prompts,
+                new PlanValidator(registry, config), MetricTestSupport.providers());
         var executor = new DagExecutor(registry, config, MetricTestSupport.providers(provider));
         try {
-            var result = new DagRuntime(llm, planner, executor, prompts, intents, Clock.systemUTC()).execute(
+            var result = new DagRuntime(llm, planner, executor, prompts, Clock.systemUTC()).execute(
                     "币安 BTC 过去7天价格区间收益率简单年化多少？", "", "annual", events::add);
             assertEquals(3, seen.size());
             assertEquals(2, result.toolCallCount());
@@ -244,13 +242,12 @@ class CalculationDagTest {
         };
         var loader = new DefaultResourceLoader();
         var prompts = new PromptStore(loader);
-        var intents = new IntentRegistry(loader);
         var config = new DagConfig();
-        var planner = new DagPlanner(llm, registry, intents, new LlmConfig(), config, prompts,
-                new PlanValidator(registry, config));
+        var planner = new DagPlanner(llm, registry, new LlmConfig(), config, prompts,
+                new PlanValidator(registry, config), MetricTestSupport.providers());
         var executor = new DagExecutor(registry, config, MetricTestSupport.providers());
         try {
-            var result = new DagRuntime(llm, planner, executor, prompts, intents, Clock.systemUTC()).execute(
+            var result = new DagRuntime(llm, planner, executor, prompts, Clock.systemUTC()).execute(
                     "币安 BTC 昨日成交额相对我给定的 100 USDT 基准增长多少？两者等权平均是多少？", "", "facts", events::add);
             assertEquals(3, seen.size());
             assertEquals(3, result.toolCallCount());

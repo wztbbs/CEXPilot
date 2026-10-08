@@ -1,16 +1,10 @@
 package com.cexpilot.dag;
 
-import com.cexpilot.calculation.DifferenceTool;
 import com.cexpilot.config.DagConfig;
 import com.cexpilot.config.LlmConfig;
-import com.cexpilot.intent.IntentRegistry;
 import com.cexpilot.llm.ChatMessage;
 import com.cexpilot.llm.ChatResponse;
 import com.cexpilot.llm.LlmClient;
-import com.cexpilot.market.Exchange;
-import com.cexpilot.market.MarketDataService;
-import com.cexpilot.market.model.Ticker;
-import com.cexpilot.market.tool.GetTickerTool;
 import com.cexpilot.prompt.PromptStore;
 import com.cexpilot.runtime.*;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -24,9 +18,7 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -37,44 +29,27 @@ class OutputReferenceTest {
     private static final DefaultResourceLoader LOADER = new DefaultResourceLoader();
     private static final List<ToolDefinition> DEFINITIONS = ToolDefinitionLoader.load(LOADER);
 
-    private static AgentTool stub(String name) {
-        return new AgentTool() {
-            public String name() { return name; }
-            public ToolResult execute(JsonNode args, ToolContext context) {
-                throw new AssertionError("静态校验不得执行工具");
-            }
-        };
-    }
-
-    private static ToolRegistry registry(List<AgentTool> tools) {
-        Set<String> names = tools.stream().map(AgentTool::name).collect(Collectors.toSet());
-        return new ToolRegistry(tools, DEFINITIONS.stream().filter(d -> names.contains(d.name())).toList());
-    }
-
-    private static String envelope(String source, String path) {
-        return """
-                {"in_domain":true,"intent":"MARKET_ANALYSIS","reply":null,"plan":{"nodes":[
-                 {"id":"n1","tool":"%s","args":{"exchange":"binance","symbol":"BTC"%s}},
-                 {"id":"n2","tool":"difference","args":{"input":{"left":"{{n1.%s}}","right":1}},"depends_on":["n1"]}
-                ]}}
-                """.formatted(source, source.equals("get_market_statistics")
-                ? ",\"time\":{\"type\":\"calendar_period\",\"unit\":\"week\",\"offset\":-1}" : "", path);
-    }
-
     @ParameterizedTest
-    @CsvSource({
-            "get_ticker,data.ticker.price_usdt,data.last_price",
-            "get_funding_rate,data.current_rate,data.current_funding_rate",
-            "get_market_statistics,data.statistics.close_price,data.statistics.close"
-    })
-    void reportedBadPathsFailBeforeExecutionAndCorrectPathsPass(String source, String bad, String good) throws Exception {
-        var validator = new PlanValidator(registry(List.of(stub(source), new DifferenceTool())), new DagConfig());
-        var errors = validator.validate(DagPlan.fromJson(MAPPER.readTree(envelope(source, bad)).path("plan")), null, 8);
-        assertEquals(1, errors.size(), errors.toString());
-        assertTrue(errors.get(0).contains("{{n1." + bad + "}}"));
-        assertTrue(errors.get(0).contains(source));
-        assertTrue(errors.get(0).contains(good.substring(good.lastIndexOf('.') + 1)), errors.toString());
-        assertTrue(validator.validate(DagPlan.fromJson(MAPPER.readTree(envelope(source, good)).path("plan")), null, 8).isEmpty());
+    @CsvSource({"price_usdt,value", "coverage.range_complete,value", "candles,observation_seconds"})
+    void badMetricReferenceFailsBeforeExecutionAndCorrectPathPasses(String bad, String good) throws Exception {
+        var registry = MetricTestSupport.registry();
+        var compiler = new com.cexpilot.metric.MetricPlanCompiler(new com.cexpilot.metric.MetricCatalog(LOADER),
+                registry, MetricTestSupport.providers());
+        var validator = new PlanValidator(registry, new DagConfig());
+        for (String field : List.of(bad, good)) {
+            var plan = MetricTestSupport.plan(MetricTestSupport.metric("m1", "price.close", "range_statistic", "binance"));
+            MetricTestSupport.calculation(plan, "c1", "difference",
+                    "{\"left\":\"{{m1.binance." + field + "}}\",\"right\":1}");
+            var errors = validator.validate(compiler.compile(plan, 8), compiler.allowedTools(), 8);
+            if (field.equals(bad)) {
+                // 编译器已把逻辑引用换成物理引用，错误信息里带物理字段路径，修复话术再由 logicalErrors 转回逻辑形式。
+                assertEquals(1, errors.size(), errors.toString());
+                assertTrue(errors.get(0).contains(bad), errors.get(0));
+                assertTrue(errors.get(0).contains("输出契约"), errors.get(0));
+            } else {
+                assertTrue(errors.isEmpty(), errors.toString());
+            }
+        }
     }
 
     private static String metricEnvelope(String field) {
@@ -108,11 +83,11 @@ class OutputReferenceTest {
         };
         var config = new DagConfig();
         var prompts = new PromptStore(LOADER);
-        var intents = new IntentRegistry(LOADER);
-        var planner = new DagPlanner(llm, registry, intents, new LlmConfig(), config, prompts, new PlanValidator(registry, config));
+        var planner = new DagPlanner(llm, registry, new LlmConfig(), config, prompts, new PlanValidator(registry, config),
+                MetricTestSupport.providers());
         var executor = new DagExecutor(registry, config, MetricTestSupport.providers(provider));
         try {
-            var outcome = new DagRuntime(llm, planner, executor, prompts, intents, Clock.systemUTC())
+            var outcome = new DagRuntime(llm, planner, executor, prompts, Clock.systemUTC())
                     .execute("币安 BTC 价格减去我给定的 1 USDT 是多少？", "", "ref-repair", events::add);
             assertEquals(3, seen.size());
             assertEquals(2, outcome.toolCallCount());
@@ -133,7 +108,7 @@ class OutputReferenceTest {
 
     @Test
     void exhaustedRepairsExecuteNeitherToolsNorAnswer() {
-        var registry = MetricTestSupport.registry(stub("get_klines"), stub("get_market_statistics"));
+        var registry = MetricTestSupport.registry();
         List<List<ChatMessage>> seen = new ArrayList<>();
         LlmClient llm = (messages, tools) -> {
             seen.add(List.copyOf(messages));
@@ -142,11 +117,11 @@ class OutputReferenceTest {
         var config = new DagConfig();
         config.setPlannerMaxRetries(1);
         var prompts = new PromptStore(LOADER);
-        var intents = new IntentRegistry(LOADER);
-        var planner = new DagPlanner(llm, registry, intents, new LlmConfig(), config, prompts, new PlanValidator(registry, config));
+        var planner = new DagPlanner(llm, registry, new LlmConfig(), config, prompts, new PlanValidator(registry, config),
+                MetricTestSupport.providers());
         var executor = new DagExecutor(registry, config);
         try {
-            var outcome = new DagRuntime(llm, planner, executor, prompts, intents, Clock.systemUTC())
+            var outcome = new DagRuntime(llm, planner, executor, prompts, Clock.systemUTC())
                     .execute("查询价差", "", "ref-failure", event -> {});
             assertEquals(2, seen.size());
             assertEquals(0, outcome.toolCallCount());
@@ -158,7 +133,8 @@ class OutputReferenceTest {
     @Test
     void allPlannerExamplesUseRealOutputPaths() throws Exception {
         var registry = MetricTestSupport.registry();
-        var compiler = new com.cexpilot.metric.MetricPlanCompiler(new com.cexpilot.metric.MetricCatalog(LOADER), registry);
+        var compiler = new com.cexpilot.metric.MetricPlanCompiler(new com.cexpilot.metric.MetricCatalog(LOADER), registry,
+                MetricTestSupport.providers());
         var validator = new PlanValidator(registry, new DagConfig());
         String prompt;
         try (var stream = LOADER.getResource("classpath:prompts/dag_planner.txt").getInputStream()) {
@@ -174,12 +150,16 @@ class OutputReferenceTest {
             count++;
         }
         assertEquals(3, count);
-        for (String tool : List.of("difference", "avg", "sum", "min", "max", "compare", "ratio", "relative_change")) {
-            String description = DEFINITIONS.stream().filter(d -> d.name().equals(tool)).findFirst().orElseThrow().description();
+        // 算子描述里出现的引用必须仍是标准指标/算子字段，防止目录改版后描述漂移回物理路径。
+        for (String operator : List.of("avg", "sum", "min", "max", "compare", "difference", "ratio", "relative_change", "annualize")) {
+            String description = DEFINITIONS.stream().filter(d -> d.name().equals(operator)).findFirst().orElseThrow().description();
             for (var ref : ReferenceResolver.findRefs(MAPPER.getNodeFactory().textNode(description))) {
-                String source = ref.path().startsWith(".data.rates") ? "get_funding_rate_history"
-                        : ref.path().startsWith(".data.statistics") ? "get_market_statistics" : "get_ticker";
-                assertNull(ToolOutputSchema.referenceError(DEFINITIONS.stream().filter(d -> d.name().equals(source)).findFirst().orElseThrow().outputSchema(), ref.path()), tool + ref.path());
+                assertFalse(ref.path().startsWith(".data."), operator + " " + ref.path());
+                assertFalse(ref.path().contains("statistics"), operator + " " + ref.path());
+                assertFalse(ref.path().contains("columns"), operator + " " + ref.path());
+                assertTrue(ref.path().endsWith(".value") || ref.path().endsWith(".observation_seconds")
+                        || ref.path().endsWith(".samples") || ref.path().matches(".*\\.samples(\\.\\d+)?\\.value")
+                        || ref.path().endsWith(".percent"), operator + " " + ref.path());
             }
         }
     }

@@ -2,7 +2,7 @@ name: ratio
 enabled: true
 description: >
   计算 left 除以 right 的倍数或占比，公式固定为 left / right，right 是分母。
-  input 示例（n1、n2 均为 get_market_statistics）为 {"left":"{{n1.data.statistics.quote_volume}}","right":"{{n2.data.statistics.quote_volume}}"}，两项必填。
+  input 示例（m1 为含两所的 trade.turnover 区间查询组）为 {"left":"{{m1.binance.value}}","right":"{{m1.okx.value}}"}，两项必填。
   "A 是 B 的几倍"绑定 left=A、right=B；"部分占总体的比例"绑定 left=部分、right=总体。
   输入允许 JSON number 或无单位的十进制字符串（包括科学计数法），不接受百分号、千位分隔符、表达式、布尔值、null、对象或数组。
   right 必须大于 0；零或负分母均失败，不能取绝对值、交换输入或改公式绕过；left 可以为零或负数（负比值按实陈述，不解释为倍数）。
@@ -13,7 +13,7 @@ description: >
   适用示例：币安昨天成交额是 OKX 的几倍（时间窗口和单位一致）；某币种成交额占两所合计的比例（left=单所成交额，right=sum 算子的合计输出）。
   不适用：相对增减百分比（用 relative_change）、绝对差值（用 difference）、大小判断（用 compare）、加权平均或排名。
   输入必须使用同单位、同指标定义及可比窗口；占比的分母必须确为同一总体的完整合计，代码不会仅凭两个裸数证明业务口径相同。
-  行情值必须引用本轮查询结果，只有用户明确提供的数值可写常量；所有引用必须声明 depends_on。
+  行情值必须引用本轮查询结果，只有用户明确提供的数值可写常量。
   DAG 会拒绝标明 coverage.range_complete=false、sample_complete=false、complete=false 或 statistics_omitted 的引用源。
 input_schema:
   type: object

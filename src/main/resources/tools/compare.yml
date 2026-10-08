@@ -2,17 +2,17 @@ name: compare
 enabled: true
 description: >
   精确比较两个十进制数值的大小关系，回答"A 比 B 大、小还是恰好相等"。
-  input 示例（n1、n2 均为 get_market_statistics）为 {"left":"{{n1.data.statistics.change_pct}}","right":"{{n2.data.statistics.change_pct}}"}，left、right 两项必填，地位对称。
+  input 示例（m1 为含两所的 price.change_pct 区间查询组）为 {"left":"{{m1.binance.value}}","right":"{{m1.okx.value}}"}，left、right 两项必填，地位对称。
   输入允许 JSON number 或无单位的十进制字符串（包括科学计数法），不接受百分号、千位分隔符、表达式、布尔值、null、对象或数组。
   left、right 均可为零或负数，不限制取值范围；比较涨跌幅时两侧必须是同一口径（都引用 ratio 或都引用已乘 100 的 percent 字段）。
   输出 left、right 回显实际参与比较的数值；relation ∈ {greater, less, equal}，表示 left 相对 right 的关系；
   value 是十进制字符串 "1"（大于）/ "0"（相等）/ "-1"（小于），value_unit=comparison，可被后续计算节点引用；formula=sign(left - right)。
   使用 BigDecimal 精确比较，不做浮点近似容忍，也不主动判断"差不多相等"；两个不同的十进制输入不会判等。
-  适用示例：币安与 OKX 当前 BTC 价格哪个更高；币安和 OKX 昨天涨跌幅哪个更大（比较两侧 statistics.change_pct，同为 percent 口径）；
+  适用示例：币安与 OKX 当前 BTC 价格哪个更高；币安和 OKX 昨天涨跌幅哪个更大（两侧同为 price.change_pct 的 value，percent 口径）；
   两个币种当前资金费率哪个更高；判断两侧成交额是否恰好相等。
   不适用：差值多少（用 difference）、倍数或占比（用 ratio）、相对变化率（用 relative_change）、三个及以上对象的最值（用 min/max，不逐个两两归约）。
   输入必须使用同指标、同单位及可比时间窗口；跨所比较对齐窗口，代码不会仅凭两个裸数证明业务口径相同。
-  行情值必须引用本轮查询结果，只有用户明确提供的数值可写常量；所有引用必须声明 depends_on。
+  行情值必须引用本轮查询结果，只有用户明确提供的数值可写常量。
   DAG 会拒绝标明 coverage.range_complete=false、sample_complete=false、complete=false 或 statistics_omitted 的引用源。
 input_schema:
   type: object
