@@ -40,7 +40,7 @@ class DagPlannerTest {
             }
             examples++;
         }
-        assertEquals(5, examples);
+        assertEquals(6, examples);
     }
 
     @ParameterizedTest @ValueSource(strings={"", "json_object", "json_schema"})
@@ -97,6 +97,34 @@ class DagPlannerTest {
         assertEquals(1, events.size());
         assertEquals("simulated transport failure", events.get(0).error());
         assertEquals("json_schema", json(events.get(0).inputJson()).at("/response_format/type").asText());
+    }
+
+    @Test void unsupportedFundingExamplesAreValidNoPlanReplies() throws Exception {
+        String prompt = new org.springframework.core.io.ClassPathResource("prompts/dag_planner.txt")
+                .getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+        int examples = 0;
+        for (String line : prompt.split("\\R")) {
+            if (!line.startsWith("{\"in_domain\"") || !line.contains("\"plan\":null")) continue;
+            var config = new DagConfig(); config.setPlannerMaxRetries(0);
+            var result = planner(new Script(line), registry(), config).plan("校验边界示例", "", "test", e -> {});
+            assertTrue(result.plan().isEmpty());
+            assertNull(result.lastError());
+            assertTrue(result.reply().contains("系统尚未接入"));
+            examples++;
+        }
+        assertEquals(2, examples);
+    }
+
+    @Test void fundingWindowRepairDoesNotSuggestGuessingCount() {
+        var query = metric("m1", "funding.rate_settled", "recent_n", "binance");
+        query.remove("interval"); query.put("count", 7);
+        var compiler = new MetricPlanCompiler(new MetricCatalog(LOADER), registry(), catalogProviders());
+        var error = assertThrows(IllegalArgumentException.class, () -> compiler.compile(plan(query), 8));
+        assertTrue(error.getMessage().contains("不得把天数或小时数换成 count"));
+        query.put("query_shape", "range_statistic"); query.remove("count");
+        var unsupported = assertThrows(IllegalArgumentException.class, () -> compiler.compile(plan(query), 8));
+        assertTrue(unsupported.getMessage().contains("当前系统未接入"));
+        assertTrue(unsupported.getMessage().contains("不代表交易所没有数据"));
     }
 
     @Test void validPlanExpandsExchangesAndKeepsLogicalAndPhysicalTrace() {

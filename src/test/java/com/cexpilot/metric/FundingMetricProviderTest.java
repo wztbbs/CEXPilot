@@ -48,6 +48,33 @@ class FundingMetricProviderTest {
         return service;
     }
 
+    @Test void settlementFactsCarryDirectionZoneAndHistoricalPeriodScope() {
+        var points = List.of(
+                new FundingRatePoint(new BigDecimal("0.0001"), FIRST.toEpochMilli()),
+                new FundingRatePoint(new BigDecimal("-0.0001"), FIRST.plusSeconds(28800).toEpochMilli()),
+                new FundingRatePoint(BigDecimal.ZERO, FIRST.plusSeconds(57600).toEpochMilli()));
+        var binding = binding(FundingMetric.RATE);
+        var result = new FundingMetricProvider(service(new FundingRecentResult(points, null)))
+                .query(new CountQuery(binding, 3), new RequestContext(ZoneId.of("Asia/Shanghai"), NOW));
+        var json = MetricResultJson.write(binding, result);
+        assertEquals("Asia/Shanghai", json.path("timezone").asText());
+        assertEquals("2026-09-28T08:00+08:00", json.at("/samples/0/time_iso").asText());
+        assertEquals("多头支付给空头", json.at("/samples/0/payment_direction").asText());
+        assertEquals("空头支付给多头", json.at("/samples/1/payment_direction").asText());
+        assertEquals("无资金费支付", json.at("/samples/2/payment_direction").asText());
+        assertTrue(json.path("sample_complete").asBoolean());
+        assertTrue(json.path("sample_complete_meaning").asText().contains("不代表覆盖"));
+        assertFalse(json.path("next_settlement_time_available").asBoolean(true));
+        assertFalse(json.has("next_settlement_time"));
+        assertFalse(json.has("period_seconds"));
+        var single = new FundingMetricProvider(service(sample(1))).query(new CountQuery(binding, 1),
+                new RequestContext(ZoneOffset.UTC, NOW));
+        var singleJson = MetricResultJson.write(binding, single);
+        assertEquals(28800, singleJson.path("period_seconds").asInt());
+        assertEquals("historical_settlement_only", singleJson.path("period_scope").asText());
+        assertFalse(singleJson.path("next_settlement_time_available").asBoolean(true));
+    }
+
     @Test void recentSamplesCarrySettlementTimeAndCounts() {
         var binding = binding(FundingMetric.RATE);
         var query = new CountQuery(binding, 10);

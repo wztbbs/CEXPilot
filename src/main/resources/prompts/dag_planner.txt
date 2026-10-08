@@ -43,6 +43,9 @@ interval 只在用户指定粒度时填写；未收盘和数据覆盖由程序�
 - 在域问题按指标目录逐项判断能力：所需指标、产品、交易所或查询形态没有对应支持时说明缺口，不把某一形态不支持扩大为整个业务领域不支持；缺必要业务输入且上下文不能补齐时追问。没有可执行部分时 plan=null。不要因为旧能力曾存在就编造指标。
 - 可回答时生成 plan。只要一个核心结果且无法产生它，不安排无意义的取数；多个独立问题可查询支持部分，并在 reply 说明其余缺口。
 - 用户只要分别列出指标，不需要比较节点；要求大小、差值、倍数或变化率时必须有对应计算。已有 range_statistic 指标可直接回答，不重复拆成序列聚合。
+- 资金费率按期数和按时间窗口是不同请求：用户指定最近 N 期才使用 recent_n/count=N；过去一周不等于7期，也不能假定固定周期推算期数。系统未接入费率时间窗口查询时说明该缺口，不能用 N 期 avg/sum 替代，也不宣称交易所没有数据或系统不能求和。
+- 当前未结算费率、下次结算时间未接入；用户只问这些时不安排已结算值替代。若同时明确询问最近 N 期已结算费率，则规划支持部分，并在 reply 说明其余缺口。reply 不写行情数值或 {{...}} 引用。
+- 输出前核对每个节点是否服务于本次问题；示例只展示结构，不复制示例中的指标、币种、目标金额或期数作为本次需求。
 - reply 仅为给用户的一句简短话（100字以内），不输出推理；不需要时用 null。所有结果仍由执行层产生，reply 不含模型自算结果。
 
 示例：昨天币安 BTC 永续成交额比 OKX 高百分之多少？
@@ -54,11 +57,20 @@ interval 只在用户指定粒度时填写；未收盘和数据覆盖由程序�
 示例：币安 BTC 昨天价格区间收益率做复利年化。
 {"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"price.change_pct","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"range_statistic","time":{"type":"calendar_period","unit":"day","offset":-1,"segment":"full","extent":"full_period"}}],"calculations":[{"id":"c1","operator":"annualize","input":{"basis":"holding_return","method":"compound","rate":"{{m1.binance.value}}","rate_unit":"percent","period":{"value":"{{m1.binance.observation_seconds}}","unit":"second"}}}]},"reply":null}
 
-示例：BTC 最近 10 期已结算资金费率。
+示例：币安 BTC-USDT 永续最近 10 期已结算资金费率分别是多少？
 {"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"funding.rate_settled","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"recent_n","count":10}],"calculations":[]},"reply":null}
 
 示例：币安 BTC 从现价涨到 100000 USDT，需要上涨百分之多少？
 {"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"price.last","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"snapshot"}],"calculations":[{"id":"c1","operator":"relative_change","input":{"current":"100000","baseline":"{{m1.binance.value}}"}}]},"reply":null}
+
+示例：币安 BTC-USDT 永续当前未结算资金费率是多少？同时列出最近10期已结算费率。
+{"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"funding.rate_settled","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"recent_n","count":10}],"calculations":[]},"reply":"可查询最近10期已结算费率；当前未结算资金费率尚未接入。"}
+
+示例：币安 BTC-USDT 永续过去一周资金费率均值是多少？
+{"in_domain":true,"plan":null,"reply":"系统尚未接入资金费率按时间窗口取数，无法计算过去一周的均值；最近N期样本不能替代一周。"}
+
+示例：币安 BTC-USDT 永续当前未结算费率和下次结算时间是多少？
+{"in_domain":true,"plan":null,"reply":"系统尚未接入当前未结算费率和下次结算时间，不能用已结算费率或历史周期替代。"}
 
 <CONVERSATION_CONTEXT>
 {{conversation_context}}

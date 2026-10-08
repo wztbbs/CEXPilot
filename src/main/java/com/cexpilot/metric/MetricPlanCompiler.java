@@ -74,7 +74,7 @@ public final class MetricPlanCompiler {
                     stripped.remove("time");
                     metric = stripped;
                 } else {
-                    fail("指标 " + name + " 的 " + shape + " 形态只接受 count，不接受 time 字段；请删除 time 并在 metric 中补充 count（整数期数，如 \"count\":10）");
+                    fail("指标 " + name + " 的 " + shape + " 不接受时间窗口；不得把天数或小时数换成 count。用户明确要求最近 N 期时才使用 count，否则说明系统未接入该时间窗口查询");
                 }
             }
             // 字段白名单随形态收窄：快照不接受 time/interval/include_unclosed；depth 只有声明它的绑定可用。

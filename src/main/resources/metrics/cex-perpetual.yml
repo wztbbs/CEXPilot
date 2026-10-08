@@ -17,10 +17,11 @@ concepts: |
   trade.turnover_24h 仅 Binance：OKX 官方无成交额字段，不提供估算值冒充成交额。
   盘口指标只提供买一/卖一/价差/买卖不平衡度：挂单量的单位两所不同（Binance 是基础币、OKX 是合约张数且未换算），
   因此不提供挂单量指标，也不能把两所的挂单量放在一起比较或求和；不平衡度是同一所内部的买卖之比，可以跨所比较。
-  funding.rate_settled 只有已结算费率：当前未结算/预测费率两所口径不同（Binance 是最近已结算值、OKX 是预测值），不接入，也不能用已结算费率冒充"当前费率"。
+  funding.rate_settled 只有已结算费率：本系统未接入当前未结算/预测费率及下次结算时间，也不能用已结算费率冒充"当前费率"。
   recent_n 是期数语义（最近 N 期/笔），不是时间区间；count 必须明确给出，样本不足时 sample_complete=false 并披露实际期数，不能当完整样本用。
   结算周期因合约及历史时段而异；只有 count=1 且能从相邻历史结算记录核对该笔周期时才提供 period_seconds，用于单期年化（basis=periodic_rate、rate_unit=ratio，period.value 引用同一结果的 period_seconds，unit=second）。周期缺失不影响读取费率，但不能年化，不用当前/未来周期替代历史周期。
-  历史费率区间序列与累计值暂不支持（变周期口径未核清），也不能用价格涨跌幅冒充费率。
+  系统尚未接入资金费率按时间窗口取数（过去一周、过去24小时等），不得把一周换成7期或按假定8小时换算期数。这是查询形态缺口，不代表交易所没有历史数据；avg/sum 能处理明确的 N 期样本，但不能据此声称计算了指定时间窗口。
+  sample_complete 只表示取齐请求期数，不表示覆盖一周或24小时。历史 period_seconds 不代表未来周期，不能推算下次结算时间。
   不支持逐笔明细和现货查询、链上查询，不能替换成已有指标。
 operators:
   avg: 等权算术平均；不是加权均值，不把两个不同规模样本的均值再平均称为总体均值。
@@ -40,7 +41,7 @@ operators:
     rate_unit=ratio|percent；period.unit=second|minute|hour|day。输出 value 为比例、percent 已乘100，须披露折算假设，不代表未来实际收益。
 metrics:
   funding.rate_settled:
-    description: 最近 N 期已结算资金费率（小数 ratio，0.0001=0.01%）；按期数取样，样本语义不承诺时间跨度
+    description: 最近 N 期已结算资金费率（小数 ratio，0.0001=0.01%）；按明确期数取样，不接受天数/小时数换算；样本语义不承诺时间跨度；正费率多头付空头，负费率空头付多头，零费率无支付
     unit: ratio
     bindings:
       recent_n: {provider: funding, selector: RATE, count: {min: 1, max: 100}}

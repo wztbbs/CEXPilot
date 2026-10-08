@@ -63,7 +63,7 @@ public class MetricCatalog {
     }
     public JsonNode binding(String metric, String shape) {
         JsonNode result = definition(metric).path("bindings").get(shape);
-        if (result == null) throw new IllegalArgumentException("指标 " + metric + " 不支持查询形态 " + shape);
+        if (result == null) throw new IllegalArgumentException("当前系统未接入指标 " + metric + " 的查询形态 " + shape + "；这是系统接入限制，不代表交易所没有数据或算子不能计算");
         return result;
     }
     public List<String> names() {

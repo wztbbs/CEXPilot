@@ -14,6 +14,15 @@ public enum FundingMetric implements MetricSelector {
 
     public BigDecimal sample(FundingRatePoint point) { return required(sample.apply(point)); }
 
+    /** 标准资金费率符号约定；零费率没有资金费转移。 */
+    public static String paymentDirection(BigDecimal rate) {
+        return switch (required(rate).signum()) {
+            case 1 -> "多头支付给空头";
+            case -1 -> "空头支付给多头";
+            default -> "无资金费支付";
+        };
+    }
+
     @Override public boolean supports(String shape) { return QueryShape.RECENT_N.code().equals(shape); }
 
     private static BigDecimal required(BigDecimal value) {

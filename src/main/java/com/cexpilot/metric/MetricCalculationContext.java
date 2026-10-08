@@ -112,6 +112,8 @@ public final class MetricCalculationContext {
                 for (String key : List.of("group_id", "metric", "exchange", "instrument", "unit", "query_shape",
                         "requested_range", "effective_range", "actual_range", "coverage", "candle_interval",
                         "catalog_version", "estimated", "truncated", "source",
+                        "timezone", "sample_scope", "sample_complete_meaning", "period_scope",
+                        "rate_status", "next_settlement_time_available", "next_settlement_time_unavailable_reason",
                         "requested_count", "actual_count", "sample_complete", "period_seconds", "period_source", "period_unavailable_reason")) {
                     if (data.has(key)) metadata.set(key, data.get(key).deepCopy());
                 }

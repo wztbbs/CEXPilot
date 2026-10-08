@@ -44,6 +44,9 @@ public final class MetricResultJson {
             // 快照没有窗口，只有数据时间；时区由 Provider 在取数时从请求上下文带入。
             out.put("as_of", Times.readable(snapshot.asOf().toEpochMilli(), snapshot.zone()));
         } else if (metadata instanceof MetricResult.RecentMetadata recent) {
+            out.put("timezone", recent.zone().getId());
+            out.put("sample_scope", "recent_settlements");
+            out.put("sample_complete_meaning", "仅表示取齐请求期数，不代表覆盖用户指定时间区间");
             out.put("requested_count", recent.requestedCount());
             out.put("actual_count", recent.actualCount());
             out.put("sample_complete", recent.sampleComplete());
@@ -52,10 +55,16 @@ public final class MetricResultJson {
                 if (recent.periodMs() != null && recent.periodMs() > 0) {
                     out.put("period_seconds", BigDecimal.valueOf(recent.periodMs(), 3));
                     out.put("period_source", "adjacent_settlement_times");
+                    out.put("period_scope", "historical_settlement_only");
                 } else {
                     out.put("period_unavailable_reason", "缺少相邻结算记录或时间间隔异常，无法核实该笔费率周期，不支持年化");
                 }
             }
+        }
+        if (binding.selector() instanceof FundingMetric) {
+            out.put("rate_status", "settled");
+            out.put("next_settlement_time_available", false);
+            out.put("next_settlement_time_unavailable_reason", "系统未接入下次结算时间；历史周期不能用于推算未来结算安排");
         }
         out.put("estimated", false).put("truncated", false);
         if (result instanceof MetricResult.Scalar scalar) {
@@ -73,7 +82,11 @@ public final class MetricResultJson {
                     : metadata.effectiveRange().timezone();
             var samples = out.putArray("samples");
             for (var sample : series.samples()) {
-                samples.addObject().put("time", Times.readable(sample.time().toEpochMilli(), zone)).put("value", sample.value());
+                var item = samples.addObject().put("time", Times.readable(sample.time().toEpochMilli(), zone)).put("value", sample.value());
+                if (binding.selector() instanceof FundingMetric) {
+                    item.put("time_iso", sample.time().atZone(zone).toOffsetDateTime().toString());
+                    item.put("payment_direction", FundingMetric.paymentDirection(sample.value()));
+                }
             }
         } else if (result instanceof MetricResult.Point point) {
             out.put("value", point.value());
