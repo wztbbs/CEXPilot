@@ -14,6 +14,9 @@ public class RatioTool extends CalculationTool {
     public String name() { return "ratio"; }
 
     @Override
+    public JsonNode planningInputSchema() { return CalculationInputSchemas.binary("left", "right"); }
+
+    @Override
     public void validateArguments(JsonNode args, boolean allowReferences) {
         JsonNode input = input(args);
         object(input, "input", Set.of("left", "right"));

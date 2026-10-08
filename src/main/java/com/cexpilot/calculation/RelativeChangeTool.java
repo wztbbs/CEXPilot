@@ -14,6 +14,9 @@ public class RelativeChangeTool extends CalculationTool {
     public String name() { return "relative_change"; }
 
     @Override
+    public JsonNode planningInputSchema() { return CalculationInputSchemas.binary("current", "baseline"); }
+
+    @Override
     public void validateArguments(JsonNode args, boolean allowReferences) {
         JsonNode input = input(args);
         if (input.has("left") || input.has("right")) {

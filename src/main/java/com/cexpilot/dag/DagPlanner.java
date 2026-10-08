@@ -243,9 +243,19 @@ public class DagPlanner {
             ObjectNode schema = (ObjectNode) MAPPER.readTree(input);
             ((ObjectNode) schema.at("/properties/plan/properties/metrics/items/properties/metric"))
                     .set("enum", MAPPER.valueToTree(catalog.names()));
-            ((ObjectNode) schema.at("/properties/plan/properties/calculations/items/properties/operator"))
-                    .set("enum", MAPPER.valueToTree(catalog.operators().stream().sorted()
-                            .filter(name -> registry.get(name) instanceof com.cexpilot.calculation.CalculationTool).toList()));
+            ObjectNode calculations = (ObjectNode) schema.at("/properties/plan/properties/calculations");
+            ObjectNode items = MAPPER.createObjectNode();
+            var branches = items.putArray("anyOf");
+            for (String name : catalog.operators().stream().sorted().toList()) {
+                if (!(registry.get(name) instanceof com.cexpilot.calculation.CalculationTool tool)) continue;
+                ObjectNode branch = branches.addObject().put("type", "object").put("additionalProperties", false);
+                branch.putArray("required").add("id").add("operator").add("input");
+                var properties = branch.putObject("properties");
+                properties.putObject("id").put("type", "string");
+                properties.putObject("operator").put("type", "string").putArray("enum").add(name);
+                properties.set("input", tool.planningInputSchema());
+            }
+            calculations.set("items", items);
             return schema;
         } catch (Exception e) {
             throw new IllegalStateException("加载指标计划 schema 失败", e);

@@ -117,19 +117,40 @@
             "allOf": [
               {
                 "if": {
-                  "properties": { "query_shape": { "enum": ["recent_n"] } }
+                  "properties": {
+                    "query_shape": {
+                      "enum": [
+                        "recent_n"
+                      ]
+                    }
+                  }
                 },
                 "then": {
-                  "required": ["count"],
-                  "not": { "required": ["time"] }
+                  "required": [
+                    "count"
+                  ],
+                  "not": {
+                    "required": [
+                      "time"
+                    ]
+                  }
                 }
               },
               {
                 "if": {
-                  "properties": { "query_shape": { "enum": ["range_statistic", "time_series"] } }
+                  "properties": {
+                    "query_shape": {
+                      "enum": [
+                        "range_statistic",
+                        "time_series"
+                      ]
+                    }
+                  }
                 },
                 "then": {
-                  "required": ["time"]
+                  "required": [
+                    "time"
+                  ]
                 }
               }
             ]
@@ -139,23 +160,7 @@
           "type": "array",
           "items": {
             "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "operator": {
-                "type": "string"
-              },
-              "input": {
-                "type": "object"
-              }
-            },
-            "required": [
-              "id",
-              "operator",
-              "input"
-            ]
+            "description": "运行时由 DagPlanner 按已注册 CalculationTool.planningInputSchema 生成 operator 与 input 绑定的 anyOf 分支"
           }
         }
       },

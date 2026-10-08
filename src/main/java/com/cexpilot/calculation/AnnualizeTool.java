@@ -27,6 +27,9 @@ public class AnnualizeTool extends CalculationTool {
     public String name() { return "annualize"; }
 
     @Override
+    public JsonNode planningInputSchema() { return CalculationInputSchemas.annualize(); }
+
+    @Override
     public void validateArguments(JsonNode args, boolean allowReferences) {
         JsonNode input = input(args);
         object(input, "input", Set.of("basis", "method", "rate", "rate_unit", "period", "year_days"));

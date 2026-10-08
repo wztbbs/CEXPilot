@@ -161,7 +161,7 @@ class Stage4RecentAccessTest {
         var withTime = recent("m1", "funding.rate_settled", 3, "binance");
         withTime.set("time", json(DAY));
         error = assertThrows(IllegalArgumentException.class, () -> compiler.compile(plan(withTime), 8));
-        assertTrue(error.getMessage().contains("time"), error.getMessage());
+        assertTrue(error.getMessage().contains("不接受时间窗口"), error.getMessage());
     }
 
     @Test void recentNExpandsPerExchange() {

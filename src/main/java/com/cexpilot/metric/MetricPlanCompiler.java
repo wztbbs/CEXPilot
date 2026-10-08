@@ -51,11 +51,43 @@ public final class MetricPlanCompiler {
         }).toList();
     }
 
+    /** 无需引用消解即可确定的错误先汇总，避免重复 ID 阻断其他节点输入检查。 */
+    private List<String> logicalInputErrors(JsonNode metrics, JsonNode calculations) {
+        List<String> errors = new ArrayList<>();
+        Map<String, String> ids = new LinkedHashMap<>();
+        for (String group : List.of("metrics", "calculations")) {
+            JsonNode nodes = "metrics".equals(group) ? metrics : calculations;
+            for (int i = 0; i < nodes.size(); i++) {
+                JsonNode node = nodes.get(i);
+                String path = group + "[" + i + "]";
+                if (node.path("id").isTextual()) {
+                    String id = node.path("id").asText();
+                    String previous = ids.putIfAbsent(id, path);
+                    if (previous != null) errors.add(path + ".id 重复 id: " + id + "，已用于 " + previous);
+                }
+                if (!"calculations".equals(group)) continue;
+                String operator = node.path("operator").asText();
+                if (!(registry.get(operator) instanceof CalculationTool tool)) continue;
+                ObjectNode args = MAPPER.createObjectNode();
+                args.set("input", node.path("input"));
+                try {
+                    tool.validateArguments(args, true);
+                } catch (IllegalArgumentException e) {
+                    errors.add(path + " (" + node.path("id").asText() + ", " + operator + ").input: "
+                            + e.getMessage() + "；输入契约: " + tool.planningInputSchema());
+                }
+            }
+        }
+        return errors;
+    }
+
     public DagPlan compile(JsonNode plan, int maxNodes) {
         object(plan, Set.of("metrics", "calculations"), "plan");
         JsonNode metrics = array(plan, "metrics");
         JsonNode calculations = array(plan, "calculations");
         if ((long) metrics.size() + calculations.size() > maxNodes) fail("逻辑计划规模超过上限 " + maxNodes);
+        List<String> inputErrors = logicalInputErrors(metrics, calculations);
+        if (!inputErrors.isEmpty()) fail(String.join("; ", inputErrors));
         Set<String> ids = new HashSet<>();
         Map<String, Map<String, String>> branches = new LinkedHashMap<>();
         Map<String, String> calcIds = new LinkedHashMap<>();

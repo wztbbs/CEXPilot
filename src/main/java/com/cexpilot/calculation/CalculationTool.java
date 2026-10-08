@@ -18,6 +18,9 @@ public abstract class CalculationTool implements AgentTool {
     private static final Pattern REF = Pattern.compile("\\{\\{[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)*}}");
     private static final Pattern DECIMAL = Pattern.compile("[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?");
 
+    /** 下发给模型的输入结构；不替代执行期的数值及业务校验。 */
+    public abstract JsonNode planningInputSchema();
+
     /** 规划期允许完整字段引用；执行期必须是解析后的真实值。 */
     public abstract void validateArguments(JsonNode args, boolean allowReferences);
 

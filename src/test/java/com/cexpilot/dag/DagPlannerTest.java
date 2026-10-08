@@ -127,6 +127,36 @@ class DagPlannerTest {
         assertTrue(unsupported.getMessage().contains("不代表交易所没有数据"));
     }
 
+    @Test void duplicateIdAndMalformedCalculationAreReportedTogether() {
+        var bad = scalarPlan();
+        calculation(bad, "m1", "avg", "{\"metric\":\"funding.rate_settled\",\"count\":10}");
+        var llm = new Script(envelope(bad), envelope(scalarPlan()));
+        var result = planner(llm, registry(), new DagConfig()).plan("列出指标", "", "test", e -> {});
+        assertTrue(result.plan().isPresent(), result.lastError());
+        assertEquals(2, llm.calls.size());
+        String repair = llm.calls.get(1).get(3).content();
+        assertTrue(repair.contains("calculations[0].id"));
+        assertTrue(repair.contains("重复 id"));
+        assertTrue(repair.contains("input.kind"));
+        assertTrue(repair.contains("输入契约"));
+        assertTrue(repair.contains("collection"));
+    }
+
+    @Test void generatedSchemaBindsEachOperatorToItsOwnInput() {
+        var config = new DagConfig(); config.setPlannerResponseFormat("json_schema");
+        var llm = new Script(envelope(scalarPlan()));
+        planner(llm, registry(), config).plan("问题", "", "test", e -> {});
+        var branches = llm.format.at("/json_schema/schema/properties/plan/properties/calculations/items/anyOf");
+        assertEquals(9, branches.size());
+        for (var branch : branches) {
+            String name = branch.at("/properties/operator/enum/0").asText();
+            var tool = (com.cexpilot.calculation.CalculationTool) registry().get(name);
+            assertEquals(tool.planningInputSchema(), branch.at("/properties/input"));
+            assertFalse(branch.path("additionalProperties").asBoolean(true));
+            assertEquals(3, branch.path("required").size());
+        }
+    }
+
     @Test void validPlanExpandsExchangesAndKeepsLogicalAndPhysicalTrace() {
         var p = plan(metric("m1", "trade.turnover", "range_statistic", "binance", "okx"));
         calculation(p, "c1", "relative_change", "{\"current\":\"{{m1.binance.value}}\",\"baseline\":\"{{m1.okx.value}}\"}");

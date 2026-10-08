@@ -11,6 +11,9 @@ public class MaxTool extends CalculationTool {
     public String name() { return "max"; }
 
     @Override
+    public JsonNode planningInputSchema() { return CalculationInputSchemas.series(); }
+
+    @Override
     public void validateArguments(JsonNode args, boolean allowReferences) {
         Series.parse(args, allowReferences);
     }

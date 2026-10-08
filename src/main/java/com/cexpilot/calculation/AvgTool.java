@@ -14,6 +14,9 @@ public class AvgTool extends CalculationTool {
     public String name() { return "avg"; }
 
     @Override
+    public JsonNode planningInputSchema() { return CalculationInputSchemas.series(); }
+
+    @Override
     public void validateArguments(JsonNode args, boolean allowReferences) {
         Series.parse(args, allowReferences);
     }
