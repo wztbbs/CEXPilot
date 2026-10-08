@@ -46,19 +46,19 @@ interval 只在用户指定粒度时填写；未收盘和数据覆盖由程序�
 - reply 仅为给用户的一句简短话（100字以内），不输出推理；不需要时用 null。所有结果仍由执行层产生，reply 不含模型自算结果。
 
 示例：昨天币安 BTC 永续成交额比 OKX 高百分之多少？
-{"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"trade.turnover","exchanges":["binance","okx"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"range_statistic","time":{"type":"calendar_period","unit":"day","offset":-1,"segment":"full","extent":"full_period"}}],"calculations":[{"id":"c1","operator":"relative_change","input":{"current":"{{m1.binance.value}}","baseline":"{{m1.okx.value}}"}}]}},"reply":null}
+{"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"trade.turnover","exchanges":["binance","okx"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"range_statistic","time":{"type":"calendar_period","unit":"day","offset":-1,"segment":"full","extent":"full_period"}}],"calculations":[{"id":"c1","operator":"relative_change","input":{"current":"{{m1.binance.value}}","baseline":"{{m1.okx.value}}"}}]},"reply":null}
 
 示例：分别计算两所 BTC 昨天1小时K线收盘价的等权平均，币安减OKX差多少？
-{"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"price.close","exchanges":["binance","okx"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"time_series","interval":"1h","time":{"type":"calendar_period","unit":"day","offset":-1,"segment":"full","extent":"full_period"}}],"calculations":[{"id":"c1","operator":"avg","input":{"kind":"field","collection":"{{m1.binance.samples}}","field":"value"}},{"id":"c2","operator":"avg","input":{"kind":"field","collection":"{{m1.okx.samples}}","field":"value"}},{"id":"c3","operator":"difference","input":{"left":"{{c1.value}}","right":"{{c2.value}}"}}]}},"reply":null}
+{"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"price.close","exchanges":["binance","okx"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"time_series","interval":"1h","time":{"type":"calendar_period","unit":"day","offset":-1,"segment":"full","extent":"full_period"}}],"calculations":[{"id":"c1","operator":"avg","input":{"kind":"field","collection":"{{m1.binance.samples}}","field":"value"}},{"id":"c2","operator":"avg","input":{"kind":"field","collection":"{{m1.okx.samples}}","field":"value"}},{"id":"c3","operator":"difference","input":{"left":"{{c1.value}}","right":"{{c2.value}}"}}]},"reply":null}
 
 示例：币安 BTC 昨天价格区间收益率做复利年化。
-{"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"price.change_pct","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"range_statistic","time":{"type":"calendar_period","unit":"day","offset":-1,"segment":"full","extent":"full_period"}}],"calculations":[{"id":"c1","operator":"annualize","input":{"basis":"holding_return","method":"compound","rate":"{{m1.binance.value}}","rate_unit":"percent","period":{"value":"{{m1.binance.observation_seconds}}","unit":"second"}}}]}},"reply":null}
+{"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"price.change_pct","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"range_statistic","time":{"type":"calendar_period","unit":"day","offset":-1,"segment":"full","extent":"full_period"}}],"calculations":[{"id":"c1","operator":"annualize","input":{"basis":"holding_return","method":"compound","rate":"{{m1.binance.value}}","rate_unit":"percent","period":{"value":"{{m1.binance.observation_seconds}}","unit":"second"}}}]},"reply":null}
 
 示例：BTC 最近 10 期已结算资金费率。
 {"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"funding.rate_settled","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"recent_n","count":10}],"calculations":[]},"reply":null}
 
-示例：BTC 现在价格距离 100000 USDT 还差百分之多少？
-{"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"price.last","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"snapshot"}],"calculations":[{"id":"c1","operator":"relative_change","input":{"current":"{{m1.binance.value}}","baseline":"100000"}}]},"reply":null}
+示例：币安 BTC 从现价涨到 100000 USDT，需要上涨百分之多少？
+{"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"price.last","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"snapshot"}],"calculations":[{"id":"c1","operator":"relative_change","input":{"current":"100000","baseline":"{{m1.binance.value}}"}}]},"reply":null}
 
 <CONVERSATION_CONTEXT>
 {{conversation_context}}

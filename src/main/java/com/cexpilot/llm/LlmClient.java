@@ -21,6 +21,14 @@ public interface LlmClient {
         return chat(messages, tools);
     }
 
+    /** 白名单请求参数，供 trace 审计；不包含连接地址、鉴权或其他客户端配置。 */
+    default JsonNode requestParameters(JsonNode responseFormat) {
+        var node = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+        node.set("response_format", responseFormat == null
+                ? com.fasterxml.jackson.databind.node.NullNode.instance : responseFormat.deepCopy());
+        return node;
+    }
+
     /**
      * 流式回答：onDelta 逐段接收增量文本，返回聚合后的完整响应（含 token 用量）。
      * 默认实现退化为非流式：拿到完整响应后一次性回调，不支持流式的实现也能接入。

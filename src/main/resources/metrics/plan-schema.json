@@ -113,6 +113,25 @@
               "exchanges",
               "instrument",
               "query_shape"
+            ],
+            "allOf": [
+              {
+                "if": {
+                  "properties": { "query_shape": { "enum": ["recent_n"] } }
+                },
+                "then": {
+                  "required": ["count"],
+                  "not": { "required": ["time"] }
+                }
+              },
+              {
+                "if": {
+                  "properties": { "query_shape": { "enum": ["range_statistic", "time_series"] } }
+                },
+                "then": {
+                  "required": ["time"]
+                }
+              }
             ]
           }
         },

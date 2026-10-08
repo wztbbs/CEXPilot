@@ -275,17 +275,18 @@ public class DagPlanner {
     private ChatResponse callLlm(List<ChatMessage> messages, String traceId, TraceSink sink, int attempt,
                                  JsonNode responseFormat) {
         long start = System.currentTimeMillis();
+        String input = eventInput(attempt, messages, responseFormat);
         try {
             ChatResponse response = llm.chat(messages, null, responseFormat);
             sink.record(TraceEvent.llmCall(traceId, TRACE_NAME,
-                    eventInput(attempt, messages), LlmTraceSerializer.responseToJson(response),
+                    input, LlmTraceSerializer.responseToJson(response),
                     System.currentTimeMillis() - start,
                     response.promptTokens(), response.completionTokens(),
                     response.ttftMs(), response.cachedTokens(), null));
             return response;
         } catch (Exception e) {
             sink.record(TraceEvent.llmCall(traceId, TRACE_NAME,
-                    eventInput(attempt, messages), null,
+                    input, null,
                     System.currentTimeMillis() - start, null, null, null, null, e.getMessage()));
             throw e;
         }
@@ -295,12 +296,19 @@ public class DagPlanner {
         return node.isTextual() ? node.asText() : null;
     }
 
-    private static String eventInput(int attempt, List<ChatMessage> messages) {
+    private String eventInput(int attempt, List<ChatMessage> messages, JsonNode responseFormat) {
         ObjectNode node = MAPPER.createObjectNode();
         node.put("stage", TRACE_NAME);
         node.put("attempt", attempt);
         node.put("message_count", messages.size());
         node.set("messages", LlmTraceSerializer.messagesToArray(messages));
+        llm.requestParameters(responseFormat).fields().forEachRemaining(field -> node.set(field.getKey(), field.getValue()));
+        // 显式 null 表示本次没有下发结构约束；完整 Schema 保留在 response_format 中。
+        node.set("response_format", responseFormat == null
+                ? com.fasterxml.jackson.databind.node.NullNode.instance : responseFormat.deepCopy());
+        if (responseFormat != null && responseFormat.path("json_schema").has("schema")) {
+            node.put("schema_fingerprint", PromptStore.fingerprint(responseFormat.at("/json_schema/schema").toString()));
+        }
         return node.toString();
     }
 

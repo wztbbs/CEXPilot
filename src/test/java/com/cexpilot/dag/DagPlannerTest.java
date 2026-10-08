@@ -17,6 +17,88 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /** 新协议的解析、展开、修复和能力边界；模型为固定脚本，不请求网络。 */
 class DagPlannerTest {
+    @Test void allPromptExamplesParseAndCompileWithoutRepair() throws Exception {
+        String prompt = new org.springframework.core.io.ClassPathResource("prompts/dag_planner.txt")
+                .getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+        int examples = 0;
+        for (String line : prompt.split("\\R")) {
+            if (!line.startsWith("{\"in_domain\"") || !line.contains("\"id\"")) continue;
+            var envelope = new com.fasterxml.jackson.databind.ObjectMapper()
+                    .enable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+                    .readTree(line);
+            var config = new DagConfig();
+            config.setPlannerMaxRetries(0);
+            var result = planner(new Script(line), registry(), config).plan("校验示例", "", "test", e -> {});
+            assertTrue(result.plan().isPresent(), result.lastError());
+            if (envelope.at("/plan/metrics/0/metric").asText().equals("funding.rate_settled")) {
+                assertEquals(10, envelope.at("/plan/metrics/0/count").asInt());
+                assertFalse(envelope.at("/plan/metrics/0").has("time"));
+            }
+            if (line.contains("100000")) {
+                assertEquals("100000", envelope.at("/plan/calculations/0/input/current").asText());
+                assertEquals("{{m1.binance.value}}", envelope.at("/plan/calculations/0/input/baseline").asText());
+            }
+            examples++;
+        }
+        assertEquals(5, examples);
+    }
+
+    @ParameterizedTest @ValueSource(strings={"", "json_object", "json_schema"})
+    void traceRecordsResponseFormatOnInitialAndRepairCalls(String format) {
+        var config = new DagConfig();
+        config.setPlannerResponseFormat(format);
+        var llm = new Script("bad", envelope(scalarPlan()));
+        List<TraceEvent> events = new ArrayList<>();
+        planner(llm, registry(), config).plan("问题", "", "test", events::add);
+        var calls = events.stream().filter(e -> e.eventType().equals("LLM_CALL")).toList();
+        assertEquals(2, calls.size());
+        for (int i = 0; i < calls.size(); i++) {
+            var input = json(calls.get(i).inputJson());
+            assertEquals(i + 1, input.path("attempt").asInt());
+            assertEquals(i == 0 ? 2 : 4, input.path("messages").size());
+            assertEquals(llm.format == null ? com.fasterxml.jackson.databind.node.NullNode.instance : llm.format,
+                    input.get("response_format"));
+            assertEquals(format.equals("json_schema"), input.has("schema_fingerprint"));
+            if (format.equals("json_schema")) {
+                assertTrue(input.at("/response_format/json_schema/schema/properties/plan/properties/metrics/items/properties/count").isObject());
+            }
+        }
+    }
+
+    @Test void recentCountMustBeExplicitAndCanRepairWithoutGuessing() {
+        var query = metric("m1", "funding.rate_settled", "recent_n", "binance");
+        query.remove("interval");
+        query.putObject("time");
+        var missing = plan(query);
+        var valid = missing.deepCopy();
+        ((ObjectNode) valid.at("/metrics/0")).put("count", 10).remove("time");
+        var llm = new Script(envelope(missing), envelope(valid));
+        var result = planner(llm, registry(), new DagConfig()).plan("最近10期", "", "test", e -> {});
+        assertTrue(result.plan().isPresent(), result.lastError());
+        assertTrue(llm.calls.get(1).get(3).content().contains("count"));
+        assertEquals(10, result.plan().orElseThrow().nodes().get(0).args().path("count").asInt());
+        var config = new DagConfig(); config.setPlannerMaxRetries(0);
+        var rejected = planner(new Script(envelope(missing)), registry(), config).plan("最近10期", "", "test", e -> {});
+        assertTrue(rejected.plan().isEmpty());
+        assertTrue(rejected.lastError().contains("count"));
+    }
+
+    @Test void failedLlmCallStillRecordsRequestParameters() {
+        var llm = new Script() {
+            @Override public com.cexpilot.llm.ChatResponse chat(List<com.cexpilot.llm.ChatMessage> messages,
+                    List<com.cexpilot.llm.ToolSpec> tools, com.fasterxml.jackson.databind.JsonNode format) {
+                throw new IllegalStateException("simulated transport failure");
+            }
+        };
+        var config = new DagConfig(); config.setPlannerResponseFormat("json_schema");
+        List<TraceEvent> events = new ArrayList<>();
+        assertThrows(IllegalStateException.class,
+                () -> planner(llm, registry(), config).plan("问题", "", "test", events::add));
+        assertEquals(1, events.size());
+        assertEquals("simulated transport failure", events.get(0).error());
+        assertEquals("json_schema", json(events.get(0).inputJson()).at("/response_format/type").asText());
+    }
+
     @Test void validPlanExpandsExchangesAndKeepsLogicalAndPhysicalTrace() {
         var p = plan(metric("m1", "trade.turnover", "range_statistic", "binance", "okx"));
         calculation(p, "c1", "relative_change", "{\"current\":\"{{m1.binance.value}}\",\"baseline\":\"{{m1.okx.value}}\"}");

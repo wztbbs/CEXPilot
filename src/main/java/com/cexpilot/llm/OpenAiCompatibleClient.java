@@ -252,7 +252,8 @@ public class OpenAiCompatibleClient implements LlmClient {
                 ttftMs[0] < 0 ? null : ttftMs[0]);
     }
 
-    private ObjectNode buildBody(List<ChatMessage> messages, List<ToolSpec> tools, JsonNode responseFormat) {
+    @Override
+    public ObjectNode requestParameters(JsonNode responseFormat) {
         ObjectNode body = MAPPER.createObjectNode();
         body.put("model", config.getModel());
         body.put("temperature", temperature);
@@ -267,6 +268,11 @@ public class OpenAiCompatibleClient implements LlmClient {
             // 低延迟场景（规划 / 模板化回答）应关闭
             body.put("enable_thinking", config.getEnableThinking());
         }
+        return body;
+    }
+
+    private ObjectNode buildBody(List<ChatMessage> messages, List<ToolSpec> tools, JsonNode responseFormat) {
+        ObjectNode body = requestParameters(responseFormat);
         body.set("messages", serializeMessages(messages));
         if (tools != null && !tools.isEmpty()) {
             body.set("tools", serializeTools(tools));
