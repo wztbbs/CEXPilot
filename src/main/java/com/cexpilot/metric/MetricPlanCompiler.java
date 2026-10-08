@@ -69,7 +69,10 @@ public final class MetricPlanCompiler {
             if (queryShape.requiresCount() && metric.has("time")) {
                 JsonNode time = metric.get("time");
                 if (time.isNull() || (time.isObject() && time.isEmpty())) {
-                    metric = ((ObjectNode) metric.deepCopy()).remove("time");
+                    // 注意：ObjectNode.remove(String) 返回的是被删除的节点，不是 this；必须先取局部变量再赋值。
+                    ObjectNode stripped = (ObjectNode) metric.deepCopy();
+                    stripped.remove("time");
+                    metric = stripped;
                 } else {
                     fail("指标 " + name + " 的 " + shape + " 形态只接受 count，不接受 time 字段；请删除 time 并补充 count（整数期数，如 10）");
                 }

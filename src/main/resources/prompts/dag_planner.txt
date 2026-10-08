@@ -19,7 +19,7 @@
 - 盘口指标（orderbook.*）可带 depth（5-50 整数，不填则默认 20）；其他指标一律不带 depth。盘口只提供买一/卖一/价差/买卖不平衡度，不提供挂单量：挂单量两所单位不同（基础币 / 合约张数），不能跨所比较。
 - query_shape=snapshot 时输出 value:number 与 as_of（数据时间），表示"当前时刻"的取值，没有区间、粒度与覆盖状态，不能回答历史窗口问题。
 - query_shape=official_24h 时输出 value:number 与 as_of，窗口是交易所官方滚动 24 小时，不是自然日、也不等于按 time 算出的区间；"最近24小时"只有在用户指交易所官方口径时才用它，否则用 range_statistic。
-- query_shape=recent_n 必填 count（1~100 整数，表示最近多少期，不是时间跨度），输出 samples:[{time,value}] 与 requested_count/actual_count/sample_complete；不带 time。sample_complete=false 表示没取够期数，不能当完整样本，必须披露实际期数。funding.rate_settled 只支持 recent_n，必须填 count，不要填 time。
+- query_shape=recent_n 必填 count（1~100 整数，表示最近多少期，不是时间跨度），输出 samples:[{time,value}] 与 requested_count/actual_count/sample_complete；recent_n 形态的 metric 里必须完全省略 time 字段，不要出现 "time":{} 或 "time":null。sample_complete=false 表示没取够期数，不能当完整样本，必须披露实际期数。funding.rate_settled 只支持 recent_n，必须填 count。
 - query_shape=range_statistic 时输出 value:number、observation_seconds:number（实际参与统计时长），仅完整覆盖时有值。
 - query_shape=time_series 时输出 samples:[{time:string,value:number}]，不是二维数组；没有顶层 value。每个结果都带指标、单位、品种、时间窗口、K 线粒度、覆盖状态等元信息。
 - calculations 每项必填 id、operator、input。指标值引用 {{m1.binance.value}}，序列引用 {{m1.okx.samples}}，单个元素引用 {{m1.okx.samples.0.value}}，计算结果引用 {{c1.value}} 或算子输出契约中的其他字段。
