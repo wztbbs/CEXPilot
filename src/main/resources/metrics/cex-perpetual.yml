@@ -1,62 +1,55 @@
 version: cex-perpetual-v1
+# concepts 只保留跨指标的共用语义；指标口径归 description，参数能力归 bindings，计算规则归 operators。
 concepts: |
-  本阶段的可用取数能力由下方 metrics 的指标定义与 bindings 声明；查询形态、产品及交易所限制都必须满足，不能用其他口径替代。
-  perpetual 是永续产品，不是现货；base 是基础币，quote 是报价币，settle 是结算币。
-  price.open/close/high/low 是成交价格，不是标记价、指数价或当前实时价格；mark.* 是标记价格、index.* 是指数价格，二者都不是成交价，不可混用。
-  trade.volume 是基础币成交量；trade.turnover 是真实报价币成交额，来自 K 线成交额累计，不用最新价估算。
-  oi.* 是未平仓合约数量，单位为基础币，不是名义价值或合约张数；Binance 持仓量仅保留最近 30 天，更早的区间会被拒绝。
-  taker.* 是交易所官方 5m 周期统计的区间合计：主动买/卖成交量与主动买占比；仅支持 Binance，固定 5m 聚合，没有 interval 和 include_unclosed 参数。
-  range_statistic 是实际覆盖区间的统计，time_series 是逐根（逐采样点）的指标序列。
-  自然日由 time 和时区定义；滚动窗口不是自然日，也不保证等于交易所官方 24h ticker。
-  成交 K 线与标记/指数价格粒度仅支持 5m/15m/1h；持仓量粒度支持 5m/15m/30m/1h/2h/4h/6h/12h/1d；用户未指定则省略，由程序选择。未对齐边界会外延，回答以实际窗口为准。
-  默认排除未收盘（未完结）数据点；用户明确要求时才能 include_unclosed=true，并披露状态。
-  percent 是百分数（2 表示 2%），ratio 是小数比例（0.5 表示 50%），取值范围由指标定义决定：占总量的比例通常为 0~1，买卖之比可大于 1，资金费率也可为负，两者单位不同，不能直接比较或求差。
-  行情年化仅支持 price.change_pct 的区间收益率和 funding.rate_settled 的单期已结算费率；mark/index 的 change_pct、oi.change_pct 及中间计算结果不能进 annualize。
-  snapshot 是当前时刻取值（最新成交价、当前持仓量、当前标记价/指数价），带 as_of 数据时间，不带区间、粒度与覆盖状态；"现在/当前"用 snapshot，"昨天/过去 N 天"用 range_statistic，不能互相替换。
-  official_24h 是交易所官方滚动 24 小时口径（涨跌幅、成交量、成交额），窗口由交易所定义，不是自然日、也不能与 range_statistic 的窗口混用；"最近 24 小时"若指交易所官方口径才用它，否则按时间窗口取 range_statistic。
-  trade.turnover_24h 仅 Binance：OKX 官方无成交额字段，不提供估算值冒充成交额。
-  盘口指标只提供买一/卖一/价差/买卖不平衡度：挂单量的单位两所不同（Binance 是基础币、OKX 是合约张数且未换算），
-  因此不提供挂单量指标，也不能把两所的挂单量放在一起比较或求和；不平衡度是同一所内部的买卖之比，可以跨所比较。
-  funding.rate_settled 只有已结算费率：本系统未接入当前未结算/预测费率及下次结算时间，也不能用已结算费率冒充"当前费率"。
-  recent_n 是期数语义（最近 N 期/笔），不是时间区间；count 必须明确给出，样本不足时 sample_complete=false 并披露实际期数，不能当完整样本用。
-  结算周期因合约及历史时段而异；只有 count=1 且能从相邻历史结算记录核对该笔周期时才提供 period_seconds，用于单期年化（basis=periodic_rate、rate_unit=ratio，period.value 引用同一结果的 period_seconds，unit=second）。周期缺失不影响读取费率，但不能年化，不用当前/未来周期替代历史周期。
-  系统尚未接入资金费率按时间窗口取数（过去一周、过去24小时等），不得把一周换成7期或按假定8小时换算期数。这是查询形态缺口，不代表交易所没有历史数据；avg/sum 能处理明确的 N 期样本，但不能据此声称计算了指定时间窗口。
-  sample_complete 只表示取齐请求期数，不表示覆盖一周或24小时。历史 period_seconds 不代表未来周期，不能推算下次结算时间。
-  不支持逐笔明细和现货查询、链上查询，不能替换成已有指标。
+  perpetual 是永续产品；base 是基础币；quote 是价格的计价币种；settle 是合约盈亏的结算币种。当前仅支持 USDT 报价、USDT 结算的永续合约。
+  snapshot 是当前时刻取值；range_statistic 是区间统计；time_series 是逐采样点序列；official_24h 是交易所官方滚动24小时统计；recent_n 是最近N期/笔，期数不代表时间跨度。
+  自然日由日期和时区定义，不等于滚动24小时；官方24h窗口也不保证等于程序按 time 计算的窗口。用户询问“24h/最近24小时”的涨跌幅、成交量或成交额且未进一步限定口径时，优先使用已接入的 official_24h 指标；明确要求按本次请求时刻回溯、指定起止时间或查询“昨天”等自然日时，使用 range_statistic。官方指标未接入时，可使用已接入的 K 线区间统计并披露实际窗口与计算口径，但不能称为交易所官方24h数据；用户明确要求官方口径时，应说明能力缺口，不自动替代。
+  未对齐的时间边界可能外延，回答以实际窗口为准；默认排除未完结数据，用户明确要求时才能 include_unclosed=true，并披露状态。
+  percent 是百分数（2 表示 2%），ratio 是小数比例（0.5 表示 50%），不能直接混算；ratio 的取值范围由指标定义决定，买卖之比可大于 1，费率可为负。
+  覆盖完整性和样本完整性不同：sample_complete 仅表示取齐请求期数，不保证覆盖某个时间窗口；样本不足须披露实际数量。
 operators:
   avg: 等权算术平均；不是加权均值，不把两个不同规模样本的均值再平均称为总体均值。
   sum: 求和；价格序列求和不等于涨跌幅，涨跌幅也不能直接相加当持有期收益。
   min: 返回最小值 value、首个命中位置 index，field 模式返回原始 item（含 time/value）。
   max: 返回最大值 value、首个命中位置 index，field 模式返回原始 item（含 time/value）。
-  compare: input={left, right}；relation 为 left 相对 right 的 greater/less/equal，仅判断大小。
-  difference: input={left, right}；value=left-right，同输入单位；percent 输入的差为百分点。
-  ratio: input={left, right}；right 必须大于0；value=left/right，percent 为乘100后的比例。
-  relative_change: input={current, baseline}；baseline 必须大于0；value=(current-baseline)/baseline，percent 已乘100。A比B增长百分之多少，current=A、baseline=B。
+  compare: >
+    判断两个同口径数值的大小关系，回答“A是否大于B”。
+    input={left, right}：left=A、right=B。若要知道差多少、几倍或变化百分比，选择对应算子。
+  difference: >
+    计算两个同口径数值的绝对差，回答“A比B多/少多少”。
+    input={left, right}：left=A、right=B，结果为A减B，保留正负号，单位与输入相同；百分数指标的差以百分点表达。
+  ratio: >
+    计算A是B的多少倍。input={left, right}：left=A、right=B，B为正数基准。
+    不用于回答增长了百分之多少。
+  relative_change: >
+    计算相对于正数基准的增长或下降百分比。input={current, baseline}：current为比较值，baseline为基准值。
+    “A比B高/低百分之多少”传current=A、baseline=B；“从现价涨到目标价需要上涨多少”传current=目标价、baseline=现价。
   annualize: >
-    input 必填 basis、method、rate、rate_unit、period。basis=holding_return|periodic_rate|cumulative_rate，method=simple|compound，不默认方法。
-    本阶段行情年化用 price.change_pct 的 range_statistic：basis=holding_return，rate_unit=percent，rate 引用 value，period={value:引用 observation_seconds,unit:second}。
-    单期已结算费率先查 funding.rate_settled/recent_n/count=1：basis=periodic_rate，rate_unit=ratio，rate 引用 samples.0.value，period.value 引用同一结果的 period_seconds，unit=second；周期缺失时不能年化。累计费率尚无取数能力。用户明确给出的收益率及周期常量可以计算；不接受中间计算结果作为年化 rate。
-    simple=rate_ratio*(year_days*86400/period_seconds)；compound=(1+rate_ratio)^(year_days*86400/period_seconds)-1。
-    cumulative_rate 仅允许 simple；不猜年化方法、不按时间戳自行算时长；year_days 可省略，默认365，可选360/365/366。
-    rate_unit=ratio|percent；period.unit=second|minute|hour|day。输出 value 为比例、percent 已乘100，须披露折算假设，不代表未来实际收益。
+    将给定周期的收益率或费率折算为年化水平，不代表未来实际收益，须披露折算方法与周期。
+    input 必填 basis、method、rate、rate_unit、period；method=simple（简单年化）或 compound（复利年化），方法缺失先追问。
+    价格区间收益率：查 price.change_pct/range_statistic，basis=holding_return、rate_unit=percent，rate 引用 value，period={value:引用同一结果的 observation_seconds,unit:second}。
+    单期已结算费率：查 funding.rate_settled/recent_n/count=1，basis=periodic_rate、rate_unit=ratio，rate 引用 samples.0.value，period={value:引用同一结果的 period_seconds,unit:second}。
+    行情来源仅允许以上两条路径；不接受价格金额、成交额、mark/index/oi 的变化率或 avg/sum 等中间计算结果。不能从多期样本取 samples.0 当最近一期年化。
+    周期缺失不能猜测、按时间戳自行计算或用当前/未来周期代替历史周期；缺少周期不妨碍查询原始费率。
+    用户明确提供的收益率及周期常量也可计算；basis=cumulative_rate 表示累计费率，仅支持 simple。rate_unit=ratio|percent，period.unit=second|minute|hour|day；year_days 可省略，默认365，可选360/365/366。
 metrics:
   funding.rate_settled:
-    description: 最近 N 期已结算资金费率（小数 ratio，0.0001=0.01%）；按明确期数取样，不接受天数/小时数换算；样本语义不承诺时间跨度；正费率多头付空头，负费率空头付多头，零费率无支付
+    description: 最近 N 期已结算资金费率（0.0001=0.01%），按结算时间升序；正费率多头付空头，负费率空头付多头，零费率无支付。未接入当前未结算/预测费率、下次结算时间和时间窗口查询；不能用已结算值替代当前未结算值、用历史周期推算未来结算时间，或把天数/小时数换算成期数；N期 avg/sum 不代表指定时间窗口的均值/累计值
     unit: ratio
     bindings:
       recent_n: {provider: funding, selector: RATE, count: {min: 1, max: 100}}
   orderbook.best_bid:
-    description: 买一价（当前快照，带 as_of）；可指定盘口档位 depth（5-50，默认20）
+    description: 当前买一价
     unit: quote
     bindings:
       snapshot: {provider: orderbook, selector: BEST_BID, depth: {default: 20, min: 5, max: 50}}
   orderbook.best_ask:
-    description: 卖一价（当前快照，带 as_of）；可指定盘口档位 depth（5-50，默认20）
+    description: 当前卖一价
     unit: quote
     bindings:
       snapshot: {provider: orderbook, selector: BEST_ASK, depth: {default: 20, min: 5, max: 50}}
   orderbook.spread:
-    description: 买卖一价差（卖一减买一，USDT）；可指定盘口档位 depth（5-50，默认20）
+    description: 当前买卖一价差（卖一减买一）
     unit: quote
     bindings:
       snapshot: {provider: orderbook, selector: SPREAD, depth: {default: 20, min: 5, max: 50}}
@@ -76,13 +69,13 @@ metrics:
     bindings:
       official_24h: {provider: ticker, selector: CHANGE_PCT_24H}
   price.open:
-    description: 区间首根 K 线开盘价；序列为每根开盘价
+    description: 区间首根成交价格 K 线开盘价；序列为每根开盘价
     unit: quote
     bindings:
       range_statistic: {provider: kline, selector: OPEN, intervals: [5m, 15m, 1h]}
       time_series: {provider: kline, selector: OPEN, intervals: [5m, 15m, 1h]}
   price.close:
-    description: 区间末根 K 线收盘价；序列为每根收盘价，不是当前实时价
+    description: 区间末根成交价格 K 线收盘价；序列为每根收盘价，不是当前实时价
     unit: quote
     bindings:
       range_statistic: {provider: kline, selector: CLOSE, intervals: [5m, 15m, 1h]}
@@ -111,7 +104,7 @@ metrics:
       range_statistic: {provider: kline, selector: VOLUME, intervals: [5m, 15m, 1h]}
       time_series: {provider: kline, selector: VOLUME, intervals: [5m, 15m, 1h]}
   trade.turnover:
-    description: 区间报价币成交额合计；暂不提供逐根成交额序列
+    description: 区间真实报价币成交额，由成交 K 线成交额累计，不用成交量乘最新价估算
     unit: quote
     bindings:
       range_statistic: {provider: kline, selector: TURNOVER, intervals: [5m, 15m, 1h]}
@@ -121,43 +114,43 @@ metrics:
     bindings:
       official_24h: {provider: ticker, selector: VOLUME_24H}
   trade.turnover_24h:
-    description: 交易所官方滚动 24 小时成交额（USDT逐笔汇总）；仅 Binance，OKX 官方不提供成交额字段
+    description: 交易所官方滚动 24 小时真实成交额，不接受成交量乘最新价的估算值
     unit: quote
     bindings:
       official_24h: {provider: ticker, selector: TURNOVER_24H, exchanges: [binance]}
   oi.quantity:
-    description: 未平仓合约数量（基础币口径，不是名义价值或张数）；序列为每个采样点的持仓量，快照为当前持仓量；Binance 仅保留最近 30 天
+    description: 未平仓合约数量（基础币口径，不是名义价值或张数）；序列为各采样点、快照为当前值；Binance 历史查询仅支持最近 30 天
     unit: base
     bindings:
       snapshot: {provider: oi, selector: QUANTITY}
       time_series: {provider: oi, selector: QUANTITY, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
   oi.start:
-    description: 区间期初未平仓合约数量（基础币）
+    description: 区间期初未平仓合约数量（基础币）；Binance 历史查询仅支持最近 30 天
     unit: base
     bindings:
       range_statistic: {provider: oi, selector: START, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
   oi.end:
-    description: 区间期末未平仓合约数量（基础币）
+    description: 区间期末未平仓合约数量（基础币）；Binance 历史查询仅支持最近 30 天
     unit: base
     bindings:
       range_statistic: {provider: oi, selector: END, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
   oi.change:
-    description: 区间未平仓合约数量变化量（基础币）
+    description: 区间未平仓合约数量变化量（基础币）；Binance 历史查询仅支持最近 30 天
     unit: base
     bindings:
       range_statistic: {provider: oi, selector: CHANGE, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
   oi.change_pct:
-    description: 区间未平仓合约数量变化率，百分数口径；不能用于年化
+    description: 区间未平仓合约数量变化率；Binance 历史查询仅支持最近 30 天
     unit: percent
     bindings:
       range_statistic: {provider: oi, selector: CHANGE_PCT, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
   oi.max:
-    description: 区间采样点最高未平仓合约数量（基础币）
+    description: 区间采样点最高未平仓合约数量（基础币）；Binance 历史查询仅支持最近 30 天
     unit: base
     bindings:
       range_statistic: {provider: oi, selector: MAX, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
   oi.min:
-    description: 区间采样点最低未平仓合约数量（基础币）
+    description: 区间采样点最低未平仓合约数量（基础币）；Binance 历史查询仅支持最近 30 天
     unit: base
     bindings:
       range_statistic: {provider: oi, selector: MIN, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
@@ -191,7 +184,7 @@ metrics:
       range_statistic: {provider: mark_price, selector: MARK_LOW, intervals: [5m, 15m, 1h]}
       time_series: {provider: mark_price, selector: MARK_LOW, intervals: [5m, 15m, 1h]}
   mark.change_pct:
-    description: 区间标记价格末收盘价相对首开盘价的涨跌幅，百分数口径；不能用于年化
+    description: 区间标记价格末收盘价相对首开盘价的涨跌幅，百分数口径
     unit: percent
     bindings:
       range_statistic: {provider: mark_price, selector: MARK_CHANGE_PCT, intervals: [5m, 15m, 1h]}
@@ -225,22 +218,22 @@ metrics:
       range_statistic: {provider: mark_price, selector: INDEX_LOW, intervals: [5m, 15m, 1h]}
       time_series: {provider: mark_price, selector: INDEX_LOW, intervals: [5m, 15m, 1h]}
   index.change_pct:
-    description: 区间指数价格末收盘价相对首开盘价的涨跌幅，百分数口径；不能用于年化
+    description: 区间指数价格末收盘价相对首开盘价的涨跌幅，百分数口径
     unit: percent
     bindings:
       range_statistic: {provider: mark_price, selector: INDEX_CHANGE_PCT, intervals: [5m, 15m, 1h]}
   taker.buy_volume:
-    description: 区间主动买成交量合计（基础币）；交易所官方 5m 统计求和，固定粒度无 interval 参数，仅 Binance
+    description: 区间主动买成交量合计（基础币）；交易所官方 5m 统计求和
     unit: base
     bindings:
       range_statistic: {provider: taker, selector: BUY_VOLUME, exchanges: [binance]}
   taker.sell_volume:
-    description: 区间主动卖成交量合计（基础币）；交易所官方 5m 统计求和，固定粒度无 interval 参数，仅 Binance
+    description: 区间主动卖成交量合计（基础币）；交易所官方 5m 统计求和
     unit: base
     bindings:
       range_statistic: {provider: taker, selector: SELL_VOLUME, exchanges: [binance]}
   taker.buy_ratio:
-    description: 区间主动买成交量占总成交量的比例（0~1 的 ratio，不是百分数）；仅 Binance
+    description: 区间主动买成交量占总成交量的比例（0~1）；根据交易所官方 5m 买卖成交量合计计算
     unit: ratio
     bindings:
       range_statistic: {provider: taker, selector: BUY_RATIO, exchanges: [binance]}

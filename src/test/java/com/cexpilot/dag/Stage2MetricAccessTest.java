@@ -93,7 +93,7 @@ class Stage2MetricAccessTest {
         var tooWide = withoutInterval("m1", "oi.change_pct", "range_statistic", "binance");
         tooWide.put("interval", "3m");
         var error = assertThrows(IllegalArgumentException.class, () -> compiler().compile(plan(tooWide), 8));
-        assertEquals("interval 仅支持 5m/15m/30m/1h/2h/4h/6h/12h/1d", error.getMessage());
+        assertEquals("metrics[0] (m1, oi.change_pct, range_statistic): interval 仅支持 5m/15m/30m/1h/2h/4h/6h/12h/1d", error.getMessage());
         var nodes = compiler().compile(plan(withoutInterval("m1", "oi.end", "range_statistic", "binance", "okx")), 8).nodes();
         assertEquals(2, nodes.size());
         assertEquals(OiMetric.END, nodes.get(0).metric().selector());
@@ -103,7 +103,7 @@ class Stage2MetricAccessTest {
         var group = withoutInterval("m1", "mark.close", "range_statistic", "binance");
         group.put("interval", "30m");
         var error = assertThrows(IllegalArgumentException.class, () -> compiler().compile(plan(group), 8));
-        assertEquals("interval 仅支持 5m/15m/1h", error.getMessage());
+        assertEquals("metrics[0] (m1, mark.close, range_statistic): interval 仅支持 5m/15m/1h", error.getMessage());
         group.put("interval", "15m");
         assertEquals(1, compiler().compile(plan(group), 8).nodes().size());
         assertEquals(MarkPriceMetric.MARK_CLOSE, compiler().compile(plan(group), 8).nodes().get(0).metric().selector());

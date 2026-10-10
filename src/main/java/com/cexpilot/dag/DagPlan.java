@@ -8,7 +8,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * LLM 生成的执行计划：一组带依赖关系的工具调用节点。
+ * 执行计划：一组带依赖关系的工具调用节点。
+ * 当前由 MetricPlanCompiler 将 LLM 输出的 metrics/calculations 逻辑计划编译为本类。
  * 结构合法性由 PlanValidator 校验（本类只负责解析，容忍字段缺省）。
  */
 public record DagPlan(List<PlanNode> nodes) {
@@ -20,7 +21,9 @@ public record DagPlan(List<PlanNode> nodes) {
     }
 
     /**
-     * 从 LLM 输出解析 Plan：{"nodes": [{"id", "tool", "args", "depends_on"}]}。
+     * 从旧版 nodes 格式或内部序列化结果解析 Plan：{"nodes": [{"id", "tool", "args", "depends_on"}]}。
+     * 当前 LLM 输出协议为 metrics/calculations，由 MetricPlanCompiler 编译后再生成 DagPlan；
+     * 本方法主要用于测试构造及内部序列化回读。
      * args 缺省/非对象按空对象处理，depends_on 缺省按空表处理；
      * id / tool 缺失保留为 null，交给 PlanValidator 报错。
      */

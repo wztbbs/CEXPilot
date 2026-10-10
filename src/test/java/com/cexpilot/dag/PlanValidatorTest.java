@@ -7,20 +7,24 @@ import com.cexpilot.runtime.ToolRegistry;
 import com.cexpilot.runtime.ToolResult;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Set;
 
+import static com.cexpilot.dag.MetricTestSupport.*;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * PlanValidator 的确定性校验：未知工具、白名单、required 参数、环、悬空依赖、
  * 节点数 / 深度上限、引用闭合；以及合法 plan 通过。
+ * 包含旧版 nodes 格式用例，以及经 MetricPlanCompiler 编译后的新版 metrics/calculations 格式用例。
  */
 class PlanValidatorTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final org.springframework.core.io.DefaultResourceLoader LOADER = new org.springframework.core.io.DefaultResourceLoader();
 
     static class StubTool implements com.cexpilot.runtime.TestTools.TestTool {
         private final String name;
@@ -208,5 +212,36 @@ class PlanValidatorTest {
                 """);
         List<String> errors = validator(config()).validate(plan, null, 8);
         assertTrue(errors.stream().anyMatch(e -> e.contains("未（传递）依赖")));
+    }
+
+    // ---------- 新版 metrics/calculations 格式：经 MetricPlanCompiler 编译后再校验 ----------
+
+    private static DagPlan compile(ObjectNode logicalPlan) {
+        var catalog = new com.cexpilot.metric.MetricCatalog(LOADER);
+        var registry = MetricTestSupport.registry();
+        var compiler = new com.cexpilot.metric.MetricPlanCompiler(catalog, registry, MetricTestSupport.catalogProviders());
+        return compiler.compile(logicalPlan, 8);
+    }
+
+    private static PlanValidator validatorForCompiled() {
+        return new PlanValidator(MetricTestSupport.registry(), new DagConfig());
+    }
+
+    @Test
+    void compiledMetricPlanPassesValidation() {
+        ObjectNode logicalPlan = plan(metric("m1", "trade.turnover", "range_statistic", "binance"));
+        calculation(logicalPlan, "c1", "avg", "{\"kind\":\"values\",\"values\":[\"{{m1.binance.value}}\"]}");
+        DagPlan plan = compile(logicalPlan);
+        assertTrue(validatorForCompiled().validate(plan, null, 8).isEmpty());
+    }
+
+    @Test
+    void compiledCyclicCalculationsRejected() {
+        ObjectNode logicalPlan = plan(metric("m1", "trade.turnover", "range_statistic", "binance"));
+        calculation(logicalPlan, "c1", "avg", "{\"kind\":\"values\",\"values\":[\"{{c2.value}}\"]}");
+        calculation(logicalPlan, "c2", "avg", "{\"kind\":\"values\",\"values\":[\"{{c1.value}}\"]}");
+        DagPlan plan = compile(logicalPlan);
+        List<String> errors = validatorForCompiled().validate(plan, null, 8);
+        assertTrue(errors.stream().anyMatch(e -> e.contains("环")));
     }
 }

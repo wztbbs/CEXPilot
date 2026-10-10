@@ -12,7 +12,6 @@ public class MetricProviderRegistry {
     @org.springframework.beans.factory.annotation.Autowired
     public MetricProviderRegistry(List<MetricProvider> providers, MetricCatalog catalog) {
         this(providers);
-        catalog.validateBindings();
         validate(catalog);
     }
 
@@ -35,16 +34,16 @@ public class MetricProviderRegistry {
     /** 校验绑定指向已注册 Provider、选择器可解析且支持对应查询形态。 */
     public void validate(MetricCatalog catalog) {
         for (String metric : catalog.names()) {
-            catalog.definition(metric).path("bindings").fields().forEachRemaining(e -> {
-                MetricProvider provider = get(e.getValue().path("provider").asText());
+            catalog.metricDefinition(metric).bindings().forEach((shape, binding) -> {
+                MetricProvider provider = get(binding.provider());
                 MetricSelector selector;
                 try {
-                    selector = provider.selector(e.getValue().path("selector").asText());
+                    selector = provider.selector(binding.selector());
                 } catch (IllegalArgumentException ex) {
-                    throw new IllegalStateException("指标绑定不可用: " + metric + "/" + e.getKey(), ex);
+                    throw new IllegalStateException("指标绑定不可用: " + metric + "/" + shape.code(), ex);
                 }
-                if (!selector.supports(e.getKey())) {
-                    throw new IllegalStateException("指标绑定不可用: " + metric + "/" + e.getKey());
+                if (!selector.supports(shape.code())) {
+                    throw new IllegalStateException("指标绑定不可用: " + metric + "/" + shape.code());
                 }
             });
         }

@@ -3,6 +3,7 @@ package com.cexpilot.time;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import java.time.LocalTime;
+import java.util.Set;
 import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
 
@@ -21,6 +22,12 @@ public final class TimeSpecParser {
             throw new IllegalArgumentException("time 必须为对象");
         }
         String type = text(node, "type", true);
+        validateFields(node, switch (TimeSpec.Type.parse(type)) {
+            case CALENDAR_PERIOD -> Set.of("type", "timezone", "unit", "offset", "segment", "extent");
+            case ROLLING_WINDOW -> Set.of("type", "timezone", "duration");
+            case RELATIVE_DAY_RANGE -> Set.of("type", "timezone", "start", "end");
+            case ABSOLUTE_RANGE -> Set.of("type", "timezone", "start", "end", "end_mode");
+        }, "time");
         ZoneId timezone = parseTimezone(node.get("timezone"));
         return switch (TimeSpec.Type.parse(type)) {
             case CALENDAR_PERIOD -> parseCalendarPeriod(node, timezone);
@@ -41,6 +48,7 @@ public final class TimeSpecParser {
 
     private static TimeSpec.RollingWindow parseRollingWindow(JsonNode node, ZoneId timezone) {
         JsonNode duration = object(node, "duration");
+        validateFields(duration, Set.of("value", "unit"), "duration");
         return new TimeSpec.RollingWindow(timezone, new TimeSpec.FixedDuration(
                 integer(duration, "value", true).longValue(),
                 TimeSpec.RollingUnit.parse(text(duration, "unit", true))));
@@ -53,6 +61,7 @@ public final class TimeSpecParser {
     }
 
     private static TimeSpec.DayTimePoint parseDayTimePoint(JsonNode node, String field) {
+        validateFields(node, Set.of("day_offset", "time"), field);
         try {
             return new TimeSpec.DayTimePoint(
                     integer(node, "day_offset", true).intValue(),
@@ -70,6 +79,7 @@ public final class TimeSpecParser {
     }
 
     private static TimeSpec.AbsolutePoint parseAbsolutePoint(JsonNode node, String field) {
+        validateFields(node, Set.of("year", "month", "day", "time"), field);
         Integer year = node.hasNonNull("year") ? integer(node, "year", false).intValue() : null;
         LocalTime time = null;
         if (node.hasNonNull("time")) {
@@ -89,11 +99,18 @@ public final class TimeSpecParser {
         if (node == null || node.isNull()) {
             return null;
         }
+        if (!node.isTextual()) throw new IllegalArgumentException("timezone 必须为字符串或 null");
         try {
             return ZoneId.of(node.asText());
         } catch (DateTimeParseException | java.time.zone.ZoneRulesException e) {
             throw new IllegalArgumentException("timezone 必须为 IANA 时区（如 Asia/Shanghai）: " + node.asText());
         }
+    }
+
+    private static void validateFields(JsonNode node, Set<String> allowed, String path) {
+        node.fieldNames().forEachRemaining(field -> {
+            if (!allowed.contains(field)) throw new IllegalArgumentException(path + " 含未知字段: " + field);
+        });
     }
 
     private static JsonNode object(JsonNode node, String field) {
@@ -123,6 +140,8 @@ public final class TimeSpecParser {
             }
             return null;
         }
+        boolean fits = "value".equals(field) ? value.canConvertToLong() : value.canConvertToInt();
+        if (!fits) throw new IllegalArgumentException(field + " 超出整数范围");
         return value.numberValue();
     }
 }
