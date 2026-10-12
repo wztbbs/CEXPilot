@@ -44,7 +44,7 @@ public class AskController {
         String resolvedVisitorId = newVisitor ? UUID.randomUUID().toString() : visitorId;
         try {
             AskResponse response = askService.ask(request.conversationId(), request.question(),
-                    resolvedVisitorId, request.timezone(), null);
+                    resolvedVisitorId, request.timezone(), request.parentTurnId(), null);
             return ResponseEntity.ok()
                     .headers(headers -> {
                         if (newVisitor) {
@@ -75,11 +75,18 @@ public class AskController {
         taskExecutor.execute(() -> {
             try {
                 askService.ask(request.conversationId(), request.question(), resolvedVisitorId,
-                        request.timezone(), new AskService.AskStreamListener() {
+                        request.timezone(), request.parentTurnId(), new AskService.AskStreamListener() {
                             @Override
-                            public void onMeta(String conversationId, String traceId) {
-                                send(emitter, "meta",
-                                        Map.of("conversationId", conversationId, "traceId", traceId));
+                            public void onMeta(String conversationId, String traceId, String turnId) {
+                                Map<String, Object> meta = new java.util.LinkedHashMap<>();
+                                meta.put("conversationId", conversationId);
+                                if (traceId != null) {
+                                    meta.put("traceId", traceId);
+                                }
+                                if (turnId != null) {
+                                    meta.put("turnId", turnId);
+                                }
+                                send(emitter, "meta", meta);
                             }
 
                             @Override
@@ -94,11 +101,18 @@ public class AskController {
 
                             @Override
                             public void onDone(AskResponse response) {
-                                send(emitter, "done", Map.of(
-                                        "conversationId", response.conversationId(),
-                                        "traceId", response.traceId(),
-                                        "toolCalls", response.toolCalls(),
-                                        "durationMs", response.durationMs()));
+                                Map<String, Object> done = new java.util.LinkedHashMap<>();
+                                done.put("conversationId", response.conversationId());
+                                if (response.traceId() != null) {
+                                    done.put("traceId", response.traceId());
+                                }
+                                if (response.turnId() != null) {
+                                    done.put("turnId", response.turnId());
+                                }
+                                done.put("toolCalls", response.toolCalls());
+                                done.put("durationMs", response.durationMs());
+                                done.put("busy", response.busy());
+                                send(emitter, "done", done);
                             }
                         });
             } catch (IllegalArgumentException e) {

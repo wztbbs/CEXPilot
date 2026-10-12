@@ -85,6 +85,17 @@ public class DagRuntime {
     public ExecutionResult execute(String question, String conversationContext, String traceId,
                                    TraceSink sink, Consumer<String> answerDelta,
                                    RequestContext requestContext, Consumer<String> progress) {
+        return execute(question, conversationContext, traceId, sink, answerDelta, requestContext, progress, null);
+    }
+
+    /**
+     * @param compiledPlanSink 非 null 时，计划通过校验后、执行前回调完整编译产物（含 LogicalPlan 与
+     *                         有效条件），供轮次/QueryFrame 持久化；不影响任何执行行为
+     */
+    public ExecutionResult execute(String question, String conversationContext, String traceId,
+                                   TraceSink sink, Consumer<String> answerDelta,
+                                   RequestContext requestContext, Consumer<String> progress,
+                                   Consumer<com.cexpilot.metric.CompiledPlan> compiledPlanSink) {
         RequestContext effectiveContext = resolveRequestContext(requestContext);
         ObjectNode timeContext = answerTimeContext(effectiveContext,
                 requestContext != null && requestContext.userZone() != null);
@@ -126,7 +137,10 @@ public class DagRuntime {
             String missing = outcome.reply();
             queryStatus.put("missing", missing.length() <= 200 ? missing : missing.substring(0, 200));
         }
-        DagPlan plan = outcome.plan().orElseThrow();
+        DagPlan plan = outcome.plan().orElseThrow().dagPlan();
+        if (compiledPlanSink != null) {
+            compiledPlanSink.accept(outcome.plan().orElseThrow());
+        }
         emit(progress, "执行计划已生成（" + plan.nodes().size() + " 项查询），正在获取数据…");
         DagExecutor.ExecutionOutcome execution = executor.execute(plan, traceId, sink, effectiveContext);
         emit(progress, "数据获取完毕，正在组装答案…");

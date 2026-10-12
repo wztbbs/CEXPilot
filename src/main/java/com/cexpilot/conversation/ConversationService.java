@@ -1,6 +1,8 @@
 package com.cexpilot.conversation;
 
+import com.cexpilot.config.ConversationConfig;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.UUID;
@@ -8,6 +10,9 @@ import java.util.UUID;
 /**
  * Conversation Context：不做长期记忆，
  * 只把本对话最近几个 Query 注入 prompt，追问的指代消解交给 LLM 在这份上下文上完成。
+ *
+ * 轮次生命周期（多轮追问阶段一 a）：beginTurn 在请求开始即登记 RUNNING 轮次并占用会话执行权，
+ * finishTurn 在结束（成功/失败）时提交状态并释放占用。DB 事务只覆盖登记与提交，不跨越 LLM 调用。
  */
 @Service
 public class ConversationService {
@@ -16,9 +21,11 @@ public class ConversationService {
     private static final int HISTORY_ANSWER_MAX_CHARS = 300;
 
     private final ConversationRepository repository;
+    private final ConversationConfig config;
 
-    public ConversationService(ConversationRepository repository) {
+    public ConversationService(ConversationRepository repository, ConversationConfig config) {
         this.repository = repository;
+        this.config = config;
     }
 
     /**
@@ -65,10 +72,61 @@ public class ConversationService {
         return sb.toString();
     }
 
-    public void recordQuery(String conversationId, String question, String answer, String traceId) {
-        int queryNo = repository.nextQueryNo(conversationId);
-        repository.recordQuery(conversationId, queryNo, question, answer, traceId);
+    /** 登记成功后的轮次句柄：序号、轮次 id 与 fencing token（提交时校验）。 */
+    public record TurnHandle(long queryNo, String turnId, long fencingToken) {
+    }
+
+    /**
+     * 请求开始时登记轮次（短事务）：原子分配 query_no + turn_id、置 running_turn_id、
+     * 写一行 turn_status=RUNNING 的 conversation_query（question 先写，answer 提交时后补）。
+     *
+     * @return 登记成功的句柄；会话已有未过期的执行中轮次时返回 null（同会话串行约束）
+     */
+    @Transactional
+    public TurnHandle beginTurn(String conversationId, String question, String parentTurnId) {
+        String turnId = UUID.randomUUID().toString();
+        ConversationRepository.ConversationStateRow state =
+                repository.acquireTurn(conversationId, turnId, config.getTurnLease().toMillis());
+        if (!turnId.equals(state.runningTurnId())) {
+            return null;
+        }
+        // acquireTurn 成功时已把 next_query_no +1，本轮拿到的是加之前的值
+        long queryNo = state.nextQueryNo() - 1;
+        repository.insertRunningTurn(conversationId, queryNo, turnId, parentTurnId, question);
+        return new TurnHandle(queryNo, turnId, state.fencingToken());
+    }
+
+    /**
+     * 结束时提交轮次（短事务）：置终态（SUCCEEDED/FAILED 等）、补 answer/trace_id/logical_plan_json/finished_at、
+     * 清 running_turn_id、version+1。fencing token 不匹配（租约过期被接管）时不覆盖会话状态，
+     * 轮次行仍按事实落终态。
+     *
+     * @param logicalPlanJson 校验通过的 LogicalPlan 原文 JSON，规划未通过校验时为 null
+     * @param frameJson       本轮产生的活动 QueryFrame JSON；仅成功轮次传入，失败轮次传 null（不覆盖活动 frame）
+     */
+    @Transactional
+    public void finishTurn(String conversationId, TurnHandle turn, String status, String answer, String traceId,
+                           String logicalPlanJson, String frameJson) {
+        repository.finishTurn(turn.turnId(), status, answer, traceId, logicalPlanJson);
+        if (frameJson != null) {
+            repository.saveActiveFrame(conversationId, turn.turnId(), turn.fencingToken(), frameJson);
+        }
+        // 返回 false = 租约过期、占用已被新请求接管：正常路径，不覆盖新状态即可
+        repository.releaseTurn(conversationId, turn.turnId(), turn.fencingToken());
         repository.touchConversation(conversationId, null);
+    }
+
+    /**
+     * 澄清轮次（NEEDS_CLARIFICATION）：把澄清问题并入活动 frame 的 pendingClarification，
+     * 保留 targets 等已知条件，用户补一个字段后能接上原任务。须在 finishTurn 释放占用前调用。
+     */
+    @Transactional
+    public void recordPendingClarification(String conversationId, TurnHandle turn, String clarify) {
+        com.fasterxml.jackson.databind.node.ObjectNode pending =
+                new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+        pending.put("clarify", clarify);
+        pending.put("turnId", turn.turnId());
+        repository.updatePendingClarification(conversationId, turn.turnId(), turn.fencingToken(), pending.toString());
     }
 
     private static String abbreviate(String text, int max) {

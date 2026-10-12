@@ -8,6 +8,10 @@ target/
 # 系统文件
 .DS_Store
 
+# Python 缓存
+__pycache__/
+*.pyc
+
 # 个人笔记
 note.txt
 importants/

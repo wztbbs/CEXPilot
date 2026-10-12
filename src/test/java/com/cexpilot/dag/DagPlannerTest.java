@@ -76,7 +76,7 @@ class DagPlannerTest {
         var result = planner(llm, registry(), new DagConfig()).plan("最近10期", "", "test", e -> {});
         assertTrue(result.plan().isPresent(), result.lastError());
         assertTrue(llm.calls.get(1).get(3).content().contains("count"));
-        assertEquals(10, result.plan().orElseThrow().nodes().get(0).args().path("count").asInt());
+        assertEquals(10, result.plan().orElseThrow().dagPlan().nodes().get(0).args().path("count").asInt());
         var config = new DagConfig(); config.setPlannerMaxRetries(0);
         var rejected = planner(new Script(envelope(missing)), registry(), config).plan("最近10期", "", "test", e -> {});
         assertTrue(rejected.plan().isEmpty());
@@ -164,7 +164,7 @@ class DagPlannerTest {
         List<TraceEvent> events = new ArrayList<>();
         var result = planner(llm, registry(), new DagConfig()).plan("比较成交额", "", "test", events::add);
         assertTrue(result.plan().isPresent(), result.lastError());
-        var nodes = result.plan().orElseThrow().nodes();
+        var nodes = result.plan().orElseThrow().dagPlan().nodes();
         assertEquals(3, nodes.size());
         assertEquals(List.of("metric_0", "metric_1"), nodes.get(2).dependsOn());
         assertEquals("{{metric_0.data.value}}", nodes.get(2).args().at("/input/current").asText());

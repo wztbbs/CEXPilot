@@ -18,10 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -116,7 +113,7 @@ public class DagExecutor {
         ToolResult result;
         try {
             if (node.metric() != null) {
-                MetricResult metricResult = metricProviders.get(node.metric().provider()).query(node.metricQuery(), requestContext);
+                MetricResult metricResult = metricProviders.get(Objects.requireNonNull(node.metric()).provider()).query(node.metricQuery(), requestContext);
                 return new NodeOutcome(ToolResult.success(MetricResultJson.write(node.metric(), metricResult)),
                         node.args().toString(), System.currentTimeMillis() - start);
             }

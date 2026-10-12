@@ -8,6 +8,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import static com.cexpilot.dag.MetricTestSupport.*;
 import static org.junit.jupiter.api.Assertions.*;
+import java.util.Map;
 
 class MetricPlanCompilerRegressionTest {
     private MetricPlanCompiler compiler() {
@@ -54,5 +55,65 @@ class MetricPlanCompilerRegressionTest {
         assertTrue(error.contains("interval 仅支持"), error);
         assertTrue(error.contains("calculations[0] (c1, avg).input"), error);
         assertTrue(error.contains("输入契约"), error);
+    }
+
+    @Test void compiledPlan保留LogicalPlan映射与有效条件来源() {
+        var m1 = metric("m1", "price.high", "range_statistic", "binance", "okx");
+        m1.remove("interval"); // 不显式给粒度 → DEFAULT（自动粒度）
+        var m2 = metric("m2", "price.close", "time_series", "binance"); // interval=1h 显式
+        m2.putObject("instrument").put("market_type", "perpetual").put("base", "ETH").put("quote", "USDT")
+                .put("settle", "USDT"); // settle 显式
+        var p = plan(m1, m2);
+
+        CompiledPlan compiled = compiler().compileFull(p, 8);
+
+        assertEquals(2, compiled.logicalPlan().metrics().size());
+        assertEquals(p, compiled.logicalPlanJson());
+        assertEquals(3, compiled.dagPlan().nodes().size()); // m1 两交易所 + m2 单交易所
+        assertEquals(Map.of("binance", "metric_0", "okx", "metric_1"), compiled.branches().get("m1"));
+        assertEquals(Map.of("binance", "metric_2"), compiled.branches().get("m2"));
+
+        assertEquals(3, compiled.targets().size());
+        EffectiveTarget binanceHigh = compiled.targets().get(0);
+        assertEquals("m1", binanceHigh.groupId());
+        assertEquals("metric_0", binanceHigh.physicalId());
+        assertEquals("binance", binanceHigh.exchange());
+        assertEquals(ConditionOrigin.EXPLICIT, binanceHigh.exchangeOrigin());
+        assertEquals("price.high", binanceHigh.metric());
+        assertEquals("range_statistic", binanceHigh.queryShape());
+        assertEquals("BTC", binanceHigh.instrument().path("base").asText());
+        assertEquals("USDT", binanceHigh.instrument().path("settle").asText());
+        assertEquals(ConditionOrigin.DEFAULT, binanceHigh.settleOrigin()); // settle 省略由编译器补 USDT
+        assertEquals("calendar_period", binanceHigh.timeExpression().path("type").asText());
+        assertNull(binanceHigh.interval());
+        assertEquals(ConditionOrigin.DEFAULT, binanceHigh.intervalOrigin()); // 自动粒度
+        assertEquals(false, binanceHigh.includeUnclosed());
+        assertEquals(ConditionOrigin.DEFAULT, binanceHigh.includeUnclosedOrigin());
+        assertEquals("USDT", binanceHigh.unit());
+        assertNotNull(binanceHigh.provider());
+        assertNotNull(binanceHigh.catalogVersion());
+
+        EffectiveTarget ethClose = compiled.targets().get(2);
+        assertEquals("m2", ethClose.groupId());
+        assertEquals("ETH", ethClose.instrument().path("base").asText());
+        assertEquals(ConditionOrigin.EXPLICIT, ethClose.settleOrigin());
+        assertEquals("1h", ethClose.interval());
+        assertEquals(ConditionOrigin.EXPLICIT, ethClose.intervalOrigin());
+    }
+
+    @Test void compiledPlan快照节点记录depth来源() {
+        var m = metric("m1", "orderbook.spread", "snapshot", "binance");
+        m.remove("time"); m.remove("interval");
+
+        CompiledPlan withDefault = compiler().compileFull(plan(m), 8);
+        EffectiveTarget target = withDefault.targets().get(0);
+        assertNotNull(target.depth());
+        assertEquals(ConditionOrigin.DEFAULT, target.depthOrigin());
+        assertNull(target.timeExpression());
+
+        m.put("depth", 10);
+        CompiledPlan withExplicit = compiler().compileFull(plan(m), 8);
+        assertEquals(10, withExplicit.targets().get(0).depth());
+        assertEquals(ConditionOrigin.EXPLICIT, withExplicit.targets().get(0).depthOrigin());
     }
 }

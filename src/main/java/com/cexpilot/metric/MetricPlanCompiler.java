@@ -36,6 +36,11 @@ public final class MetricPlanCompiler {
 
     /** JSON 计划 → 可执行 DagPlan；校验与错误反馈保留具体路径。 */
     public DagPlan compile(JsonNode plan, int maxNodes) {
+        return compileFull(plan, maxNodes).dagPlan();
+    }
+
+    /** JSON 计划 → 编译产物（类型化 LogicalPlan + 可执行 DagPlan + 映射 + 有效条件）；校验与错误反馈保留具体路径。 */
+    public CompiledPlan compileFull(JsonNode plan, int maxNodes) {
         LogicalPlan logicalPlan = parser.parse(plan);
         validateStructure(logicalPlan, maxNodes);
         List<String> errors = validateLogicalInputs(logicalPlan);
@@ -72,7 +77,53 @@ public final class MetricPlanCompiler {
             }
             nodes.add(buildCalculationNode(calc, branches, calcIds));
         }
-        return new DagPlan(nodes);
+        List<EffectiveTarget> targets = new ArrayList<>();
+        for (ResolvedMetric rm : resolvedMetrics) {
+            targets.add(effectiveTarget(rm));
+        }
+        return new CompiledPlan(logicalPlan, plan.deepCopy(), new DagPlan(nodes), branches, targets);
+    }
+
+    /**
+     * 每个展开的指标节点的有效查询条件及来源：Planner 明确给的 → EXPLICIT；
+     * 代码自动补的（自动粒度、默认 settle、include_unclosed 默认、默认 depth、目录推导 unit/provider）→ DEFAULT。
+     * resolvedRange 在执行期由 Provider 才能确定，编译期不记录（见 QueryFrame focus）。
+     */
+    private EffectiveTarget effectiveTarget(ResolvedMetric rm) {
+        MetricRequest request = rm.request();
+        MetricBinding binding = rm.query().binding();
+        QueryParams params = request.params();
+        JsonNode timeExpression = null;
+        String interval = null;
+        ConditionOrigin intervalOrigin = null;
+        Boolean includeUnclosed = null;
+        ConditionOrigin includeUnclosedOrigin = null;
+        Integer count = null;
+        Integer depth = null;
+        ConditionOrigin depthOrigin = null;
+        if (params instanceof TimeQueryParams p) {
+            timeExpression = com.cexpilot.time.TimeSpecJson.write(p.time());
+            interval = p.interval();
+            intervalOrigin = interval != null ? ConditionOrigin.EXPLICIT : ConditionOrigin.DEFAULT;
+            includeUnclosed = p.includeUnclosed() != null && p.includeUnclosed();
+            includeUnclosedOrigin = p.includeUnclosed() != null ? ConditionOrigin.EXPLICIT : ConditionOrigin.DEFAULT;
+        } else if (params instanceof CountQueryParams p) {
+            count = p.count();
+        } else if (params instanceof SnapshotQueryParams p) {
+            depth = p.depth() != null ? p.depth()
+                    : (rm.query() instanceof SnapshotQuery q ? q.depth() : null);
+            depthOrigin = p.depth() != null ? ConditionOrigin.EXPLICIT : ConditionOrigin.DEFAULT;
+        }
+        return new EffectiveTarget(
+                request.id(), rm.physicalId(), rm.exchange(), ConditionOrigin.EXPLICIT,
+                request.metric(), request.shape().code(),
+                binding.instrument().deepCopy(),
+                request.instrument().settle() != null ? ConditionOrigin.EXPLICIT : ConditionOrigin.DEFAULT,
+                timeExpression,
+                interval, intervalOrigin,
+                includeUnclosed, includeUnclosedOrigin,
+                count, depth, depthOrigin,
+                binding.unit(), binding.provider(), binding.catalogVersion());
     }
 
     private void validateStructure(LogicalPlan logicalPlan, int maxNodes) {

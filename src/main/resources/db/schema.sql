@@ -18,9 +18,59 @@ CREATE TABLE IF NOT EXISTS conversation_query (
     question        TEXT         NOT NULL,
     answer          MEDIUMTEXT   NULL,
     trace_id        VARCHAR(64)  NULL,
+    -- 轮次生命周期（多轮追问阶段一 a）：
+    -- turn_id 全局唯一标识一轮问答；parent_turn_id 记录前端声明的上一轮；turn_status 取值
+    -- RUNNING / SUCCEEDED / FAILED（后续可扩展 NEEDS_CLARIFICATION）；started_at/finished_at 为服务端时间。
+    -- 旧数据这些列全为 NULL，renderContext 等读取方按 NULL=历史成功轮次处理。
+    turn_id         VARCHAR(64)  NULL,
+    parent_turn_id  VARCHAR(64)  NULL,
+    turn_status     VARCHAR(32)  NULL,
+    started_at      DATETIME(6)  NULL,
+    finished_at     DATETIME(6)  NULL,
+    -- 校验通过的 LogicalPlan 原文 JSON（Planner 草稿不落这里；规划未通过校验时为空）
+    logical_plan_json JSON       NULL,
     created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_query_turn (turn_id),
+    UNIQUE KEY uk_query_conv_no (conversation_id, query_no),
     KEY idx_query_conversation (conversation_id, query_no)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- 会话状态行：原子序号分配 + 同会话串行执行占用（多轮追问阶段一 a）。
+-- next_query_no 存"下一个可用序号"，分配时原子 +1；running_turn_id/lease_until 为执行占用，
+-- fencing_token 单调递增，提交时校验——租约过期被新请求接管后，旧执行者凭过期 token 无法覆盖状态。
+CREATE TABLE IF NOT EXISTS conversation_state (
+    conversation_id VARCHAR(64)  NOT NULL PRIMARY KEY,
+    version         BIGINT       NOT NULL DEFAULT 0,
+    next_query_no   BIGINT       NOT NULL DEFAULT 1,
+    running_turn_id VARCHAR(64)  NULL,
+    lease_until     DATETIME(6)  NULL,
+    fencing_token   BIGINT       NOT NULL DEFAULT 0,
+    -- 活动 QueryFrame（多轮追问阶段一 b）：成功轮次提交时覆盖，失败轮次不覆盖；
+    -- 下一轮由 ConversationContextService 读取注入 Planner 并做继承对账（阶段一 c）；
+    -- 写入同样带 running_turn_id + fencing_token 条件，过期执行者不得覆盖新 frame
+    active_frame_json JSON       NULL,
+    updated_at      DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- ============ 已有部署的迁移注意点（DBA 手工执行，schema 演进不自动跑） ============
+-- 1. conversation_query 加列：
+--      ALTER TABLE conversation_query
+--          ADD COLUMN turn_id VARCHAR(64) NULL,
+--          ADD COLUMN parent_turn_id VARCHAR(64) NULL,
+--          ADD COLUMN turn_status VARCHAR(32) NULL,
+--          ADD COLUMN started_at DATETIME(6) NULL,
+--          ADD COLUMN finished_at DATETIME(6) NULL;
+-- 2. 加 uk_query_turn 唯一键前无需处理（旧数据 turn_id 全 NULL，MySQL 唯一键允许多个 NULL）：
+--      ALTER TABLE conversation_query ADD UNIQUE KEY uk_query_turn (turn_id);
+-- 3. 加 uk_query_conv_no 前必须检查历史重复序号（旧代码 MAX+1 并发下可能产生重复），
+--    有重复需先人工清理/重排，代码不替 DBA 做决定：
+--      SELECT conversation_id, query_no, COUNT(*) c FROM conversation_query
+--      GROUP BY conversation_id, query_no HAVING c > 1;
+--      ALTER TABLE conversation_query ADD UNIQUE KEY uk_query_conv_no (conversation_id, query_no);
+-- 4. conversation_state 为新表，CREATE TABLE IF NOT EXISTS 即可，存量会话首次提问时自动建行。
+-- 5. 阶段一(b) 增量列（旧部署需手工 ALTER；新列均可空，存量行不受影响）：
+--      ALTER TABLE conversation_query ADD COLUMN logical_plan_json JSON NULL;
+--      ALTER TABLE conversation_state ADD COLUMN active_frame_json JSON NULL;
 
 -- 一次问答 = 一条 ask_trace（就是 Trace 的主表，👎 之后靠它完整回放）
 CREATE TABLE IF NOT EXISTS ask_trace (

@@ -69,9 +69,10 @@ public class DagPlanner {
     /**
      * 规划结果。inDomain=false 时 reply 为边界话术；inDomain=true 且 plan 为空表示
      * 模型判断工具不足以回答（reply 说明缺口）或 repair 耗尽（lastError 非空）。
+     * plan 持有完整编译产物 CompiledPlan（含 LogicalPlan 与逻辑→物理映射），执行用其中的 dagPlan。
      */
     public record PlanOutcome(boolean inDomain, String reply,
-                              Optional<DagPlan> plan, int promptTokens, int completionTokens,
+                              Optional<com.cexpilot.metric.CompiledPlan> plan, int promptTokens, int completionTokens,
                               String lastError) {
     }
 
@@ -106,8 +107,9 @@ public class DagPlanner {
     }
 
     /** 单轮判断不负责 token 累计；error 非空时由 plan 统一追加修复消息并重试。 */
-    private record PlanDecision(boolean inDomain, String reply, DagPlan plan, String error) {
-        private static PlanDecision accepted(boolean inDomain, String reply, DagPlan plan) {
+    private record PlanDecision(boolean inDomain, String reply, com.cexpilot.metric.CompiledPlan plan,
+                                String error) {
+        private static PlanDecision accepted(boolean inDomain, String reply, com.cexpilot.metric.CompiledPlan plan) {
             return new PlanDecision(inDomain, reply, plan, null);
         }
 
@@ -171,7 +173,9 @@ public class DagPlanner {
                                       String traceId, TraceSink sink) {
         String error;
         try {
-            DagPlan plan = compiler.compile(parsed.path("plan"), Math.min(dagConfig.getMaxNodes(), maxToolCalls));
+            com.cexpilot.metric.CompiledPlan compiled =
+                    compiler.compileFull(parsed.path("plan"), Math.min(dagConfig.getMaxNodes(), maxToolCalls));
+            DagPlan plan = compiled.dagPlan();
             if (plan.nodes().isEmpty() && reply != null && !reply.isBlank()) {
                 return evaluateReplyWithoutPlan(parsed, reply, traceId, sink);
             }
@@ -183,7 +187,7 @@ public class DagPlanner {
                         plan.toJson().toString(), null, null, null, null, null, null));
                 // plan 已合法时，超长 reply 直接丢弃，不再为 reply 重试。
                 String effectiveReply = isReasoningDump(reply) ? null : reply;
-                return PlanDecision.accepted(true, effectiveReply, plan);
+                return PlanDecision.accepted(true, effectiveReply, compiled);
             }
             error = planValidationError(compiler.logicalErrors(plan, errors));
         } catch (Exception e) {
