@@ -34,6 +34,8 @@ public class DagPlanner {
     private static final String TRACE_NAME = "dag_planner";
     /** 透传 reply 的长度上限：合法追问/边界话术都很短，超长基本是把推理过程倒进了 reply。 */
     private static final int REPLY_MAX_LENGTH = 100;
+    /** 模型举了澄清旗但没写 clarify/reply 文案时的兜底话术（不得编造具体歧义内容）。 */
+    private static final String CLARIFY_FALLBACK_TEXT = "这个问题我需要再确认一下，请补充说明您想查询的对象或条件。";
 
     private final LlmClient llm;
     private final ToolRegistry registry;
@@ -171,8 +173,15 @@ public class DagPlanner {
             String clarify = textOrNull(parsed.path("clarify"));
             String text = clarify != null && !clarify.isBlank() ? clarify : reply;
             if (text == null || text.isBlank()) {
-                return repairDecision(traceId, sink, parsed.toString(),
-                        "needs_clarification=true 时必须在 clarify 写明要问用户的一句澄清问题");
+                if (attempt <= 1) {
+                    return repairDecision(traceId, sink, parsed.toString(),
+                            "needs_clarification=true 时必须在 clarify 写明要问用户的一句澄清问题");
+                }
+                // 模型举了澄清旗但文案字段为空（线上实测 qwen-plus 修复后仍逐字重发）：
+                // 澄清决策本身有效，用通用话术兜底并记审计事件，不因文案缺失丢掉澄清轮
+                sink.record(new TraceEvent(traceId, "CLARIFY_FALLBACK", "dag_planner",
+                        parsed.toString(), null, null, null, null, null, null, null));
+                return PlanDecision.clarification(CLARIFY_FALLBACK_TEXT);
             }
             sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
             return PlanDecision.clarification(text);

@@ -345,4 +345,19 @@ class DagPlannerTest {
         assertEquals(1, shadow.size());
         assertTrue(shadow.get(0).inputJson().contains("metric"));
     }
+
+    @Test void 澄清旗缺文案修复仍缺时用通用话术兜底() {
+        var noText = "{\"in_domain\":true,\"needs_clarification\":true,\"plan\":null,\"reply\":null}";
+        var llm = new Script(noText, noText); // 线上实测：举了旗但 clarify/reply 都空，修复后逐字重发
+        List<TraceEvent> events = new ArrayList<>();
+
+        var result = planner(llm, registry(), new DagConfig())
+                .plan("它的均值呢？", "", "test", events::add, priceHighFrame(), FOLLOWUP_CTX);
+
+        assertTrue(result.needsClarification(), "澄清决策本身有效，不得因文案缺失变成拒答");
+        assertNotNull(result.reply());
+        assertFalse(result.reply().isBlank());
+        assertEquals(2, llm.calls.size());
+        assertTrue(events.stream().anyMatch(e -> "CLARIFY_FALLBACK".equals(e.eventType())));
+    }
 }
