@@ -107,7 +107,7 @@ public class DagPlanner {
             completionTokens += response.completionTokens() == null ? 0 : response.completionTokens();
 
             PlanDecision decision = evaluateResponse(response.content(), maxToolCalls, traceId, sink,
-                    activeFrame, requestContext);
+                    activeFrame, requestContext, attempt);
             if (decision.error() == null) {
                 return decision.toOutcome(promptTokens, completionTokens);
             }
@@ -139,7 +139,8 @@ public class DagPlanner {
     private PlanDecision evaluateResponse(String content, int maxToolCalls,
                                           String traceId, TraceSink sink,
                                           com.cexpilot.conversation.QueryFrame activeFrame,
-                                          com.cexpilot.runtime.RequestContext requestContext) {
+                                          com.cexpilot.runtime.RequestContext requestContext,
+                                          int attempt) {
         JsonNode parsed;
         try {
             parsed = LlmJson.parse(content);
@@ -156,13 +157,14 @@ public class DagPlanner {
             sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
             return PlanDecision.accepted(false, textOrNull(parsed.path("reply")), null);
         }
-        return evaluateInDomainResponse(parsed, maxToolCalls, traceId, sink, activeFrame, requestContext);
+        return evaluateInDomainResponse(parsed, maxToolCalls, traceId, sink, activeFrame, requestContext, attempt);
     }
 
     private PlanDecision evaluateInDomainResponse(JsonNode parsed, int maxToolCalls,
                                                   String traceId, TraceSink sink,
                                                   com.cexpilot.conversation.QueryFrame activeFrame,
-                                                  com.cexpilot.runtime.RequestContext requestContext) {
+                                                  com.cexpilot.runtime.RequestContext requestContext,
+                                                  int attempt) {
         String reply = textOrNull(parsed.path("reply"));
         // 澄清决策（阶段一 c 协议增量字段，缺省按旧行为 false）：不执行、不落 frame，由程序落 NEEDS_CLARIFICATION
         if (parsed.path("needs_clarification").asBoolean(false)) {
@@ -179,7 +181,7 @@ public class DagPlanner {
         if (!planNode.isObject()) {
             return evaluateReplyWithoutPlan(parsed, reply, traceId, sink);
         }
-        return validatePlan(parsed, reply, maxToolCalls, traceId, sink, activeFrame, requestContext);
+        return validatePlan(parsed, reply, maxToolCalls, traceId, sink, activeFrame, requestContext, attempt);
     }
 
     private PlanDecision evaluateReplyWithoutPlan(JsonNode parsed, String reply,
@@ -204,7 +206,8 @@ public class DagPlanner {
     private PlanDecision validatePlan(JsonNode parsed, String reply, int maxToolCalls,
                                       String traceId, TraceSink sink,
                                       com.cexpilot.conversation.QueryFrame activeFrame,
-                                      com.cexpilot.runtime.RequestContext requestContext) {
+                                      com.cexpilot.runtime.RequestContext requestContext,
+                                      int attempt) {
         String error;
         try {
             com.cexpilot.metric.CompiledPlan compiled =
@@ -216,12 +219,21 @@ public class DagPlanner {
             List<String> errors = validator.validate(plan, compiler.allowedTools(), maxToolCalls);
             if (errors.isEmpty()) {
                 // 继承对账（阶段一 c）：new_frame=true 跳过（本期旧 frame 在成功提交时被简单覆盖，
-                // 近期 frame 索引后续再做）；声明的 changes 漏报实际变化则进规划修复，不强行执行。
+                // 近期 frame 索引后续再做）。漏报 changes 的第一次先修复教学；修复后仍不声明则
+                // shadow 放行——计划本身已通过全部校验，changes 只是审计元数据，不构成拒绝理由——
+                // 并记 INHERIT_SHADOW 事件供观察模型漏报率。
                 if (activeFrame != null && !parsed.path("new_frame").asBoolean(false)) {
                     String reconciliation = inheritanceValidator.check(activeFrame, compiled,
                             declaredChanges(parsed), requestContext);
                     if (reconciliation != null) {
-                        return repairDecision(traceId, sink, parsed.toString(), reconciliation);
+                        if (attempt <= 1) {
+                            return repairDecision(traceId, sink, parsed.toString(), reconciliation);
+                        }
+                        sink.record(new TraceEvent(traceId, "INHERIT_SHADOW", "inheritance_validator",
+                                MAPPER.createObjectNode()
+                                        .put("declared_changes", declaredChanges(parsed).toString())
+                                        .put("detail", reconciliation).toString(),
+                                parsed.toString(), null, null, null, null, null, null));
                     }
                 }
                 sink.record(TraceEvent.plan(traceId, parsed.toString(), null));

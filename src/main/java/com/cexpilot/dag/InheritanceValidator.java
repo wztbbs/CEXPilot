@@ -52,8 +52,9 @@ public final class InheritanceValidator {
             return null;
         }
         return "changes 声明与计划不一致：相对活动查询状态，计划实际变化了 " + missing
-                + " 但未在 changes 中声明；若用户本轮明确修改了这些条件，请把它们加入 changes "
-                + "并重新输出完整 JSON；否则恢复与活动查询状态一致的值";
+                + " 但未在 changes 中声明。若这是用户本轮明确修改的条件，在输出 JSON 的顶层加入 "
+                + "\"changes\":" + missing + " 后重新输出完整 JSON；"
+                + "否则把上述条件恢复为与活动查询状态一致的值";
     }
 
     /** frame vs 本轮计划的实际变化条件键集合。 */

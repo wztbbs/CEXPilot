@@ -57,7 +57,8 @@ class ConversationTurnConcurrencyTest {
         }
 
         @Override
-        public void insertRunningTurn(String conversationId, long queryNo, String turnId, String parentTurnId, String question) {
+        public void insertRunningTurn(String conversationId, long queryNo, String turnId, String parentTurnId,
+                                      String question, java.time.Instant requestTime) {
             issuedQueryNos.add(queryNo);
         }
 
@@ -95,6 +96,8 @@ class ConversationTurnConcurrencyTest {
         }
     }
 
+    private static final java.time.Instant NOW = java.time.Instant.parse("2026-10-12T00:00:00Z");
+
     private final InMemoryRepository repository = new InMemoryRepository();
     private final ConversationConfig config = new ConversationConfig();
     private final ConversationService service = new ConversationService(repository, config);
@@ -109,7 +112,7 @@ class ConversationTurnConcurrencyTest {
         for (int i = 0; i < threads; i++) {
             futures.add(pool.submit(() -> {
                 gate.await();
-                return service.beginTurn("c1", "问题", null);
+                return service.beginTurn("c1", "问题", null, NOW);
             }));
         }
         gate.countDown();
@@ -127,7 +130,7 @@ class ConversationTurnConcurrencyTest {
 
         // 释放后下一轮拿到递增序号，且全程无重复
         service.finishTurn("c1", acquired.get(0), "SUCCEEDED", "答案", "trace-1", null, null);
-        ConversationService.TurnHandle next = service.beginTurn("c1", "追问", null);
+        ConversationService.TurnHandle next = service.beginTurn("c1", "追问", null, NOW);
         assertNotNull(next);
         assertEquals(2, next.queryNo());
         assertTrue(next.fencingToken() > acquired.get(0).fencingToken());
@@ -137,26 +140,26 @@ class ConversationTurnConcurrencyTest {
     @Test
     void 过期租约允许新请求接管且旧token无法覆盖() {
         config.setTurnLease(Duration.ofMinutes(10));
-        ConversationService.TurnHandle stale = service.beginTurn("c1", "问题1", null);
+        ConversationService.TurnHandle stale = service.beginTurn("c1", "问题1", null, NOW);
         assertNotNull(stale);
 
         repository.expireLease("c1"); // 旧执行者卡住/崩溃，租约到期
-        ConversationService.TurnHandle takeover = service.beginTurn("c1", "问题2", null);
+        ConversationService.TurnHandle takeover = service.beginTurn("c1", "问题2", null, NOW);
         assertNotNull(takeover, "租约过期后新请求应能接管执行占用");
         assertEquals(2, takeover.queryNo());
 
         // 旧执行者晚到：fencing token 已失效，释放失败，不清掉新占用
         org.junit.jupiter.api.Assertions.assertFalse(repository.releaseTurn("c1", stale.turnId(), stale.fencingToken()));
-        assertNull(service.beginTurn("c1", "问题3", null), "新占用未被旧执行者释放时，会话仍忙碌");
+        assertNull(service.beginTurn("c1", "问题3", null, NOW), "新占用未被旧执行者释放时，会话仍忙碌");
 
         service.finishTurn("c1", takeover, "SUCCEEDED", "答案", "trace-2", null, null);
-        assertNotNull(service.beginTurn("c1", "问题3", null));
+        assertNotNull(service.beginTurn("c1", "问题3", null, NOW));
     }
 
     @Test
     void 不同会话互不影响() {
         config.setTurnLease(Duration.ofMinutes(10));
-        assertNotNull(service.beginTurn("c1", "问题", null));
-        assertNotNull(service.beginTurn("c2", "问题", null), "c1 占用不影响 c2");
+        assertNotNull(service.beginTurn("c1", "问题", null, NOW));
+        assertNotNull(service.beginTurn("c2", "问题", null, NOW), "c1 占用不影响 c2");
     }
 }

@@ -80,10 +80,14 @@ public class ConversationService {
      * 请求开始时登记轮次（短事务）：原子分配 query_no + turn_id、置 running_turn_id、
      * 写一行 turn_status=RUNNING 的 conversation_query（question 先写，answer 提交时后补）。
      *
+     * @param requestTime 本请求的固定时间基准（RequestContext），写入 started_at；用应用时钟而非
+     *                    DB 的 NOW()——MySQL 服务器时区与 JDBC 会话时区不一致时，DB 时钟写出的
+     *                    DATETIME 读回会被平移，注入 prompt 的历史时间随之错位
      * @return 登记成功的句柄；会话已有未过期的执行中轮次时返回 null（同会话串行约束）
      */
     @Transactional
-    public TurnHandle beginTurn(String conversationId, String question, String parentTurnId) {
+    public TurnHandle beginTurn(String conversationId, String question, String parentTurnId,
+                                java.time.Instant requestTime) {
         String turnId = UUID.randomUUID().toString();
         ConversationRepository.ConversationStateRow state =
                 repository.acquireTurn(conversationId, turnId, config.getTurnLease().toMillis());
@@ -92,7 +96,7 @@ public class ConversationService {
         }
         // acquireTurn 成功时已把 next_query_no +1，本轮拿到的是加之前的值
         long queryNo = state.nextQueryNo() - 1;
-        repository.insertRunningTurn(conversationId, queryNo, turnId, parentTurnId, question);
+        repository.insertRunningTurn(conversationId, queryNo, turnId, parentTurnId, question, requestTime);
         return new TurnHandle(queryNo, turnId, state.fencingToken());
     }
 

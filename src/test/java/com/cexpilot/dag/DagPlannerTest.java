@@ -40,7 +40,7 @@ class DagPlannerTest {
             }
             examples++;
         }
-        assertEquals(6, examples);
+        assertEquals(9, examples);
     }
 
     @ParameterizedTest @ValueSource(strings={"", "json_object", "json_schema"})
@@ -104,7 +104,8 @@ class DagPlannerTest {
                 .getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
         int examples = 0;
         for (String line : prompt.split("\\R")) {
-            if (!line.startsWith("{\"in_domain\"") || !line.contains("\"plan\":null")) continue;
+            if (!line.startsWith("{\"in_domain\"") || !line.contains("\"plan\":null")
+                    || line.contains("\"needs_clarification\":true")) continue;
             var config = new DagConfig(); config.setPlannerMaxRetries(0);
             var result = planner(new Script(line), registry(), config).plan("校验边界示例", "", "test", e -> {});
             assertTrue(result.plan().isEmpty());
@@ -291,5 +292,57 @@ class DagPlannerTest {
         var config=new DagConfig();config.setPlannerMaxRetries(0);
         var cycle=planner(new Script(envelope(p)),registry(),config).plan("问题","","t",x->{});
         assertTrue(cycle.plan().isEmpty());assertTrue(cycle.lastError().contains("环"));
+    }
+
+    /** 与追问计划只差 metric 的活动 frame（其余条件逐项一致），继承对账应只报 [metric]。 */
+    private static com.cexpilot.conversation.QueryFrame priceHighFrame() {
+        var target = new com.cexpilot.metric.EffectiveTarget("m1", "metric_0", "binance",
+                com.cexpilot.metric.ConditionOrigin.EXPLICIT,
+                "price.high", "range_statistic",
+                json("{\"market_type\":\"perpetual\",\"base\":\"BTC\",\"quote\":\"USDT\"}"),
+                com.cexpilot.metric.ConditionOrigin.DEFAULT,
+                json(DAY),
+                "1h", com.cexpilot.metric.ConditionOrigin.EXPLICIT,
+                false, com.cexpilot.metric.ConditionOrigin.DEFAULT,
+                null, null, null, "USDT", "kline", "v1");
+        return new com.cexpilot.conversation.QueryFrame("f1", "c1", 1, "t1", "昨天币安 BTC 最高价",
+                "2026-10-12T00:00:00Z", "Asia/Shanghai", List.of(target), null, null, null);
+    }
+
+    private static final com.cexpilot.runtime.RequestContext FOLLOWUP_CTX =
+            new com.cexpilot.runtime.RequestContext(java.time.ZoneId.of("Asia/Shanghai"),
+                    java.time.Instant.parse("2026-10-12T00:00:00Z"));
+
+    @Test void 继承对账漏报changes先修复教学_模型补声明后放行() {
+        var low = plan(metric("m1", "price.low", "range_statistic", "binance"));
+        var declared = JSON.createObjectNode();
+        declared.put("in_domain", true).putNull("reply");
+        declared.set("plan", low);
+        declared.putArray("changes").add("metric");
+        var llm = new Script(envelope(low), declared.toString());
+        List<TraceEvent> events = new ArrayList<>();
+
+        var result = planner(llm, registry(), new DagConfig())
+                .plan("最低价呢？", "", "test", events::add, priceHighFrame(), FOLLOWUP_CTX);
+
+        assertTrue(result.plan().isPresent(), result.lastError());
+        assertEquals(2, llm.calls.size());
+        assertTrue(llm.calls.get(1).get(3).content().contains("changes"), "修复消息要教模型怎么补声明");
+        assertTrue(events.stream().noneMatch(e -> "INHERIT_SHADOW".equals(e.eventType())));
+    }
+
+    @Test void 漏报changes修复仍不声明时第二次shadow放行并记事件() {
+        var undeclared = envelope(plan(metric("m1", "price.low", "range_statistic", "binance")));
+        var llm = new Script(undeclared, undeclared); // 模型两次都不声明（线上实测 qwen-plus 行为）
+        List<TraceEvent> events = new ArrayList<>();
+
+        var result = planner(llm, registry(), new DagConfig())
+                .plan("最低价呢？", "", "test", events::add, priceHighFrame(), FOLLOWUP_CTX);
+
+        assertTrue(result.plan().isPresent(), "计划本身合法，不得因漏报审计元数据而拒答: " + result.lastError());
+        assertEquals(2, llm.calls.size());
+        var shadow = events.stream().filter(e -> "INHERIT_SHADOW".equals(e.eventType())).toList();
+        assertEquals(1, shadow.size());
+        assertTrue(shadow.get(0).inputJson().contains("metric"));
     }
 }

@@ -87,3 +87,16 @@
   - changes：字符串数组，声明用户本轮明确改变了哪些条件键（取值如 exchange/base/metric/shape/time/interval/count/depth/include_unclosed），无改变为 []。程序会把你的计划与活动查询状态逐字段对账，漏报实际变化会被打回修复。
   - new_frame：true 表示用户开启了与活动查询状态无关的新话题任务；拿不准时用 false（倾向延续）。为 true 时不做继承对账。
   - needs_clarification + clarify：指代不明、多个候选无法唯一确定、或缺少必要条件且上下文不能补齐时，置 needs_clarification=true、plan=null，并在 clarify 写一句问用户的澄清问题（100 字以内）。禁止靠猜测或默认第一组候选强行出计划。
+
+多轮示例（结合上方 <CONVERSATION_CONTEXT> 的活动查询状态理解；示例只展示结构，不复制其中的币种、指标或区间）：
+示例：活动查询状态是昨天币安 BTC 的 price.high（range_statistic、1h），本轮追问「最低价呢？」（只换指标，其余全部继承）：
+{"in_domain":true,"changes":["metric"],"plan":{"metrics":[{"id":"m1","metric":"price.low","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"range_statistic","time":{"type":"calendar_period","unit":"day","offset":-1,"segment":"full","extent":"full_period"},"interval":"1h"}],"calculations":[]},"reply":null}
+
+示例：活动查询状态是昨天币安 BTC 的最高价，本轮追问「那 OKX 呢？」（只换交易所）：
+{"in_domain":true,"changes":["exchange"],"plan":{"metrics":[{"id":"m1","metric":"price.high","exchanges":["okx"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"range_statistic","time":{"type":"calendar_period","unit":"day","offset":-1,"segment":"full","extent":"full_period"},"interval":"1h"}],"calculations":[]},"reply":null}
+
+示例：活动查询状态是昨天币安 BTC 的最高价，本轮说「换个话题，ETH 现在多少钱？」（明确新话题，不继承任何条件）：
+{"in_domain":true,"new_frame":true,"plan":{"metrics":[{"id":"m1","metric":"price.last","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"ETH","quote":"USDT"},"query_shape":"snapshot"}],"calculations":[]},"reply":null}
+
+示例：活动查询状态里有币安和 OKX 各一组 BTC 资金费率序列，本轮追问「它的均值呢？」（多个候选无法唯一确定）：
+{"in_domain":true,"needs_clarification":true,"clarify":"您想对币安还是 OKX 那组资金费率序列求均值？","plan":null,"reply":null}

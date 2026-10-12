@@ -56,6 +56,8 @@ class AskServiceTest {
     private final AskService service;
 
     private final ConversationService.TurnHandle turn = new ConversationService.TurnHandle(3, "turn-1", 7);
+    /** 与构造 AskService 时的固定时钟一致。 */
+    private static final Instant T0 = Instant.parse("2026-10-12T00:00:00Z");
 
     AskServiceTest() {
         LlmConfig llmConfig = new LlmConfig();
@@ -68,7 +70,7 @@ class AskServiceTest {
     @BeforeEach
     void setUp() {
         when(conversation.getOrCreateConversation(any(), anyString(), any())).thenReturn("conv-1");
-        when(conversation.beginTurn(eq("conv-1"), anyString(), any())).thenReturn(turn);
+        when(conversation.beginTurn(eq("conv-1"), anyString(), any(), any())).thenReturn(turn);
         when(conversation.renderContext("conv-1")).thenReturn("");
     }
 
@@ -90,7 +92,7 @@ class AskServiceTest {
         assertEquals("turn-1", response.turnId());
         assertFalse(response.busy());
         assertEquals("答案", response.answer());
-        verify(conversation).beginTurn("conv-1", "BTC 多少钱", "parent-1");
+        verify(conversation).beginTurn("conv-1", "BTC 多少钱", "parent-1", T0);
         verify(conversation).finishTurn("conv-1", turn, "SUCCEEDED", "答案", response.traceId(), null, null);
         verify(traceRepository).finishTrace(eq(response.traceId()), eq("SUCCESS"), eq("答案"),
                 anyInt(), anyInt(), anyInt(), anyInt(), any(), anyLong(), isNull());
@@ -98,7 +100,7 @@ class AskServiceTest {
 
     @Test
     void 会话忙碌时返回忙碌文案且不执行DAG不建trace() {
-        when(conversation.beginTurn(eq("conv-1"), anyString(), any())).thenReturn(null);
+        when(conversation.beginTurn(eq("conv-1"), anyString(), any(), any())).thenReturn(null);
 
         AskResponse response = service.ask("conv-1", "BTC 多少钱", "v1", null, null, null);
 
@@ -161,7 +163,7 @@ class AskServiceTest {
         AskResponse response = service.ask("conv-1", "BTC 多少钱", "v1", null, null);
 
         assertEquals("turn-1", response.turnId());
-        verify(conversation).beginTurn("conv-1", "BTC 多少钱", null);
+        verify(conversation).beginTurn("conv-1", "BTC 多少钱", null, T0);
     }
 
     @Test

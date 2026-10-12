@@ -3,6 +3,8 @@ package com.cexpilot.conversation;
 import com.cexpilot.config.ConversationConfig;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -70,17 +72,21 @@ class ConversationServiceTest {
         assertTrue(service.history("  ").isEmpty());
     }
 
+    private static final Instant T0 = Instant.parse("2026-10-12T00:00:00Z");
+
     @Test
     void 登记轮次成功时写入RUNNING行并返回句柄() {
         when(repository.acquireTurn(eq("c1"), anyString(), anyLong()))
                 .thenAnswer(inv -> new ConversationRepository.ConversationStateRow(4, inv.getArgument(1), 7));
 
-        ConversationService.TurnHandle turn = service.beginTurn("c1", "BTC 多少钱", "parent-1");
+        ConversationService.TurnHandle turn = service.beginTurn("c1", "BTC 多少钱", "parent-1", T0);
 
         assertNotNull(turn);
         assertEquals(3, turn.queryNo()); // next_query_no=4 表示本轮分到 3
         assertEquals(7, turn.fencingToken());
-        verify(repository).insertRunningTurn(eq("c1"), eq(3L), eq(turn.turnId()), eq("parent-1"), eq("BTC 多少钱"));
+        // started_at 用应用时钟（requestTime）写入，不依赖 DB 的 NOW()，避免服务器/会话时区错位
+        verify(repository).insertRunningTurn(eq("c1"), eq(3L), eq(turn.turnId()), eq("parent-1"),
+                eq("BTC 多少钱"), eq(T0));
     }
 
     @Test
@@ -88,8 +94,8 @@ class ConversationServiceTest {
         when(repository.acquireTurn(eq("c1"), anyString(), anyLong()))
                 .thenReturn(new ConversationRepository.ConversationStateRow(4, "other-turn", 7));
 
-        assertNull(service.beginTurn("c1", "BTC 多少钱", null));
-        verify(repository, never()).insertRunningTurn(anyString(), anyLong(), anyString(), any(), anyString());
+        assertNull(service.beginTurn("c1", "BTC 多少钱", null, T0));
+        verify(repository, never()).insertRunningTurn(anyString(), anyLong(), anyString(), any(), anyString(), any());
     }
 
     @Test

@@ -116,7 +116,8 @@ public class AskService {
 
         // 2. 登记轮次（短事务）：原子分配 query_no + turnId、占用会话执行权、写入 RUNNING 行。
         //    同会话已有未过期的执行中请求时返回明确的忙碌响应（首期串行约束），不建 trace、不执行 DAG。
-        ConversationService.TurnHandle turn = conversation.beginTurn(resolvedConversationId, question, parentTurnId);
+        ConversationService.TurnHandle turn = conversation.beginTurn(resolvedConversationId, question,
+                parentTurnId, requestContext.requestTime());
         if (turn == null) {
             AskResponse busy = new AskResponse(resolvedConversationId, null,
                     "上一个问题还在处理中，请稍后再试", null, 0, 0, 0, null, true);

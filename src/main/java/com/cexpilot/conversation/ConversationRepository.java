@@ -89,13 +89,16 @@ public class ConversationRepository {
                 conversationId);
     }
 
-    /** 登记 RUNNING 轮次：question 先写，answer 与 trace_id 在提交时后补。 */
-    public void insertRunningTurn(String conversationId, long queryNo, String turnId, String parentTurnId, String question) {
+    /** 登记 RUNNING 轮次：question 先写，answer 与 trace_id 在提交时后补。
+     *  started_at 由应用时钟（requestTime）写入，不用 NOW()：应用写入的 Timestamp 两个方向
+     *  都走 JDBC 会话时区转换、往返自洽；DB 时钟写出的值在服务器时区与会话时区不一致时会错位。 */
+    public void insertRunningTurn(String conversationId, long queryNo, String turnId, String parentTurnId,
+                                  String question, java.time.Instant requestTime) {
         jdbc.update("""
                         INSERT INTO conversation_query (conversation_id, query_no, question, turn_id, parent_turn_id, turn_status, started_at)
-                        VALUES (?, ?, ?, ?, ?, 'RUNNING', NOW(6))
+                        VALUES (?, ?, ?, ?, ?, 'RUNNING', ?)
                         """,
-                conversationId, queryNo, question, turnId, parentTurnId);
+                conversationId, queryNo, question, turnId, parentTurnId, java.sql.Timestamp.from(requestTime));
     }
 
     /** 提交轮次结果：状态、答案、trace、校验通过的 LogicalPlan 原文（无则 null）、结束时间。 */
@@ -158,9 +161,10 @@ public class ConversationRepository {
 
     public List<QueryRecord> recentQueries(String conversationId, int limit) {
         // 只把已成功（或轮次功能上线前的历史）轮次注入上下文：
-        // RUNNING 行（含当前这轮）与 FAILED 行不进 prompt，保持与"成功后追加聊天记录"的旧口径一致
+        // RUNNING 行（含当前这轮）与 FAILED 行不进 prompt，保持与"成功后追加聊天记录"的旧口径一致。
+        // 发生时间优先取应用时钟写入的 started_at；轮次功能上线前的旧行回退 created_at（DB 时钟，可能带时区偏移）。
         List<QueryRecord> desc = jdbc.query("""
-                        SELECT query_no, question, answer, trace_id, created_at
+                        SELECT query_no, question, answer, trace_id, COALESCE(started_at, created_at) AS occurred_at
                         FROM conversation_query
                         WHERE conversation_id = ?
                           AND (turn_status IS NULL OR turn_status = 'SUCCEEDED')
@@ -172,7 +176,7 @@ public class ConversationRepository {
                         rs.getString("question"),
                         rs.getString("answer"),
                         rs.getString("trace_id"),
-                        rs.getTimestamp("created_at").toLocalDateTime()),
+                        rs.getTimestamp("occurred_at").toLocalDateTime()),
                 conversationId, limit);
         // 翻转为时间正序，让最早的在前
         java.util.Collections.reverse(desc);
