@@ -95,7 +95,8 @@ class AskServiceTest {
         verify(conversation).beginTurn("conv-1", "BTC 多少钱", "parent-1", T0);
         verify(conversation).finishTurn("conv-1", turn, "SUCCEEDED", "答案", response.traceId(), null, null);
         verify(traceRepository).finishTrace(eq(response.traceId()), eq("SUCCESS"), eq("答案"),
-                anyInt(), anyInt(), anyInt(), anyInt(), any(), anyLong(), isNull(), eq(0));
+                anyInt(), anyInt(), anyInt(), anyInt(), any(), anyLong(), isNull(), eq(0),
+                anyInt(), anyInt(), anyInt(), anyInt(), anyInt());
     }
 
     @Test
@@ -215,5 +216,52 @@ class AskServiceTest {
         JsonNode focusNode = frame.path("focus").path("evidence_nodes").get(0);
         assertEquals("metric_0", focusNode.path("node_id").asText());
         assertEquals("price.high", focusNode.path("identity").path("metric").asText());
+    }
+
+    @Test
+    void 阶段三事件落点与拆分计数透传响应() {
+        when(runtime.execute(anyString(), anyString(), anyString(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new ExecutionResult("答案", null, 2, 1, 10, 20,
+                        null, null, 1, 3, 1, 2, 1, 7, List.of("fact-1")));
+
+        AskResponse response = service.ask("conv-1", "BTC 多少钱", "v1", null, null, null);
+
+        // 拆分计数逐字段透传到响应
+        assertEquals(3, response.plannerLlmCalls());
+        assertEquals(1, response.answerLlmCalls());
+        assertEquals(2, response.metricFetchCount());
+        assertEquals(1, response.calculationCount());
+        assertEquals(7, response.httpRequestCount());
+        assertEquals(1, response.reusedFactCount());
+
+        // CONTEXT_RESOLVED 在建 trace 后、CONTEXT_COMMITTED 在轮次提交后各落一条
+        var captor = org.mockito.ArgumentCaptor.forClass(com.cexpilot.runtime.TraceEvent.class);
+        verify(traceSink, org.mockito.Mockito.atLeastOnce()).record(captor.capture());
+        var byType = captor.getAllValues().stream()
+                .filter(e -> e.eventType().startsWith("CONTEXT")).toList();
+        assertEquals(List.of("CONTEXT_RESOLVED", "CONTEXT_COMMITTED"),
+                byType.stream().map(com.cexpilot.runtime.TraceEvent::eventType).toList());
+        var resolved = byType.get(0);
+        assertTrue(resolved.outputJson().contains("conv-1"));
+        assertTrue(resolved.outputJson().contains("\"query_no\":3"));
+        var committed = byType.get(1);
+        assertTrue(committed.outputJson().contains("fact-1"), "提交摘要带本轮新保存的 factId");
+        assertTrue(committed.outputJson().contains("SUCCEEDED"));
+    }
+
+    @Test
+    void 失败轮次也落CONTEXT_COMMITTED且状态为FAILED() {
+        when(runtime.execute(anyString(), anyString(), anyString(), any(), any(), any(), any(), any(), any(), any()))
+                .thenThrow(new RuntimeException("LLM 超时"));
+
+        assertThrows(RuntimeException.class,
+                () -> service.ask("conv-1", "BTC 多少钱", "v1", null, null, null));
+
+        var captor = org.mockito.ArgumentCaptor.forClass(com.cexpilot.runtime.TraceEvent.class);
+        verify(traceSink, org.mockito.Mockito.atLeastOnce()).record(captor.capture());
+        var committed = captor.getAllValues().stream()
+                .filter(e -> "CONTEXT_COMMITTED".equals(e.eventType())).findFirst().orElseThrow();
+        assertTrue(committed.outputJson().contains("FAILED"));
+        assertTrue(committed.outputJson().contains("\"frame_updated\":false"), "失败轮次不覆盖活动 frame");
     }
 }

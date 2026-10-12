@@ -76,11 +76,12 @@ public class DagPlanner {
      * plan 持有完整编译产物 CompiledPlan（含 LogicalPlan 与逻辑→物理映射），执行用其中的 dagPlan。
      * needsClarification=true 时表示 Planner 要求澄清（reply 为澄清文案），不执行、不落 frame。
      * bindings 为服务端生成的执行期绑定（阶段二 REUSE_FACT）；无证据上下文或未绑定时为 null。
+     * llmCalls 为本轮 planner 阶段真实 LLM 调用次数（含修复重试，阶段三计数拆分）。
      */
     public record PlanOutcome(boolean inDomain, String reply,
                               Optional<com.cexpilot.metric.CompiledPlan> plan, int promptTokens, int completionTokens,
                               String lastError, boolean needsClarification,
-                              com.cexpilot.metric.ExecutionBindings bindings) {
+                              com.cexpilot.metric.ExecutionBindings bindings, int llmCalls) {
     }
 
     public PlanOutcome plan(String question, String conversationContext, String traceId, TraceSink sink) {
@@ -115,24 +116,26 @@ public class DagPlanner {
 
         int promptTokens = 0;
         int completionTokens = 0;
+        int llmCalls = 0;
         String lastError = null;
         boolean bindingRetried = false;
         int attempts = dagConfig.getPlannerMaxRetries() + 1;
         for (int attempt = 1; attempt <= attempts; attempt++) {
             ChatResponse response = callLlm(messages, traceId, sink, attempt, responseFormat);
+            llmCalls++;
             promptTokens += response.promptTokens() == null ? 0 : response.promptTokens();
             completionTokens += response.completionTokens() == null ? 0 : response.completionTokens();
 
             PlanDecision decision = evaluateResponse(response.content(), maxToolCalls, traceId, sink,
                     activeFrame, requestContext, evidenceContext, attempt);
             if (decision.error() == null) {
-                return decision.toOutcome(promptTokens, completionTokens);
+                return decision.toOutcome(promptTokens, completionTokens, llmCalls);
             }
             if (decision.bindingFailure()) {
                 // 绑定失败只修复一次；仍不行则澄清"原快照不可恢复"，禁止重查当前值冒充（F21）
                 if (bindingRetried) {
                     return new PlanOutcome(true, BINDING_UNAVAILABLE_CLARIFY, Optional.empty(),
-                            promptTokens, completionTokens, null, true, null);
+                            promptTokens, completionTokens, null, true, null, llmCalls);
                 }
                 bindingRetried = true;
             }
@@ -141,7 +144,7 @@ public class DagPlanner {
         }
         // repair 耗尽：runtime 直接返回固定失败话术，禁止继续生成无事实答案。
         return new PlanOutcome(true, null,
-                Optional.empty(), promptTokens, completionTokens, lastError, false, null);
+                Optional.empty(), promptTokens, completionTokens, lastError, false, null, llmCalls);
     }
 
     /** 绑定修复仍失败时的澄清话术：说明原快照不可恢复，把"是否按最新数据重查"的选择权交还用户。 */
@@ -170,9 +173,9 @@ public class DagPlanner {
             return new PlanDecision(true, null, null, error, false, null, true);
         }
 
-        private PlanOutcome toOutcome(int promptTokens, int completionTokens) {
+        private PlanOutcome toOutcome(int promptTokens, int completionTokens, int llmCalls) {
             return new PlanOutcome(inDomain, reply, Optional.ofNullable(plan),
-                    promptTokens, completionTokens, error, needsClarification, bindings);
+                    promptTokens, completionTokens, error, needsClarification, bindings, llmCalls);
         }
     }
 
@@ -318,6 +321,11 @@ public class DagPlanner {
                 }
                 // plan 已合法时，超长 reply 直接丢弃，不再为 reply 重试。
                 String effectiveReply = isReasoningDump(reply) ? null : reply;
+                // FOLLOWUP_PLAN（阶段三观测）：计划校验通过（含绑定生成）后落计划摘要，
+                // 只放各节点口径与绑定决策，不放大 payload
+                sink.record(new TraceEvent(traceId, "FOLLOWUP_PLAN", "dag_planner",
+                        null, followupPlanSummary(parsed, compiled, bindings),
+                        null, null, null, null, null, null));
                 return PlanDecision.accepted(true, effectiveReply, compiled, bindings);
             }
             error = planValidationError(compiler.logicalErrors(plan, errors));
@@ -339,6 +347,44 @@ public class DagPlanner {
             }
         }
         return changes;
+    }
+
+    /** FOLLOWUP_PLAN 事件的 output_json：各 metric 节点口径 + 绑定决策（FETCH/REUSE_FACT+factId）+ changes/new_frame 声明。 */
+    private static String followupPlanSummary(JsonNode parsed, com.cexpilot.metric.CompiledPlan compiled,
+                                              com.cexpilot.metric.ExecutionBindings bindings) {
+        ObjectNode out = MAPPER.createObjectNode();
+        var metrics = out.putArray("metrics");
+        for (com.cexpilot.metric.MetricRequest m : compiled.logicalPlan().metrics()) {
+            ObjectNode node = metrics.addObject();
+            node.put("id", m.id());
+            node.put("metric", m.metric());
+            node.put("base", m.instrument() == null ? null : m.instrument().base());
+            node.put("shape", String.valueOf(m.shape()));
+            node.put("reference_mode", m.referenceMode() == null ? "latest" : m.referenceMode());
+            if (m.evidenceRef() != null) {
+                node.put("evidence_ref", m.evidenceRef());
+            }
+            var branches = node.putArray("branches");
+            Map<String, String> byExchange = compiled.branches().getOrDefault(m.id(), Map.of());
+            byExchange.forEach((exchange, physicalId) -> {
+                ObjectNode branch = branches.addObject();
+                branch.put("exchange", exchange);
+                branch.put("node", physicalId);
+                com.cexpilot.metric.ExecutionBindings.ReuseFact reuse =
+                        bindings == null ? null : bindings.reuseFor(physicalId);
+                branch.put("decision", reuse == null ? "FETCH" : "REUSE_FACT");
+                if (reuse != null) {
+                    branch.put("fact_id", reuse.factId());
+                }
+            });
+        }
+        var calculations = out.putArray("calculations");
+        for (com.cexpilot.metric.CalculationRequest c : compiled.logicalPlan().calculations()) {
+            calculations.addObject().put("id", c.id()).put("operator", c.operator());
+        }
+        declaredChanges(parsed).forEach(out.putArray("changes")::add);
+        out.put("new_frame", parsed.path("new_frame").asBoolean(false));
+        return out.toString();
     }
 
     private String planValidationError(List<String> errors) {

@@ -334,4 +334,65 @@ class DagRuntimeTest {
         assertEquals("t", facts.get(0).sourceTraceId());
     }
 
+    // ===== 阶段三：计数拆分（REUSE_FACT 不算取数；算子单算；FOLLOWUP_PLAN 摘要带绑定决策） =====
+
+    @Test void 计数拆分_复用节点不算取数且新事实列表排除沿用() throws Exception {
+        var store = seededStore("conv-1");
+        var entries = com.cexpilot.evidence.EvidenceAssembler.assignRefs(
+                store.listReusable("conv-1", Instant.parse("2026-10-12T01:30:00Z")));
+        var plannerInput = new com.cexpilot.conversation.PlannerInput("", null, entries);
+        var p = plan(snapshotGroup("m1", "binance", "fact_1"));
+        calculation(p, "c1", "avg", "{\"kind\":\"values\",\"values\":[\"{{m1.binance.value}}\",100]}");
+        var llm = new Script(envelope(p), "83000 加 100 的均值");
+        List<TraceEvent> trace = new ArrayList<>();
+        // Provider 一旦调用即失败：证明 REUSE 轮次无真实取数
+        var runtime = runtimeWithStore(llm, registry(), provider((q, c) -> {
+            throw new IllegalStateException("REUSE 轮次不得取数");
+        }), store);
+
+        var r = runtime.execute("刚才那个价格加 100 再求均值", "", "t", trace::add, null,
+                new RequestContext(ZoneId.of("Asia/Shanghai"), Instant.parse("2026-10-12T02:00:00Z")),
+                null, null, plannerInput, new com.cexpilot.evidence.EvidenceSession("conv-1", "turn-2"));
+
+        assertEquals(2, r.toolCallCount());
+        assertEquals(0, r.metricFetchCount(), "REUSE_FACT 节点不算真实取数");
+        assertEquals(1, r.calculationCount(), "算子节点单独计数");
+        assertEquals(1, r.plannerLlmCalls());
+        assertEquals(1, r.answerLlmCalls());
+        assertEquals(0, r.httpRequestCount(), "假 Provider 不发 HTTP");
+        assertEquals(1, r.reusedFactCount());
+        // 沿用的历史 factId 不得计入本轮新保存；算子派生事实（avg 结果）是本轮新产出，应计入
+        assertFalse(r.savedFactIds().contains("fact_1"), "REUSE_FACT 沿用的历史 factId 不算新保存");
+        assertEquals(1, r.savedFactIds().size(), "算子派生事实计入本轮新保存");
+        // FOLLOWUP_PLAN 摘要：metric 分支决策 REUSE_FACT 并带解析后的真实 factId（非 evidence_ref 别名）
+        var summary = trace.stream().filter(e -> "FOLLOWUP_PLAN".equals(e.eventType())).findFirst().orElseThrow();
+        JsonNode branch = json(summary.outputJson()).at("/metrics/0/branches/0");
+        assertEquals("REUSE_FACT", branch.path("decision").asText());
+        assertFalse(branch.path("fact_id").asText().isEmpty());
+        assertFalse(r.savedFactIds().contains(branch.path("fact_id").asText()),
+                "绑定沿用的历史 factId 不计入本轮新保存");
+    }
+
+    @Test void 计数拆分_真实取数与算子分开计且新事实入列表() throws Exception {
+        var store = new com.cexpilot.evidence.EvidenceStore(new com.cexpilot.evidence.InMemoryEvidenceRepository());
+        var plannerInput = new com.cexpilot.conversation.PlannerInput("", null, List.of());
+        var p = plan(snapshotGroup("m1", "binance", null));
+        calculation(p, "c1", "avg", "{\"kind\":\"values\",\"values\":[\"{{m1.binance.value}}\",100]}");
+        var llm = new Script(envelope(p), "90000 加 100 的均值");
+        var ticker = namedProvider(TickerMetricProvider.NAME, TickerMetric::valueOf, (q, c) ->
+                new MetricResult.Point(new MetricResult.SnapshotMetadata(
+                        Instant.parse("2026-10-12T02:00:00Z"), ZoneId.of("Asia/Shanghai")),
+                        new java.math.BigDecimal("90000")));
+        var runtime = runtimeWithStore(llm, registry(), ticker, store);
+
+        var r = runtime.execute("BTC 现价加 100 求均值", "", "t", e -> {}, null,
+                new RequestContext(ZoneId.of("Asia/Shanghai"), Instant.parse("2026-10-12T02:00:00Z")),
+                null, null, plannerInput, new com.cexpilot.evidence.EvidenceSession("conv-1", "turn-9"));
+
+        assertEquals(1, r.metricFetchCount());
+        assertEquals(1, r.calculationCount());
+        assertEquals(2, r.savedFactIds().size(), "原始事实 + 算子派生事实都计入本轮新保存");
+        assertEquals(0, r.reusedFactCount());
+    }
+
 }

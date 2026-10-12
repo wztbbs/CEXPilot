@@ -74,6 +74,8 @@ CREATE TABLE IF NOT EXISTS conversation_state (
 -- 6. 阶段二（migrations/008_conversation_artifact.sql）：trace_event.event_type 加宽到 VARCHAR(32)
 --    （EVIDENCE_REUSE_DECISION 等长事件名），ask_trace 加 reused_facts 列，新建 conversation_artifact。
 --    必须先迁移后部署，否则新事件名写库会被截断报错。
+-- 7. 阶段三（migrations/009_turn_counters.sql）：ask_trace 加 planner_llm_calls / answer_llm_calls /
+--    metric_fetch_count / calculation_count / http_request_count 计数列。
 
 -- 一次问答 = 一条 ask_trace（就是 Trace 的主表，👎 之后靠它完整回放）
 CREATE TABLE IF NOT EXISTS ask_trace (
@@ -90,6 +92,11 @@ CREATE TABLE IF NOT EXISTS ask_trace (
     llm_steps         INT           NOT NULL DEFAULT 0,
     tool_calls        INT           NOT NULL DEFAULT 0,
     reused_facts      INT           NOT NULL DEFAULT 0, -- 本轮复用的历史事实数（阶段二 FACT_REUSED 计数）
+    planner_llm_calls INT           NOT NULL DEFAULT 0, -- planner 阶段 LLM 调用次数（含修复重试）
+    answer_llm_calls  INT           NOT NULL DEFAULT 0, -- answer 阶段 LLM 调用次数（0 或 1）
+    metric_fetch_count INT          NOT NULL DEFAULT 0, -- metric 节点真实取数次数（REUSE_FACT 不算）
+    calculation_count INT           NOT NULL DEFAULT 0, -- 算子节点执行次数
+    http_request_count INT          NOT NULL DEFAULT 0, -- 真实 HTTP 请求数（分页/重试逐次计）
     prompt_tokens     INT           NULL,
     completion_tokens INT           NULL,
     cost              DECIMAL(12,8) NULL,

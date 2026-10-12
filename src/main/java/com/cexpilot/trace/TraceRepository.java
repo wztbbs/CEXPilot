@@ -42,15 +42,36 @@ public class TraceRepository {
     public void finishTrace(String traceId, String status, String answer, int llmSteps, int toolCalls,
                             Integer promptTokens, Integer completionTokens, Double cost,
                             long durationMs, String error, Integer reusedFacts) {
+        finishTrace(traceId, status, answer, llmSteps, toolCalls, promptTokens, completionTokens, cost,
+                durationMs, error, reusedFacts, null, null, null, null, null);
+    }
+
+    /**
+     * 阶段三计数拆分：planner/answer LLM 调用数、metric 真实取数节点数、算子节点数、真实 HTTP 请求数；
+     * 各计数为 null 表示不更新该列（失败路径等）。
+     */
+    public void finishTrace(String traceId, String status, String answer, int llmSteps, int toolCalls,
+                            Integer promptTokens, Integer completionTokens, Double cost,
+                            long durationMs, String error, Integer reusedFacts,
+                            Integer plannerLlmCalls, Integer answerLlmCalls, Integer metricFetchCount,
+                            Integer calculationCount, Integer httpRequestCount) {
         jdbc.update("""
                         UPDATE ask_trace
                         SET status = ?, answer = ?, llm_steps = ?, tool_calls = ?,
                             prompt_tokens = ?, completion_tokens = ?, cost = ?, duration_ms = ?,
-                            error = ?, reused_facts = COALESCE(?, reused_facts), finished_at = NOW()
+                            error = ?, reused_facts = COALESCE(?, reused_facts),
+                            planner_llm_calls = COALESCE(?, planner_llm_calls),
+                            answer_llm_calls = COALESCE(?, answer_llm_calls),
+                            metric_fetch_count = COALESCE(?, metric_fetch_count),
+                            calculation_count = COALESCE(?, calculation_count),
+                            http_request_count = COALESCE(?, http_request_count),
+                            finished_at = NOW()
                         WHERE trace_id = ?
                         """,
                 status, answer, llmSteps, toolCalls, promptTokens, completionTokens, cost,
-                durationMs, error, reusedFacts, traceId);
+                durationMs, error, reusedFacts,
+                plannerLlmCalls, answerLlmCalls, metricFetchCount, calculationCount, httpRequestCount,
+                traceId);
     }
 
     public void appendEvent(String traceId, TraceEvent event) {

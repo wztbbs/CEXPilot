@@ -145,6 +145,10 @@ public class AskService {
         if (listener != null) {
             listener.onMeta(resolvedConversationId, traceId, turn.turnId());
         }
+        // CONTEXT_RESOLVED（阶段三观测）：Planner 输入组装完成后的上下文摘要
+        traceSink.record(new com.cexpilot.runtime.TraceEvent(traceId, "CONTEXT_RESOLVED", "context_service",
+                null, contextResolvedSummary(resolvedConversationId, turn, plannerInput),
+                null, null, null, null, null, null));
 
         long start = System.currentTimeMillis();
         boolean turnFinished = false;
@@ -164,7 +168,9 @@ public class AskService {
 
             traceRepository.finishTrace(traceId, "SUCCESS", result.answer(), result.steps(),
                     result.toolCallCount(), result.promptTokens(), result.completionTokens(),
-                    cost, durationMs, null, result.reusedFactCount());
+                    cost, durationMs, null, result.reusedFactCount(),
+                    result.plannerLlmCalls(), result.answerLlmCalls(), result.metricFetchCount(),
+                    result.calculationCount(), result.httpRequestCount());
 
             // QueryFrame 随成功轮次提交覆盖活动 frame（失败/澄清轮次不覆盖）；下一轮由
             // ConversationContextService 读取注入 Planner 并做继承对账（阶段一 c）。
@@ -183,10 +189,16 @@ public class AskService {
             conversation.finishTurn(resolvedConversationId, turn, turnStatus, result.answer(), traceId,
                     logicalPlanJson, frameJson);
             turnFinished = true;
+            // CONTEXT_COMMITTED（阶段三观测）：轮次状态提交后的最终状态摘要
+            traceSink.record(new com.cexpilot.runtime.TraceEvent(traceId, "CONTEXT_COMMITTED", "ask_service",
+                    null, contextCommittedSummary(turnStatus, result.savedFactIds(), frameJson != null),
+                    null, null, null, null, null, null));
 
             // 6. evidence（工具产出的事实集）随答案一起返回，前端可展示"答案引用了哪些数据"。
             AskResponse response = new AskResponse(resolvedConversationId, traceId, result.answer(),
-                    result.evidence(), result.toolCallCount(), result.steps(), durationMs, turn.turnId());
+                    result.evidence(), result.toolCallCount(), result.steps(), durationMs, turn.turnId(), false,
+                    result.plannerLlmCalls(), result.answerLlmCalls(), result.metricFetchCount(),
+                    result.calculationCount(), result.httpRequestCount(), result.reusedFactCount());
             if (listener != null) {
                 listener.onDone(response);
             }
@@ -216,11 +228,61 @@ public class AskService {
                                     String traceId, String logicalPlanJson) {
         try {
             conversation.finishTurn(conversationId, turn, "FAILED", null, traceId, logicalPlanJson, null);
+            traceSink.record(new com.cexpilot.runtime.TraceEvent(traceId, "CONTEXT_COMMITTED", "ask_service",
+                    null, contextCommittedSummary("FAILED", java.util.List.of(), false),
+                    null, null, null, null, null, null));
             return true;
         } catch (Exception ex) {
             log.warn("轮次失败收尾失败 turnId={}: {}", turn.turnId(), ex.getMessage());
             return false;
         }
+    }
+
+    /** CONTEXT_RESOLVED 的 output_json：轮次序号、活动 frame 摘要（targets 关键条件）、可引用事实候选数、文本历史条数。 */
+    private static String contextResolvedSummary(String conversationId, ConversationService.TurnHandle turn,
+                                                 com.cexpilot.conversation.PlannerInput plannerInput) {
+        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var out = mapper.createObjectNode();
+        out.put("conversation_id", conversationId);
+        out.put("query_no", turn.queryNo());
+        com.cexpilot.conversation.QueryFrame frame = plannerInput == null ? null : plannerInput.activeFrame();
+        if (frame == null) {
+            out.putNull("active_frame");
+        } else {
+            var frameNode = out.putObject("active_frame");
+            frameNode.put("source_turn_id", frame.sourceTurnId());
+            var targets = frameNode.putArray("targets");
+            for (com.cexpilot.metric.EffectiveTarget t : frame.targets()) {
+                var target = targets.addObject();
+                target.put("group", t.groupId());
+                target.put("exchange", t.exchange());
+                target.put("metric", t.metric());
+                target.put("shape", t.queryShape());
+                if (t.instrument() != null) {
+                    target.put("base", t.instrument().path("base").asText(null));
+                }
+                if (t.timeExpression() != null) {
+                    target.put("time", t.timeExpression().toString());
+                }
+            }
+            frameNode.put("has_pending_clarification",
+                    frame.pendingClarification() != null && !frame.pendingClarification().isNull());
+        }
+        out.put("evidence_candidates", plannerInput == null ? 0 : plannerInput.evidence().size());
+        out.put("text_history_count", plannerInput == null ? 0 : plannerInput.textHistoryCount());
+        return out.toString();
+    }
+
+    /** CONTEXT_COMMITTED 的 output_json：轮次终态、本轮新保存的 factId 列表、活动 frame 是否更新。 */
+    private static String contextCommittedSummary(String turnStatus, java.util.List<String> savedFactIds,
+                                                  boolean frameUpdated) {
+        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var out = mapper.createObjectNode();
+        out.put("status", turnStatus);
+        var facts = out.putArray("saved_fact_ids");
+        savedFactIds.forEach(facts::add);
+        out.put("frame_updated", frameUpdated);
+        return out.toString();
     }
 
     /** 按普通模型的每千 token 单价折算成本；单价为 0 时成本为 0，不影响主流程。 */

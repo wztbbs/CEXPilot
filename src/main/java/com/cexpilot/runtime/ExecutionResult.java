@@ -2,13 +2,21 @@ package com.cexpilot.runtime;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
+import java.util.List;
+
 /**
  * 一次问答的执行结果。
  *
- * @param turnStatus      轮次终态提示；null = SUCCEEDED。NEEDS_CLARIFICATION 表示 Planner 要求澄清，
- *                        由编排层落轮次状态（不执行、不落 frame）
- * @param clarify         澄清问题原文（needsClarification 时有值），供编排层写入 frame 的 pendingClarification
- * @param reusedFactCount 本轮 REUSE_FACT 复用并成功播种的历史事实数（阶段二汇总计数）
+ * @param turnStatus       轮次终态提示；null = SUCCEEDED。NEEDS_CLARIFICATION 表示 Planner 要求澄清，
+ *                         由编排层落轮次状态（不执行、不落 frame）
+ * @param clarify          澄清问题原文（needsClarification 时有值），供编排层写入 frame 的 pendingClarification
+ * @param reusedFactCount  本轮 REUSE_FACT 复用并成功播种的历史事实数（阶段二汇总计数）
+ * @param plannerLlmCalls  planner 阶段 LLM 调用次数（含修复重试；阶段三计数拆分）
+ * @param answerLlmCalls   answer 阶段 LLM 调用次数（0 或 1）
+ * @param metricFetchCount metric 节点真实取数次数（REUSE_FACT 节点不算）
+ * @param calculationCount 算子节点执行次数
+ * @param httpRequestCount 本轮真实发出的交易所 HTTP 请求数（一个节点分页/重试会记多次）
+ * @param savedFactIds     本轮新保存的事实 factId 列表（不含 REUSE_FACT 沿用的历史 factId）
  */
 public record ExecutionResult(String answer,
                               JsonNode evidence,
@@ -18,9 +26,19 @@ public record ExecutionResult(String answer,
                               int completionTokens,
                               String turnStatus,
                               String clarify,
-                              int reusedFactCount) {
+                              int reusedFactCount,
+                              int plannerLlmCalls,
+                              int answerLlmCalls,
+                              int metricFetchCount,
+                              int calculationCount,
+                              int httpRequestCount,
+                              List<String> savedFactIds) {
 
-    /** 兼容旧构造：普通完成（SUCCEEDED），无澄清，无复用。 */
+    public ExecutionResult {
+        savedFactIds = savedFactIds == null ? List.of() : List.copyOf(savedFactIds);
+    }
+
+    /** 兼容旧构造：普通完成（SUCCEEDED），无澄清，无复用，无拆分计数。 */
     public ExecutionResult(String answer, JsonNode evidence, int toolCallCount, int steps,
                            int promptTokens, int completionTokens) {
         this(answer, evidence, toolCallCount, steps, promptTokens, completionTokens, null, null, 0);
@@ -30,5 +48,13 @@ public record ExecutionResult(String answer,
     public ExecutionResult(String answer, JsonNode evidence, int toolCallCount, int steps,
                            int promptTokens, int completionTokens, String turnStatus, String clarify) {
         this(answer, evidence, toolCallCount, steps, promptTokens, completionTokens, turnStatus, clarify, 0);
+    }
+
+    /** 兼容旧构造：带复用计数，无阶段三拆分计数。 */
+    public ExecutionResult(String answer, JsonNode evidence, int toolCallCount, int steps,
+                           int promptTokens, int completionTokens, String turnStatus, String clarify,
+                           int reusedFactCount) {
+        this(answer, evidence, toolCallCount, steps, promptTokens, completionTokens, turnStatus, clarify,
+                reusedFactCount, 0, 0, 0, 0, 0, List.of());
     }
 }

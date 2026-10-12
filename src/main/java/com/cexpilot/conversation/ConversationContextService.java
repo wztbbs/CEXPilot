@@ -45,7 +45,8 @@ public class ConversationContextService {
     public PlannerInput buildPlannerInput(String conversationId) {
         QueryFrame frame = loadActiveFrame(conversationId);
         List<com.cexpilot.evidence.EvidenceAssembler.Entry> evidence = loadEvidence(conversationId);
-        return new PlannerInput(render(frame, renderTextHistory(conversationId), evidence), frame, evidence);
+        TextHistory history = renderTextHistory(conversationId);
+        return new PlannerInput(render(frame, history.text(), evidence), frame, evidence, history.count());
     }
 
     /** 可引用历史事实：未过期且有缓存 payload 的 FACT，按取数时间倒序分配稳定短别名。读不到就空列表。 */
@@ -75,11 +76,15 @@ public class ConversationContextService {
         }
     }
 
+    /** 近期问答文本 + 条数。 */
+    private record TextHistory(String text, int count) {
+    }
+
     /** 近期问答文本：带每轮发生时间（缓解跨天窗口漂移），答案截断放宽到 500。 */
-    private String renderTextHistory(String conversationId) {
+    private TextHistory renderTextHistory(String conversationId) {
         List<QueryRecord> queries = repository.recentQueries(conversationId, HISTORY_QUERY_LIMIT);
         if (queries.isEmpty()) {
-            return "";
+            return new TextHistory("", 0);
         }
         StringBuilder sb = new StringBuilder();
         for (QueryRecord query : queries) {
@@ -89,7 +94,7 @@ public class ConversationContextService {
                 sb.append("助手：").append(abbreviate(query.answer(), HISTORY_ANSWER_MAX_CHARS)).append('\n');
             }
         }
-        return sb.toString();
+        return new TextHistory(sb.toString(), queries.size());
     }
 
     static String render(QueryFrame frame, String textHistory) {

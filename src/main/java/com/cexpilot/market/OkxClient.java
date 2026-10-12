@@ -302,6 +302,7 @@ public class OkxClient {
         for (int attempt = 1; ; attempt++) {
             long start = System.currentTimeMillis();
             log.info("okx 请求 GET {}{} 参数={}", baseUrl, uri, vars);
+            HttpRequestCounter.increment();
             try {
                 String raw = rest.get().uri(uri, vars).retrieve().body(String.class);
                 log.info("okx 响应 200 {}ms {} body={}",

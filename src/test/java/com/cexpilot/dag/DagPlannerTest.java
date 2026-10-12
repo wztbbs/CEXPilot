@@ -175,7 +175,7 @@ class DagPlannerTest {
         assertNotNull(nodes.get(0).metricQuery());
         assertEquals("kline",nodes.get(0).metric().provider());
         assertEquals(com.cexpilot.metric.KlineMetric.TURNOVER,nodes.get(0).metric().selector());
-        assertEquals(List.of("LLM_CALL", "PLAN", "PLAN_COMPILED"), events.stream().map(TraceEvent::eventType).toList());
+        assertEquals(List.of("LLM_CALL", "PLAN", "PLAN_COMPILED", "FOLLOWUP_PLAN"), events.stream().map(TraceEvent::eventType).toList());
         assertTrue(events.get(2).outputJson().contains("metric_binding"));
     }
     @Test void promptExposesOnlyMetricContractsAndOperators() {
@@ -450,5 +450,39 @@ class DagPlannerTest {
         var result = planner(llm, registry(), new DagConfig()).plan("问题", "", "t", e -> {});
         assertTrue(result.plan().isPresent(), result.lastError());
         assertNull(result.bindings());
+    }
+
+    @Test void plannerLlmCalls计数含修复重试() {
+        var query = metric("m1", "funding.rate_settled", "recent_n", "binance");
+        query.remove("interval");
+        query.putObject("time");
+        var missing = plan(query);
+        var valid = missing.deepCopy();
+        ((ObjectNode) valid.at("/metrics/0")).put("count", 10).remove("time");
+        // 首轮缺 count 被打回，第二轮修复成功：llmCalls 应为 2
+        var repaired = planner(new Script(envelope(missing), envelope(valid)), registry(), new DagConfig())
+                .plan("最近10期", "", "test", e -> {});
+        assertTrue(repaired.plan().isPresent());
+        assertEquals(2, repaired.llmCalls());
+        // 一次通过：llmCalls 为 1
+        var clean = planner(new Script(envelope(valid)), registry(), new DagConfig())
+                .plan("最近10期", "", "test", e -> {});
+        assertEquals(1, clean.llmCalls());
+    }
+
+    @Test void followupPlan事件记录口径绑定决策与声明() {
+        var llm = new Script(envelope(scalarPlan()));
+        List<TraceEvent> events = new ArrayList<>();
+        planner(llm, registry(), new DagConfig()).plan("昨天成交额", "", "test", events::add);
+
+        var summary = events.stream().filter(e -> "FOLLOWUP_PLAN".equals(e.eventType())).findFirst().orElseThrow();
+        var out = json(summary.outputJson());
+        assertEquals("trade.turnover", out.at("/metrics/0/metric").asText());
+        assertEquals("latest", out.at("/metrics/0/reference_mode").asText(), "无证据上下文时为 latest");
+        assertEquals("binance", out.at("/metrics/0/branches/0/exchange").asText());
+        assertEquals("FETCH", out.at("/metrics/0/branches/0/decision").asText(), "未绑定时决策为 FETCH");
+        assertEquals(0, out.at("/calculations").size());
+        assertEquals(0, out.path("changes").size(), "单轮无修改声明");
+        assertFalse(out.path("new_frame").asBoolean());
     }
 }

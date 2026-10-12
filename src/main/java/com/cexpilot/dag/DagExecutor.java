@@ -65,8 +65,8 @@ public class DagExecutor {
         pool.shutdown();
     }
 
-    /** 执行结果：节点产出上下文 + 拓扑层数（作为 ExecutionResult.steps）。 */
-    public record ExecutionOutcome(DagContext context, int layers) {
+    /** 执行结果：节点产出上下文 + 拓扑层数（作为 ExecutionResult.steps）+ 本轮真实 HTTP 请求数。 */
+    public record ExecutionOutcome(DagContext context, int layers, int httpRequests) {
     }
 
     /** 单节点的工作线程产出：结果 + 解析后的入参（供主线程落 trace）。 */
@@ -95,23 +95,38 @@ public class DagExecutor {
                                     RequestContext requestContext,
                                     com.cexpilot.metric.ExecutionBindings bindings) {
         DagContext ctx = new DagContext();
+        // 本轮共享的 HTTP 请求计数器：工作线程进入节点执行前绑定到线程，
+        // BinanceClient/OkxClient 每次真实发请求递增（一个节点分页多次请求会记多次）
+        java.util.concurrent.atomic.AtomicInteger httpRequests = new java.util.concurrent.atomic.AtomicInteger();
         List<List<PlanNode>> levels = topoLevels(plan);
         for (List<PlanNode> level : levels) {
             List<Future<NodeOutcome>> futures = new ArrayList<>();
             for (PlanNode node : level) {
-                futures.add(pool.submit(() -> runNode(node, ctx, traceId, requestContext, bindings)));
+                futures.add(pool.submit(() -> runNode(node, ctx, traceId, requestContext, bindings, httpRequests)));
             }
             for (int i = 0; i < level.size(); i++) {
                 collect(level.get(i), futures.get(i), ctx, traceId, sink, bindings);
             }
         }
-        return new ExecutionOutcome(ctx, levels.size());
+        return new ExecutionOutcome(ctx, levels.size(), httpRequests.get());
     }
 
     /** 工作线程：依赖检查 → 引用解析 → 工具执行；一切异常转为 ToolResult.failure。 */
     private NodeOutcome runNode(PlanNode node, DagContext ctx, String traceId,
                                 RequestContext requestContext,
-                                com.cexpilot.metric.ExecutionBindings bindings) {
+                                com.cexpilot.metric.ExecutionBindings bindings,
+                                java.util.concurrent.atomic.AtomicInteger httpRequests) {
+        com.cexpilot.market.HttpRequestCounter.bind(httpRequests);
+        try {
+            return doRunNode(node, ctx, traceId, requestContext, bindings);
+        } finally {
+            com.cexpilot.market.HttpRequestCounter.clear();
+        }
+    }
+
+    private NodeOutcome doRunNode(PlanNode node, DagContext ctx, String traceId,
+                                  RequestContext requestContext,
+                                  com.cexpilot.metric.ExecutionBindings bindings) {
         long start = System.currentTimeMillis();
         for (String dep : node.dependsOn()) {
             ToolResult depResult = ctx.get(dep);

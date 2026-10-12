@@ -154,6 +154,7 @@ public class DagRuntime {
                 activeFrame, effectiveContext, evidenceContext);
         int totalPromptTokens = outcome.promptTokens();
         int totalCompletionTokens = outcome.completionTokens();
+        int plannerLlmCalls = outcome.llmCalls();
 
         if (!outcome.inDomain()) {
             String answer = outcome.reply() == null || outcome.reply().isBlank()
@@ -162,7 +163,8 @@ public class DagRuntime {
                 answerDelta.accept(answer);
             }
             return new ExecutionResult(answer, MAPPER.createArrayNode(), 0, 0,
-                    totalPromptTokens, totalCompletionTokens);
+                    totalPromptTokens, totalCompletionTokens, null, null, 0,
+                    plannerLlmCalls, 0, 0, 0, 0, List.of());
         }
 
         // 澄清：不执行、不落 frame；编排层把轮次标 NEEDS_CLARIFICATION 并把澄清问题写入 pendingClarification
@@ -173,7 +175,8 @@ public class DagRuntime {
                 answerDelta.accept(answer);
             }
             return new ExecutionResult(answer, MAPPER.createArrayNode(), 0, 0,
-                    totalPromptTokens, totalCompletionTokens, "NEEDS_CLARIFICATION", outcome.reply());
+                    totalPromptTokens, totalCompletionTokens, "NEEDS_CLARIFICATION", outcome.reply(), 0,
+                    plannerLlmCalls, 0, 0, 0, 0, List.of());
         }
 
         // 没有获准执行的计划，就没有 Answer 调用；拒答也走同一个 SSE 返回路径。
@@ -186,7 +189,8 @@ public class DagRuntime {
                 answerDelta.accept(answer);
             }
             return new ExecutionResult(answer, MAPPER.createArrayNode(), 0, 0,
-                    totalPromptTokens, totalCompletionTokens);
+                    totalPromptTokens, totalCompletionTokens, null, null, 0,
+                    plannerLlmCalls, 0, 0, 0, 0, List.of());
         }
 
         ArrayNode evidence = MAPPER.createArrayNode();
@@ -209,20 +213,35 @@ public class DagRuntime {
         emit(progress, "数据获取完毕，正在组装答案…");
         steps = execution.layers();
         Map<String, String> savedFactIds = new java.util.HashMap<>();
+        List<String> newFactIds = new ArrayList<>();
         int reusedFactCount = 0;
+        int metricFetchCount = 0;
+        int calculationCount = 0;
         for (PlanNode node : plan.nodes()) {
             ToolResult result = execution.context().get(node.id());
             if (result == null) {
                 continue;
             }
             toolCallCount++;
+            boolean reusedNode = bindings != null && bindings.reuseFor(node.id()) != null;
+            // 计数拆分（阶段三）：REUSE_FACT 节点不算真实取数；tool 节点即算子节点
+            if (node.metric() != null && !reusedNode) {
+                metricFetchCount++;
+            } else if (node.metric() == null) {
+                calculationCount++;
+            }
             // 事实保存在 Answer 之前：即使 Answer 失败，本轮已取事实也已落库（F13）
             if (evidenceSession != null && evidenceStore != null) {
-                savedFactIds.putAll(saveFacts(outcome.plan().orElseThrow(), node, result, bindings,
-                        savedFactIds, evidenceSession, traceId, effectiveContext.requestTime()));
+                Map<String, String> saved = saveFacts(outcome.plan().orElseThrow(), node, result, bindings,
+                        savedFactIds, evidenceSession, traceId, effectiveContext.requestTime());
+                savedFactIds.putAll(saved);
+                if (!reusedNode) {
+                    // REUSE_FACT 沿用历史 factId，不算本轮新保存
+                    newFactIds.addAll(saved.values());
+                }
             }
             appendEvidence(evidence, node, result, bindings, savedFactIds);
-            if (bindings != null && bindings.reuseFor(node.id()) != null && result.ok()) {
+            if (reusedNode && result.ok()) {
                 reusedFactCount++;
             }
         }
@@ -240,7 +259,9 @@ public class DagRuntime {
         totalCompletionTokens += answer.completionTokens() == null ? 0 : answer.completionTokens();
 
         return new ExecutionResult(answer.content(), evidence, toolCallCount, steps,
-                totalPromptTokens, totalCompletionTokens, null, null, reusedFactCount);
+                totalPromptTokens, totalCompletionTokens, null, null, reusedFactCount,
+                plannerLlmCalls, 1, metricFetchCount, calculationCount, execution.httpRequests(),
+                newFactIds);
     }
 
     /**
