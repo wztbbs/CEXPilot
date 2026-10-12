@@ -309,6 +309,12 @@ public class DagPlanner {
                         return PlanDecision.bindingError(bind.error());
                     }
                     bindings = bind.bindings();
+                    // F05 后置校验：比较类算子的方向（pinned 旧快照必须在基准槽位）与字面量冒充拦截
+                    String comparisonError = binder.checkComparisonInputs(compiled, bindings,
+                            evidenceContext.candidates());
+                    if (comparisonError != null) {
+                        return repairDecision(traceId, sink, parsed.toString(), comparisonError);
+                    }
                 }
                 // plan 已合法时，超长 reply 直接丢弃，不再为 reply 重试。
                 String effectiveReply = isReasoningDump(reply) ? null : reply;

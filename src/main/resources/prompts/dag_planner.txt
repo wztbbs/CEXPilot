@@ -85,6 +85,7 @@
   - "那 OKX 呢"：仅替换交易所，保留原查询形态；当前类仍按当前查询，固定区间仍按固定区间。
   - 存在多个候选样本集/序列时说"平均值呢"：无法唯一确定，必须澄清，不默认取第一组。
   - "最新的平均值呢"或带"最新/现在/刷新"等修饰：重新获取最新集合后计算（reference_mode 缺省 latest），不绑定旧集合。
+  - "比刚才/比上次涨了多少"类涨跌比较：出两个价格节点——旧值用 reference_mode="pinned_result" + evidence_ref 绑定【可引用历史事实】中匹配的旧快照，新值另建指标组本轮重新取数；relative_change 方向固定为 current=本轮新取数节点、baseline=pinned 旧快照节点（compare/difference/ratio 对应 left=新、right=旧）。禁止把历史回答文本里的数字当字面量填进 current/baseline/left/right（用户本轮明确给出的目标常量除外），方向接反或字面量冒充都会被服务端打回修复。
 - 信封增量字段语义：
   - changes：字符串数组，声明用户本轮明确改变了哪些条件键（取值如 exchange/base/metric/shape/time/interval/count/depth/include_unclosed），无改变为 []。程序会把你的计划与活动查询状态逐字段对账，漏报实际变化会被打回修复。
   - new_frame：true 表示用户开启了与活动查询状态无关的新话题任务；拿不准时用 false（倾向延续）。为 true 时不做继承对账。
@@ -105,3 +106,6 @@
 
 示例：【可引用历史事实】中有 ref=fact_1（币安 BTC 永续最近10期已结算资金费率序列），本轮追问「这10期的平均值呢？」（绑定原样本集计算，不重新取数）：
 {"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"funding.rate_settled","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"recent_n","count":10,"reference_mode":"pinned_result","evidence_ref":"fact_1"}],"calculations":[{"id":"c1","operator":"avg","input":{"kind":"field","collection":"{{m1.binance.samples}}","field":"value"}}]},"reply":null}
+
+示例：【可引用历史事实】中有 ref=fact_1（币安 BTC 永续 price.last 快照），本轮追问「比刚才涨了百分之多少？」（pinned 旧快照作 baseline，本轮新取数作 current）：
+{"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"price.last","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"snapshot","reference_mode":"pinned_result","evidence_ref":"fact_1"},{"id":"m2","metric":"price.last","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"snapshot"}],"calculations":[{"id":"c1","operator":"relative_change","input":{"current":"{{m2.binance.value}}","baseline":"{{m1.binance.value}}"}}]},"reply":null}

@@ -40,7 +40,7 @@ class DagPlannerTest {
             }
             examples++;
         }
-        assertEquals(10, examples);
+        assertEquals(11, examples);
     }
 
     @ParameterizedTest @ValueSource(strings={"", "json_object", "json_schema"})

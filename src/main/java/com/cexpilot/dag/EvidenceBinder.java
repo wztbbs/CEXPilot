@@ -3,6 +3,7 @@ package com.cexpilot.dag;
 import com.cexpilot.evidence.EvidenceAssembler;
 import com.cexpilot.evidence.EvidenceFact;
 import com.cexpilot.evidence.EvidenceStore;
+import com.cexpilot.metric.CalculationRequest;
 import com.cexpilot.metric.CompiledPlan;
 import com.cexpilot.metric.EffectiveTarget;
 import com.cexpilot.metric.ExecutionBindings;
@@ -18,11 +19,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -37,6 +40,13 @@ import java.util.stream.Collectors;
 public class EvidenceBinder {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    /** 比较类算子的 (新值槽位, 基准/旧值槽位)：基准侧必须放 pinned 旧快照。 */
+    private static final Map<String, String[]> COMPARISON_SLOTS = Map.of(
+            "relative_change", new String[]{"current", "baseline"},
+            "compare", new String[]{"left", "right"},
+            "difference", new String[]{"left", "right"},
+            "ratio", new String[]{"left", "right"});
 
     private final EvidenceStore store;
 
@@ -120,6 +130,81 @@ public class EvidenceBinder {
                     fact.observedAt(), fact.fetchedAt().toString(), fact.payload().deepCopy()));
         }
         return BindResult.ok(new ExecutionBindings(reused));
+    }
+
+    /**
+     * 比较方向与字面量冒充校验（F05），绑定成功后调用，返回非空即进规划修复：
+     * 1) relative_change/compare/difference/ratio 一侧来自 pinned 复用节点、另一侧来自本轮取数时，
+     *    pinned（旧快照）必须在基准槽位（relative_change 的 baseline，其余算子的 right），接反报错；
+     * 2) 槽位直接填数值字面量、且与会话中某条可绑定历史快照的值一致时，视为用历史文本数字冒充，
+     *    报错引导改用 reference_mode="pinned_result" + evidence_ref 绑定。
+     * 只检查直接引用指标组的输入；经由上游计算节点间接引用的不在此校验。
+     */
+    public String checkComparisonInputs(CompiledPlan compiled, ExecutionBindings bindings,
+                                        List<EvidenceAssembler.Entry> candidates) {
+        Set<String> pinned = bindings == null ? Set.of() : bindings.reusedByNode().keySet();
+        for (CalculationRequest calc : compiled.logicalPlan().calculations()) {
+            String[] slots = COMPARISON_SLOTS.get(calc.operator());
+            if (slots == null) continue;
+            JsonNode fresh = calc.input().path(slots[0]);
+            JsonNode base = calc.input().path(slots[1]);
+            if (resolvesToPinned(fresh, compiled, pinned) && !resolvesToPinned(base, compiled, pinned)) {
+                return "calculations[" + calc.id() + "] " + calc.operator() + " 比较方向接反："
+                        + slots[1] + "（基准）必须引用 pinned_result 绑定的历史快照节点，"
+                        + slots[0] + " 必须引用本轮新取数节点；请交换两侧引用";
+            }
+            String literalError = literalImpersonation(calc, slots[0], fresh, candidates);
+            if (literalError == null) literalError = literalImpersonation(calc, slots[1], base, candidates);
+            if (literalError != null) return literalError;
+        }
+        return null;
+    }
+
+    /** 形如 {{组.交易所.字段}} 的直接指标引用是否落在 pinned 复用节点上。 */
+    private static boolean resolvesToPinned(JsonNode node, CompiledPlan compiled, Set<String> pinned) {
+        if (pinned.isEmpty() || node == null || !node.isTextual()) return false;
+        String text = node.asText();
+        if (!text.startsWith("{{") || !text.endsWith("}}")) return false;
+        String[] parts = text.substring(2, text.length() - 2).split("\\.");
+        if (parts.length < 3) return false; // 计算节点引用 {{c1.value}} 只有两段，不在此展开
+        String physicalId = compiled.branches().getOrDefault(parts[0], Map.of()).get(parts[1]);
+        return physicalId != null && pinned.contains(physicalId);
+    }
+
+    private static String literalImpersonation(CalculationRequest calc, String slot, JsonNode node,
+                                               List<EvidenceAssembler.Entry> candidates) {
+        BigDecimal literal = numericLiteral(node);
+        if (literal == null) return null;
+        for (EvidenceAssembler.Entry entry : candidates) {
+            EvidenceFact fact = entry.fact();
+            if (fact == null || fact.derived() || fact.payload() == null) continue;
+            JsonNode value = fact.payload().path("value");
+            if (!value.isNumber()) continue;
+            if (value.decimalValue().compareTo(literal) == 0) {
+                return "calculations[" + calc.id() + "] " + calc.operator() + " 的 " + slot
+                        + " 直接填了数值字面量 " + literal.toPlainString()
+                        + "，与【可引用历史事实】" + entry.ref() + " 的快照值一致，疑似把历史文本数字当比较输入："
+                        + "请为该历史快照建 reference_mode=\"pinned_result\" + evidence_ref=\"" + entry.ref()
+                        + "\" 的指标组，并以 {{...}} 引用它作为基准侧输入，不要用字面量";
+            }
+        }
+        return null;
+    }
+
+    /** 槽位上的数值字面量；{{...}} 引用或非数值文本返回 null。 */
+    private static BigDecimal numericLiteral(JsonNode node) {
+        if (node == null) return null;
+        if (node.isNumber()) return node.decimalValue();
+        if (node.isTextual()) {
+            String text = node.asText().trim();
+            if (text.isEmpty() || text.contains("{{")) return null;
+            try {
+                return new BigDecimal(text);
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return null;
     }
 
     /** 会话范围 / 派生 / 版本 / 有效期：与具体查询条件无关的通用断言；通过时带出库存事实本体。 */

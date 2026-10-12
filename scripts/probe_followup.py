@@ -1319,7 +1319,9 @@ def scenario_f16():
     t2 = turn(conv, "这一段的成交量合计呢？", timezone="Asia/Shanghai", tag="F16/2")
     covs = [r.get("coverage") for r in mrows(t1) + mrows(t2) if r.get("coverage") is not None]
     gap = any((isinstance(c, (int, float)) and c < 0.999)
-              or (isinstance(c, dict) and not c.get("complete", True)) for c in covs)
+              or (isinstance(c, dict) and not (c.get("range_complete", True)
+                                               and c.get("closed_part_complete", True)))
+              for c in covs)
     sum_rows = [r for r in crows(t2) if r["operator"] == "sum"]
     honest = (not gap) or bool(re.search(r"(缺口|不完整|部分|覆盖|缺失|仅为)", ans(t2)))
     if not any(covs):
@@ -1441,12 +1443,13 @@ def scenario_f21():
     conv = str(uuid.uuid4())
     t1 = turn(conv, "币安 BTC 现在最新成交价。", timezone="Asia/Shanghai", tag="F21/1")
     t2 = turn(conv, "还是刚才那个价格吗？", timezone="Asia/Shanghai", tag="F21/2")
-    names = {n for _, n in event_names((t2["d"] or {}).get("traceId"))}
-    has_reuse_ev = bool(names & {"CONTEXT_RESOLVED", "EVIDENCE_REUSE_DECISION"})
+    events = event_names((t2["d"] or {}).get("traceId"))
+    types = {tp for tp, _ in events}
+    has_reuse_ev = bool(types & {"CONTEXT_RESOLVED", "EVIDENCE_REUSE_DECISION", "FACT_REUSED"})
     checks = [
         ("trace 中有引用解析/复用决策事件", has_reuse_ev,
-         "证据缺失：现有 trace 无 CONTEXT_RESOLVED / EVIDENCE_REUSE_DECISION 事件，"
-         "无法验证「缓存被清理后的回退与冒充检测」；事件名=%s" % sorted(n for n in names if n)[:6]),
+         "证据缺失：现有 trace 无 CONTEXT_RESOLVED / EVIDENCE_REUSE_DECISION / FACT_REUSED 事件，"
+         "无法验证「缓存被清理后的回退与冒充检测」；事件类型=%s" % sorted(t for t in types if t)[:8]),
         ("未把重查的当前价冒充成原快照（答案含「刚才/原」字样时需能对上首轮值）",
          True, "行为面占位：缓存不可恢复场景需测试环境构造（清缓存/改 payload 版本）"),
     ]

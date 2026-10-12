@@ -57,8 +57,28 @@ class ExecutionBindingsTest {
         var metrics = plan.putArray("metrics");
         for (ObjectNode group : groups) metrics.add(group);
         plan.putArray("calculations");
+        return compilePlan(plan);
+    }
+
+    private static CompiledPlan compilePlan(ObjectNode plan) {
         return new MetricPlanCompiler(new MetricCatalog(MetricTestSupport.LOADER), registry(), catalogProviders())
                 .compileFull(plan, 8);
+    }
+
+    /** 旧快照 pinned（m1）+ 本轮新取数（m2）+ relative_change；swapped=true 时方向接反。 */
+    private static ObjectNode relativeChangePlan(boolean swapped) {
+        ObjectNode m1 = metricGroup("m1", "price.last", "snapshot", "binance");
+        m1.put("reference_mode", "pinned_result").put("evidence_ref", "fact_1");
+        ObjectNode plan = JSON.createObjectNode();
+        var metrics = plan.putArray("metrics");
+        metrics.add(m1);
+        metrics.add(metricGroup("m2", "price.last", "snapshot", "binance"));
+        ObjectNode c1 = JSON.createObjectNode().put("id", "c1").put("operator", "relative_change");
+        ObjectNode input = c1.putObject("input");
+        input.put("current", swapped ? "{{m1.binance.value}}" : "{{m2.binance.value}}");
+        input.put("baseline", swapped ? "{{m2.binance.value}}" : "{{m1.binance.value}}");
+        plan.putArray("calculations").add(c1);
+        return plan;
     }
 
     private static ObjectNode payloadFor(EffectiveTarget target, double value) {
@@ -191,6 +211,57 @@ class ExecutionBindingsTest {
         assertNull(result.error());
         assertEquals(0, result.bindings().reusedCount());
         assertTrue(events.stream().noneMatch(e -> e.eventType().equals("EVIDENCE_REUSE_DECISION")));
+    }
+
+    @Test
+    void 比较方向正确时放行() {
+        List<EvidenceAssembler.Entry> candidates = seedSnapshotFact();
+        CompiledPlan compiled = compilePlan(relativeChangePlan(false));
+        var result = bind(compiled, candidates);
+        assertNull(result.error(), result.error());
+        assertNull(binder.checkComparisonInputs(compiled, result.bindings(), candidates));
+    }
+
+    @Test
+    void pinned旧快照放到current侧时判方向接反() {
+        List<EvidenceAssembler.Entry> candidates = seedSnapshotFact();
+        CompiledPlan compiled = compilePlan(relativeChangePlan(true));
+        var result = bind(compiled, candidates);
+        assertNull(result.error(), result.error());
+        String error = binder.checkComparisonInputs(compiled, result.bindings(), candidates);
+        assertNotNull(error);
+        assertTrue(error.contains("方向接反"), error);
+    }
+
+    @Test
+    void 比较输入字面量与候选快照值一致时拦截() {
+        List<EvidenceAssembler.Entry> candidates = seedSnapshotFact(); // 快照 value=83000
+        ObjectNode plan = JSON.createObjectNode();
+        plan.putArray("metrics").add(metricGroup("m2", "price.last", "snapshot", "binance"));
+        ObjectNode c1 = JSON.createObjectNode().put("id", "c1").put("operator", "relative_change");
+        c1.putObject("input").put("current", "83000").put("baseline", "{{m2.binance.value}}");
+        plan.putArray("calculations").add(c1);
+        CompiledPlan compiled = compilePlan(plan);
+        var result = bind(compiled, candidates);
+        assertNull(result.error(), result.error());
+        String error = binder.checkComparisonInputs(compiled, result.bindings(), candidates);
+        assertNotNull(error);
+        assertTrue(error.contains("字面量"), error);
+        assertTrue(error.contains("fact_1"), error);
+    }
+
+    @Test
+    void 用户明确给出的常量不匹配候选时不误拦() {
+        List<EvidenceAssembler.Entry> candidates = seedSnapshotFact();
+        ObjectNode plan = JSON.createObjectNode();
+        plan.putArray("metrics").add(metricGroup("m2", "price.last", "snapshot", "binance"));
+        ObjectNode c1 = JSON.createObjectNode().put("id", "c1").put("operator", "relative_change");
+        c1.putObject("input").put("current", "100000").put("baseline", "{{m2.binance.value}}");
+        plan.putArray("calculations").add(c1);
+        CompiledPlan compiled = compilePlan(plan);
+        var result = bind(compiled, candidates);
+        assertNull(result.error(), result.error());
+        assertNull(binder.checkComparisonInputs(compiled, result.bindings(), candidates));
     }
 
     @Test
