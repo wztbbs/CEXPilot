@@ -48,6 +48,8 @@ class AskServiceTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final ConversationService conversation = mock(ConversationService.class);
+    private final com.cexpilot.conversation.ConversationContextService contextService =
+            mock(com.cexpilot.conversation.ConversationContextService.class);
     private final DagRuntime runtime = mock(DagRuntime.class);
     private final TraceRepository traceRepository = mock(TraceRepository.class);
     private final DbTraceSink traceSink = mock(DbTraceSink.class);
@@ -59,7 +61,7 @@ class AskServiceTest {
         LlmConfig llmConfig = new LlmConfig();
         llmConfig.getNormal().setModel("qwen-plus");
         ObjectProvider<BuildProperties> noBuildProps = mock(ObjectProvider.class);
-        service = new AskService(conversation, runtime, traceRepository, traceSink, llmConfig,
+        service = new AskService(conversation, contextService, runtime, traceRepository, traceSink, llmConfig,
                 Clock.fixed(Instant.parse("2026-10-12T00:00:00Z"), ZoneOffset.UTC), noBuildProps);
     }
 
@@ -75,7 +77,7 @@ class AskServiceTest {
     }
 
     private void stubRuntimeSuccess() {
-        when(runtime.execute(anyString(), anyString(), anyString(), any(), any(), any(), any(), any()))
+        when(runtime.execute(anyString(), anyString(), anyString(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(successResult());
     }
 
@@ -104,14 +106,14 @@ class AskServiceTest {
         assertTrue(response.busy());
         assertNull(response.traceId());
         assertNull(response.turnId());
-        verify(runtime, never()).execute(anyString(), anyString(), anyString(), any(), any(), any(), any(), any());
+        verify(runtime, never()).execute(anyString(), anyString(), anyString(), any(), any(), any(), any(), any(), any());
         verify(traceRepository, never()).startTrace(anyString(), anyString(), anyString(),
                 anyString(), anyString(), any(), anyString());
     }
 
     @Test
     void 执行失败时轮次落FAILED且不覆盖frame() {
-        when(runtime.execute(anyString(), anyString(), anyString(), any(), any(), any(), any(), any()))
+        when(runtime.execute(anyString(), anyString(), anyString(), any(), any(), any(), any(), any(), any()))
                 .thenThrow(new RuntimeException("LLM 超时"));
 
         assertThrows(RuntimeException.class,
@@ -178,7 +180,7 @@ class AskServiceTest {
         var entry = evidence.addObject();
         entry.put("node_id", "metric_0").put("type", "metric").put("ok", true);
         entry.set("identity", MAPPER.readTree("{\"metric\":\"price.high\"}"));
-        when(runtime.execute(anyString(), anyString(), anyString(), any(), any(), any(), any(), any()))
+        when(runtime.execute(anyString(), anyString(), anyString(), any(), any(), any(), any(), any(), any()))
                 .thenAnswer(inv -> {
                     @SuppressWarnings("unchecked")
                     Consumer<CompiledPlan> sink = (Consumer<CompiledPlan>) inv.getArgument(7);

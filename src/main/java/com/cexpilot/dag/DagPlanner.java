@@ -43,6 +43,7 @@ public class DagPlanner {
     private final PlanValidator validator;
     private final MetricCatalog catalog;
     private final MetricPlanCompiler compiler;
+    private final InheritanceValidator inheritanceValidator = new InheritanceValidator();
 
     public DagPlanner(LlmClient llm, ToolRegistry registry,
                       LlmConfig llmConfig, DagConfig dagConfig, PromptStore prompts,
@@ -70,13 +71,24 @@ public class DagPlanner {
      * 规划结果。inDomain=false 时 reply 为边界话术；inDomain=true 且 plan 为空表示
      * 模型判断工具不足以回答（reply 说明缺口）或 repair 耗尽（lastError 非空）。
      * plan 持有完整编译产物 CompiledPlan（含 LogicalPlan 与逻辑→物理映射），执行用其中的 dagPlan。
+     * needsClarification=true 时表示 Planner 要求澄清（reply 为澄清文案），不执行、不落 frame。
      */
     public record PlanOutcome(boolean inDomain, String reply,
                               Optional<com.cexpilot.metric.CompiledPlan> plan, int promptTokens, int completionTokens,
-                              String lastError) {
+                              String lastError, boolean needsClarification) {
     }
 
     public PlanOutcome plan(String question, String conversationContext, String traceId, TraceSink sink) {
+        return plan(question, conversationContext, traceId, sink, null, null);
+    }
+
+    /**
+     * @param activeFrame    活动 QueryFrame（阶段一 c）；非 null 时与 Planner 声明的 changes/new_frame 做继承对账
+     * @param requestContext 请求时间上下文；时间条件按消解后的绝对区间对账，需要本请求的基准时间与时区
+     */
+    public PlanOutcome plan(String question, String conversationContext, String traceId, TraceSink sink,
+                            com.cexpilot.conversation.QueryFrame activeFrame,
+                            com.cexpilot.runtime.RequestContext requestContext) {
         int maxToolCalls = llmConfig.getMaxToolCalls();
         String systemPrompt = systemPrompt(conversationContext);
         JsonNode responseFormat = plannerResponseFormat();
@@ -94,7 +106,8 @@ public class DagPlanner {
             promptTokens += response.promptTokens() == null ? 0 : response.promptTokens();
             completionTokens += response.completionTokens() == null ? 0 : response.completionTokens();
 
-            PlanDecision decision = evaluateResponse(response.content(), maxToolCalls, traceId, sink);
+            PlanDecision decision = evaluateResponse(response.content(), maxToolCalls, traceId, sink,
+                    activeFrame, requestContext);
             if (decision.error() == null) {
                 return decision.toOutcome(promptTokens, completionTokens);
             }
@@ -103,24 +116,30 @@ public class DagPlanner {
         }
         // repair 耗尽：runtime 直接返回固定失败话术，禁止继续生成无事实答案。
         return new PlanOutcome(true, null,
-                Optional.empty(), promptTokens, completionTokens, lastError);
+                Optional.empty(), promptTokens, completionTokens, lastError, false);
     }
 
     /** 单轮判断不负责 token 累计；error 非空时由 plan 统一追加修复消息并重试。 */
     private record PlanDecision(boolean inDomain, String reply, com.cexpilot.metric.CompiledPlan plan,
-                                String error) {
+                                String error, boolean needsClarification) {
         private static PlanDecision accepted(boolean inDomain, String reply, com.cexpilot.metric.CompiledPlan plan) {
-            return new PlanDecision(inDomain, reply, plan, null);
+            return new PlanDecision(inDomain, reply, plan, null, false);
+        }
+
+        private static PlanDecision clarification(String reply) {
+            return new PlanDecision(true, reply, null, null, true);
         }
 
         private PlanOutcome toOutcome(int promptTokens, int completionTokens) {
             return new PlanOutcome(inDomain, reply, Optional.ofNullable(plan),
-                    promptTokens, completionTokens, error);
+                    promptTokens, completionTokens, error, needsClarification);
         }
     }
 
     private PlanDecision evaluateResponse(String content, int maxToolCalls,
-                                          String traceId, TraceSink sink) {
+                                          String traceId, TraceSink sink,
+                                          com.cexpilot.conversation.QueryFrame activeFrame,
+                                          com.cexpilot.runtime.RequestContext requestContext) {
         JsonNode parsed;
         try {
             parsed = LlmJson.parse(content);
@@ -137,17 +156,30 @@ public class DagPlanner {
             sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
             return PlanDecision.accepted(false, textOrNull(parsed.path("reply")), null);
         }
-        return evaluateInDomainResponse(parsed, maxToolCalls, traceId, sink);
+        return evaluateInDomainResponse(parsed, maxToolCalls, traceId, sink, activeFrame, requestContext);
     }
 
     private PlanDecision evaluateInDomainResponse(JsonNode parsed, int maxToolCalls,
-                                                  String traceId, TraceSink sink) {
+                                                  String traceId, TraceSink sink,
+                                                  com.cexpilot.conversation.QueryFrame activeFrame,
+                                                  com.cexpilot.runtime.RequestContext requestContext) {
         String reply = textOrNull(parsed.path("reply"));
+        // 澄清决策（阶段一 c 协议增量字段，缺省按旧行为 false）：不执行、不落 frame，由程序落 NEEDS_CLARIFICATION
+        if (parsed.path("needs_clarification").asBoolean(false)) {
+            String clarify = textOrNull(parsed.path("clarify"));
+            String text = clarify != null && !clarify.isBlank() ? clarify : reply;
+            if (text == null || text.isBlank()) {
+                return repairDecision(traceId, sink, parsed.toString(),
+                        "needs_clarification=true 时必须在 clarify 写明要问用户的一句澄清问题");
+            }
+            sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
+            return PlanDecision.clarification(text);
+        }
         JsonNode planNode = parsed.path("plan");
         if (!planNode.isObject()) {
             return evaluateReplyWithoutPlan(parsed, reply, traceId, sink);
         }
-        return validatePlan(parsed, reply, maxToolCalls, traceId, sink);
+        return validatePlan(parsed, reply, maxToolCalls, traceId, sink, activeFrame, requestContext);
     }
 
     private PlanDecision evaluateReplyWithoutPlan(JsonNode parsed, String reply,
@@ -170,7 +202,9 @@ public class DagPlanner {
     }
 
     private PlanDecision validatePlan(JsonNode parsed, String reply, int maxToolCalls,
-                                      String traceId, TraceSink sink) {
+                                      String traceId, TraceSink sink,
+                                      com.cexpilot.conversation.QueryFrame activeFrame,
+                                      com.cexpilot.runtime.RequestContext requestContext) {
         String error;
         try {
             com.cexpilot.metric.CompiledPlan compiled =
@@ -181,6 +215,15 @@ public class DagPlanner {
             }
             List<String> errors = validator.validate(plan, compiler.allowedTools(), maxToolCalls);
             if (errors.isEmpty()) {
+                // 继承对账（阶段一 c）：new_frame=true 跳过（本期旧 frame 在成功提交时被简单覆盖，
+                // 近期 frame 索引后续再做）；声明的 changes 漏报实际变化则进规划修复，不强行执行。
+                if (activeFrame != null && !parsed.path("new_frame").asBoolean(false)) {
+                    String reconciliation = inheritanceValidator.check(activeFrame, compiled,
+                            declaredChanges(parsed), requestContext);
+                    if (reconciliation != null) {
+                        return repairDecision(traceId, sink, parsed.toString(), reconciliation);
+                    }
+                }
                 sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
                 sink.record(new TraceEvent(traceId, "PLAN_COMPILED", "metric_compiler",
                         MAPPER.createObjectNode().put("catalog_version", catalog.version()).toString(),
@@ -196,6 +239,20 @@ public class DagPlanner {
         return repairDecision(traceId, sink, parsed.toString(), error);
     }
 
+    /** 协议增量字段 changes：字符串数组，缺省/非法按空数组（旧行为）处理。 */
+    private static java.util.Set<String> declaredChanges(JsonNode parsed) {
+        java.util.Set<String> changes = new java.util.LinkedHashSet<>();
+        JsonNode node = parsed.path("changes");
+        if (node.isArray()) {
+            for (JsonNode item : node) {
+                if (item.isTextual()) {
+                    changes.add(item.asText());
+                }
+            }
+        }
+        return changes;
+    }
+
     private String planValidationError(List<String> errors) {
         return "plan 校验失败: " + String.join("; ", errors)
                 + "；仅使用指标目录与算子，引用格式为 {{指标组.交易所.value}} / {{计算ID.value}}，不要输出底层 Tool 节点";
@@ -203,7 +260,7 @@ public class DagPlanner {
 
     private PlanDecision repairDecision(String traceId, TraceSink sink, String output, String error) {
         sink.record(TraceEvent.plan(traceId, output, error));
-        return new PlanDecision(true, null, null, error);
+        return new PlanDecision(true, null, null, error, false);
     }
 
     /** 判断 reply 是否是推理 dump：合法话术很短，超长即视为协议误用。 */

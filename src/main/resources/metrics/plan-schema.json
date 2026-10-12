@@ -168,6 +168,37 @@
         "metrics",
         "calculations"
       ]
+    },
+    "changes": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      },
+      "description": "用户本轮明确改变的条件键；无改为 []"
+    },
+    "new_frame": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "是否开启与活动查询状态无关的新话题；缺省 false"
+    },
+    "needs_clarification": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "指代不明或缺条件时置 true 并在 clarify 写澄清问题"
+    },
+    "clarify": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "needs_clarification=true 时给用户的澄清问题"
     }
   },
   "required": [

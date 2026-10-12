@@ -96,11 +96,29 @@ public class DagRuntime {
                                    TraceSink sink, Consumer<String> answerDelta,
                                    RequestContext requestContext, Consumer<String> progress,
                                    Consumer<com.cexpilot.metric.CompiledPlan> compiledPlanSink) {
+        return execute(question, conversationContext, traceId, sink, answerDelta, requestContext, progress,
+                compiledPlanSink, null);
+    }
+
+    /**
+     * @param plannerInput 结构化 Planner 输入（阶段一 c）：contextText 只注入 planner prompt，
+     *                     activeFrame 供继承对账；Answer 侧仍用 conversationContext 纯文本，不受影响。
+     *                     null 时 planner 沿用 conversationContext（旧行为）
+     */
+    public ExecutionResult execute(String question, String conversationContext, String traceId,
+                                   TraceSink sink, Consumer<String> answerDelta,
+                                   RequestContext requestContext, Consumer<String> progress,
+                                   Consumer<com.cexpilot.metric.CompiledPlan> compiledPlanSink,
+                                   com.cexpilot.conversation.PlannerInput plannerInput) {
         RequestContext effectiveContext = resolveRequestContext(requestContext);
         ObjectNode timeContext = answerTimeContext(effectiveContext,
                 requestContext != null && requestContext.userZone() != null);
+        String plannerContext = plannerInput != null && plannerInput.contextText() != null
+                ? plannerInput.contextText() : conversationContext;
+        com.cexpilot.conversation.QueryFrame activeFrame = plannerInput != null ? plannerInput.activeFrame() : null;
         emit(progress, "正在生成执行计划…");
-        DagPlanner.PlanOutcome outcome = planner.plan(question, conversationContext, traceId, sink);
+        DagPlanner.PlanOutcome outcome = planner.plan(question, plannerContext, traceId, sink,
+                activeFrame, effectiveContext);
         int totalPromptTokens = outcome.promptTokens();
         int totalCompletionTokens = outcome.completionTokens();
 
@@ -112,6 +130,17 @@ public class DagRuntime {
             }
             return new ExecutionResult(answer, MAPPER.createArrayNode(), 0, 0,
                     totalPromptTokens, totalCompletionTokens);
+        }
+
+        // 澄清：不执行、不落 frame；编排层把轮次标 NEEDS_CLARIFICATION 并把澄清问题写入 pendingClarification
+        if (outcome.needsClarification()) {
+            String answer = outcome.reply() == null || outcome.reply().isBlank()
+                    ? "这个问题我需要再确认一下，请补充说明。" : outcome.reply();
+            if (answerDelta != null) {
+                answerDelta.accept(answer);
+            }
+            return new ExecutionResult(answer, MAPPER.createArrayNode(), 0, 0,
+                    totalPromptTokens, totalCompletionTokens, "NEEDS_CLARIFICATION", outcome.reply());
         }
 
         // 没有获准执行的计划，就没有 Answer 调用；拒答也走同一个 SSE 返回路径。

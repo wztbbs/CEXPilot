@@ -27,6 +27,7 @@ public class AskService {
     private static final Logger log = LoggerFactory.getLogger(AskService.class);
 
     private final ConversationService conversation;
+    private final com.cexpilot.conversation.ConversationContextService contextService;
     private final DagRuntime runtime;
     private final TraceRepository traceRepository;
     private final DbTraceSink traceSink;
@@ -36,6 +37,7 @@ public class AskService {
     private final String buildCommit;
 
     public AskService(ConversationService conversation,
+                      com.cexpilot.conversation.ConversationContextService contextService,
                       DagRuntime runtime,
                       TraceRepository traceRepository,
                       DbTraceSink traceSink,
@@ -43,6 +45,7 @@ public class AskService {
                       Clock clock,
                       ObjectProvider<BuildProperties> buildProperties) {
         this.conversation = conversation;
+        this.contextService = contextService;
         this.runtime = runtime;
         this.traceRepository = traceRepository;
         this.traceSink = traceSink;
@@ -124,8 +127,11 @@ public class AskService {
             return busy;
         }
 
-        // 3. 渲染对话上下文：Answer 与 Planner 共用 renderContext 纯文本（阶段一 c 将切换为 Planner 分层结构化上下文）。
+        // 3. 渲染对话上下文：Answer 侧仍用 renderContext 纯文本（口径不变）；
+        //    Planner 侧用分层结构化上下文（活动 frame + 带时间的近期问答，阶段一 c）。
         String conversationContext = conversation.renderContext(resolvedConversationId);
+        com.cexpilot.conversation.PlannerInput plannerInput =
+                contextService.buildPlannerInput(resolvedConversationId);
 
         // 4. 开启 trace：写入一条 RUNNING 记录。traceId 是本次问答的全局标识——
         //    后续每次 LLM 调用、每次工具调用都会以它为外键落 trace_event，
@@ -150,7 +156,7 @@ public class AskService {
             //    轮次提交 SUCCEEDED（补 answer/trace_id/finished_at、释放执行占用），成为后续追问的上下文。
             ExecutionResult result = runtime.execute(question, conversationContext, traceId, traceSink,
                     listener == null ? null : listener::onDelta, requestContext,
-                    listener == null ? null : listener::onProgress, compiledPlanRef::set);
+                    listener == null ? null : listener::onProgress, compiledPlanRef::set, plannerInput);
             long durationMs = System.currentTimeMillis() - start;
             double cost = computeCost(result.promptTokens(), result.completionTokens());
 
