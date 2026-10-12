@@ -79,7 +79,7 @@ class AskServiceTest {
     }
 
     private void stubRuntimeSuccess() {
-        when(runtime.execute(anyString(), anyString(), anyString(), any(), any(), any(), any(), any(), any()))
+        when(runtime.execute(anyString(), anyString(), anyString(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(successResult());
     }
 
@@ -95,7 +95,7 @@ class AskServiceTest {
         verify(conversation).beginTurn("conv-1", "BTC 多少钱", "parent-1", T0);
         verify(conversation).finishTurn("conv-1", turn, "SUCCEEDED", "答案", response.traceId(), null, null);
         verify(traceRepository).finishTrace(eq(response.traceId()), eq("SUCCESS"), eq("答案"),
-                anyInt(), anyInt(), anyInt(), anyInt(), any(), anyLong(), isNull());
+                anyInt(), anyInt(), anyInt(), anyInt(), any(), anyLong(), isNull(), eq(0));
     }
 
     @Test
@@ -108,14 +108,14 @@ class AskServiceTest {
         assertTrue(response.busy());
         assertNull(response.traceId());
         assertNull(response.turnId());
-        verify(runtime, never()).execute(anyString(), anyString(), anyString(), any(), any(), any(), any(), any(), any());
+        verify(runtime, never()).execute(anyString(), anyString(), anyString(), any(), any(), any(), any(), any(), any(), any());
         verify(traceRepository, never()).startTrace(anyString(), anyString(), anyString(),
                 anyString(), anyString(), any(), anyString());
     }
 
     @Test
     void 执行失败时轮次落FAILED且不覆盖frame() {
-        when(runtime.execute(anyString(), anyString(), anyString(), any(), any(), any(), any(), any(), any()))
+        when(runtime.execute(anyString(), anyString(), anyString(), any(), any(), any(), any(), any(), any(), any()))
                 .thenThrow(new RuntimeException("LLM 超时"));
 
         assertThrows(RuntimeException.class,
@@ -182,7 +182,7 @@ class AskServiceTest {
         var entry = evidence.addObject();
         entry.put("node_id", "metric_0").put("type", "metric").put("ok", true);
         entry.set("identity", MAPPER.readTree("{\"metric\":\"price.high\"}"));
-        when(runtime.execute(anyString(), anyString(), anyString(), any(), any(), any(), any(), any(), any()))
+        when(runtime.execute(anyString(), anyString(), anyString(), any(), any(), any(), any(), any(), any(), any()))
                 .thenAnswer(inv -> {
                     @SuppressWarnings("unchecked")
                     Consumer<CompiledPlan> sink = (Consumer<CompiledPlan>) inv.getArgument(7);

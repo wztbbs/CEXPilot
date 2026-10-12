@@ -10,6 +10,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -98,5 +99,36 @@ class ConversationContextServiceTest {
         assertFalse(ctx.contains("数".repeat(501)), "答案应被截断到 500 字");
         assertTrue(ctx.contains("数".repeat(500)), "前 500 字应保留");
         assertTrue(ctx.contains("price.high"), "结构化条件不受文本截断影响");
+    }
+
+    @Test
+    void 有可引用历史事实时渲染候选段且不受文本截断影响() throws Exception {
+        var store = new com.cexpilot.evidence.EvidenceStore(
+                new com.cexpilot.evidence.InMemoryEvidenceRepository());
+        QueryFrame frame = sampleFrame();
+        EffectiveTarget target = frame.targets().get(0);
+        JsonNode payload = MAPPER.readTree("""
+                {"metric":"price.high","exchange":"binance","query_shape":"range_statistic","unit":"USDT",
+                 "requested_range":{"start_inclusive":"2026-10-11 00:00:00","end_exclusive":"2026-10-12 00:00:00",
+                 "timezone":"Asia/Shanghai"},"value":83955}
+                """);
+        store.saveFact("conv-1", "turn-1", "trace-1", target, payload, Instant.parse("2026-10-12T01:00:00Z"));
+        var withEvidence = new ConversationContextService(repository, store);
+        String longAnswer = "数".repeat(600);
+        when(repository.findActiveFrameJson("conv-1")).thenReturn(frame.toJson());
+        when(repository.recentQueries("conv-1", 5)).thenReturn(List.of(record("q", longAnswer)));
+
+        PlannerInput input = withEvidence.buildPlannerInput("conv-1");
+
+        assertEquals(1, input.evidence().size());
+        assertEquals("fact_1", input.evidence().get(0).ref());
+        String ctx = input.contextText();
+        assertTrue(ctx.contains("【可引用历史事实】"), ctx);
+        assertTrue(ctx.contains("ref=fact_1"), ctx);
+        assertTrue(ctx.contains("price.high"), ctx);
+        assertFalse(ctx.contains("83955"), "候选索引不含 payload 明细数值");
+        assertTrue(ctx.contains("数".repeat(500)), "文本历史仍按原口径截断，事实段优先保留");
+        // 其它会话的事实不进本会话候选
+        assertTrue(service.buildPlannerInput("conv-1").evidence().isEmpty(), "无 store 时旧行为：无候选段");
     }
 }

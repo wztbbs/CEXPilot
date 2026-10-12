@@ -11,6 +11,7 @@ import java.util.List;
 /**
  * 结构化上下文组装（多轮追问阶段一 c）：加载活动 QueryFrame + 近期文本历史，
  * 分层渲染成 Planner 的 conversation_context；activeFrame 本体同时供程序侧继承对账使用。
+ * 阶段二追加【可引用历史事实】段（EvidenceAssembler 候选索引，只含别名与身份摘要，不含明细）。
  *
  * 降级原则：frame 读不到或反序列化失败时退回纯文本历史（旧行为），只记日志，不让老会话报错。
  * Answer 侧仍用 ConversationService.renderContext 的纯文本口径，本类不影响 Answer 输入。
@@ -22,19 +23,43 @@ public class ConversationContextService {
 
     private static final int HISTORY_QUERY_LIMIT = 5;
     // Planner 需要看清上一轮的口径与结论才能正确继承，截断太狠会丢指代；故比 Answer 侧（300）放宽。
-    // 只裁剪文本层，结构化条件不参与截断。
+    // 只裁剪文本层，结构化条件与可引用事实段不参与截断（预算不足时优先裁文本历史）。
     private static final int HISTORY_ANSWER_MAX_CHARS = 500;
     private static final DateTimeFormatter HISTORY_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
     private final ConversationRepository repository;
+    // 阶段二：历史事实存取；null 时不渲染可引用事实段（单轮旧行为）
+    private final com.cexpilot.evidence.EvidenceStore evidenceStore;
 
     public ConversationContextService(ConversationRepository repository) {
+        this(repository, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ConversationContextService(ConversationRepository repository,
+                                      com.cexpilot.evidence.EvidenceStore evidenceStore) {
         this.repository = repository;
+        this.evidenceStore = evidenceStore;
     }
 
     public PlannerInput buildPlannerInput(String conversationId) {
         QueryFrame frame = loadActiveFrame(conversationId);
-        return new PlannerInput(render(frame, renderTextHistory(conversationId)), frame);
+        List<com.cexpilot.evidence.EvidenceAssembler.Entry> evidence = loadEvidence(conversationId);
+        return new PlannerInput(render(frame, renderTextHistory(conversationId), evidence), frame, evidence);
+    }
+
+    /** 可引用历史事实：未过期且有缓存 payload 的 FACT，按取数时间倒序分配稳定短别名。读不到就空列表。 */
+    private List<com.cexpilot.evidence.EvidenceAssembler.Entry> loadEvidence(String conversationId) {
+        if (evidenceStore == null) {
+            return List.of();
+        }
+        try {
+            return com.cexpilot.evidence.EvidenceAssembler.assignRefs(
+                    evidenceStore.listReusable(conversationId, java.time.Instant.now()));
+        } catch (Exception e) {
+            log.warn("历史事实读取失败，本轮按无可引用事实处理 conversationId={}: {}", conversationId, e.getMessage());
+            return List.of();
+        }
     }
 
     private QueryFrame loadActiveFrame(String conversationId) {
@@ -68,6 +93,11 @@ public class ConversationContextService {
     }
 
     static String render(QueryFrame frame, String textHistory) {
+        return render(frame, textHistory, List.of());
+    }
+
+    static String render(QueryFrame frame, String textHistory,
+                         List<com.cexpilot.evidence.EvidenceAssembler.Entry> evidence) {
         StringBuilder sb = new StringBuilder();
         if (frame != null) {
             sb.append("【活动查询状态】（程序维护的结构化条件，可信，优先于下方文字历史）\n");
@@ -80,6 +110,8 @@ public class ConversationContextService {
                 sb.append("【待补条件】上一轮未完成的澄清：").append(frame.pendingClarification()).append('\n');
             }
         }
+        // 可引用事实段先于文本历史：预算不足时优先裁文本历史，事实索引完整保留
+        sb.append(com.cexpilot.evidence.EvidenceAssembler.render(evidence));
         if (!textHistory.isBlank()) {
             sb.append("【近期问答】（仅辅助理解表达，不作为数据来源）\n").append(textHistory);
         }

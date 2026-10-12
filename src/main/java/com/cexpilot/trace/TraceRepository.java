@@ -32,15 +32,25 @@ public class TraceRepository {
     public void finishTrace(String traceId, String status, String answer, int llmSteps, int toolCalls,
                             Integer promptTokens, Integer completionTokens, Double cost,
                             long durationMs, String error) {
+        finishTrace(traceId, status, answer, llmSteps, toolCalls, promptTokens, completionTokens, cost,
+                durationMs, error, null);
+    }
+
+    /**
+     * @param reusedFacts 本轮复用的历史事实数（阶段二）；null 表示不更新该列（失败路径等）
+     */
+    public void finishTrace(String traceId, String status, String answer, int llmSteps, int toolCalls,
+                            Integer promptTokens, Integer completionTokens, Double cost,
+                            long durationMs, String error, Integer reusedFacts) {
         jdbc.update("""
                         UPDATE ask_trace
                         SET status = ?, answer = ?, llm_steps = ?, tool_calls = ?,
                             prompt_tokens = ?, completion_tokens = ?, cost = ?, duration_ms = ?,
-                            error = ?, finished_at = NOW()
+                            error = ?, reused_facts = COALESCE(?, reused_facts), finished_at = NOW()
                         WHERE trace_id = ?
                         """,
                 status, answer, llmSteps, toolCalls, promptTokens, completionTokens, cost,
-                durationMs, error, traceId);
+                durationMs, error, reusedFacts, traceId);
     }
 
     public void appendEvent(String traceId, TraceEvent event) {

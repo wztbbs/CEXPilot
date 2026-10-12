@@ -157,13 +157,14 @@ public class AskService {
             //    轮次提交 SUCCEEDED（补 answer/trace_id/finished_at、释放执行占用），成为后续追问的上下文。
             ExecutionResult result = runtime.execute(question, conversationContext, traceId, traceSink,
                     listener == null ? null : listener::onDelta, requestContext,
-                    listener == null ? null : listener::onProgress, compiledPlanRef::set, plannerInput);
+                    listener == null ? null : listener::onProgress, compiledPlanRef::set, plannerInput,
+                    new com.cexpilot.evidence.EvidenceSession(resolvedConversationId, turn.turnId()));
             long durationMs = System.currentTimeMillis() - start;
             double cost = computeCost(result.promptTokens(), result.completionTokens());
 
             traceRepository.finishTrace(traceId, "SUCCESS", result.answer(), result.steps(),
                     result.toolCallCount(), result.promptTokens(), result.completionTokens(),
-                    cost, durationMs, null);
+                    cost, durationMs, null, result.reusedFactCount());
 
             // QueryFrame 随成功轮次提交覆盖活动 frame（失败/澄清轮次不覆盖）；下一轮由
             // ConversationContextService 读取注入 Planner 并做继承对账（阶段一 c）。

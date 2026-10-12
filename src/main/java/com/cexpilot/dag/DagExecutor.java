@@ -83,15 +83,26 @@ public class DagExecutor {
      */
     public ExecutionOutcome execute(DagPlan plan, String traceId, TraceSink sink,
                                     RequestContext requestContext) {
+        return execute(plan, traceId, sink, requestContext, null);
+    }
+
+    /**
+     * @param bindings 服务端生成的执行期绑定（阶段二）；非 null 时 REUSE_FACT 节点不走 Provider，
+     *                 直接把历史事实 payload 播种进 DagContext（nodeId=本轮物理节点 id），
+     *                 下游 ReferenceResolver/算子/来源校验零改动
+     */
+    public ExecutionOutcome execute(DagPlan plan, String traceId, TraceSink sink,
+                                    RequestContext requestContext,
+                                    com.cexpilot.metric.ExecutionBindings bindings) {
         DagContext ctx = new DagContext();
         List<List<PlanNode>> levels = topoLevels(plan);
         for (List<PlanNode> level : levels) {
             List<Future<NodeOutcome>> futures = new ArrayList<>();
             for (PlanNode node : level) {
-                futures.add(pool.submit(() -> runNode(node, ctx, traceId, requestContext)));
+                futures.add(pool.submit(() -> runNode(node, ctx, traceId, requestContext, bindings)));
             }
             for (int i = 0; i < level.size(); i++) {
-                collect(level.get(i), futures.get(i), ctx, traceId, sink);
+                collect(level.get(i), futures.get(i), ctx, traceId, sink, bindings);
             }
         }
         return new ExecutionOutcome(ctx, levels.size());
@@ -99,7 +110,8 @@ public class DagExecutor {
 
     /** 工作线程：依赖检查 → 引用解析 → 工具执行；一切异常转为 ToolResult.failure。 */
     private NodeOutcome runNode(PlanNode node, DagContext ctx, String traceId,
-                                RequestContext requestContext) {
+                                RequestContext requestContext,
+                                com.cexpilot.metric.ExecutionBindings bindings) {
         long start = System.currentTimeMillis();
         for (String dep : node.dependsOn()) {
             ToolResult depResult = ctx.get(dep);
@@ -108,6 +120,11 @@ public class DagExecutor {
                 return new NodeOutcome(ToolResult.failure("skipped: 上游节点失败"),
                         null, System.currentTimeMillis() - start);
             }
+        }
+        if (node.metric() != null && bindings != null && bindings.reuseFor(node.id()) != null) {
+            // REUSE_FACT：不访问 Provider，直接以缓存 payload 作为本节点产出（保留原观测时间与口径）
+            return new NodeOutcome(ToolResult.success(bindings.reuseFor(node.id()).payload().deepCopy()),
+                    node.args().toString(), System.currentTimeMillis() - start);
         }
         JsonNode resolvedArgs = null;
         ToolResult result;
@@ -147,9 +164,10 @@ public class DagExecutor {
                 System.currentTimeMillis() - start);
     }
 
-    /** 主线程回收：带超时等待 → 写 DagContext → 落 TOOL_CALL trace（inputJson 含 nodeId 与解析后 args）。 */
+    /** 主线程回收：带超时等待 → 写 DagContext → 落 trace；REUSE_FACT 节点落 FACT_REUSED，不伪装成 METRIC_RESULT。 */
     private void collect(PlanNode node, Future<NodeOutcome> future, DagContext ctx,
-                         String traceId, TraceSink sink) {
+                         String traceId, TraceSink sink,
+                         com.cexpilot.metric.ExecutionBindings bindings) {
         NodeOutcome outcome;
         try {
             outcome = future.get(config.getNodeTimeoutMs(), TimeUnit.MILLISECONDS);
@@ -169,7 +187,22 @@ public class DagExecutor {
                     null, 0);
         }
         ToolResult result = outcome.result();
-        if (node.metric() != null) {
+        com.cexpilot.metric.ExecutionBindings.ReuseFact reuse =
+                node.metric() != null && bindings != null ? bindings.reuseFor(node.id()) : null;
+        if (reuse != null) {
+            // 复用事实保留来源轮次与观测时刻；不写 METRIC_RESULT，保持其"本轮真实 API 取数"语义纯净
+            ObjectNode input = MAPPER.createObjectNode();
+            input.put("node_id", node.id());
+            input.put("fact_id", reuse.factId());
+            input.put("source_turn_id", reuse.sourceTurnId());
+            if (reuse.observedAt() != null) input.put("observed_at", reuse.observedAt());
+            input.put("fetched_at", reuse.fetchedAt());
+            input.put("reference_mode", "PINNED_RESULT");
+            input.set("metric_binding", node.metric().identity());
+            sink.record(new TraceEvent(traceId, "FACT_REUSED", node.metric().metric(),
+                    input.toString(), result.toMessageContent(), outcome.durationMs(),
+                    null, null, null, null, result.error()));
+        } else if (node.metric() != null) {
             // Provider 已直接返回指标模型；没有原始 Tool 调用，也不进行第二次适配。
             ObjectNode input = MAPPER.createObjectNode();
             input.put("node_id", node.id());

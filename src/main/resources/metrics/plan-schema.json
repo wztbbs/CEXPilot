@@ -105,6 +105,18 @@
                 "minimum": 5,
                 "maximum": 50,
                 "description": "盘口档位数，仅声明 depth 的指标可用"
+              },
+              "reference_mode": {
+                "type": "string",
+                "enum": [
+                  "pinned_result",
+                  "latest"
+                ],
+                "description": "pinned_result=绑定【可引用历史事实】中的已验证快照（必填 evidence_ref）；latest 或缺省=重新取数"
+              },
+              "evidence_ref": {
+                "type": "string",
+                "description": "可引用历史事实的 ref 短别名（如 fact_1），仅 reference_mode=pinned_result 时有效"
               }
             },
             "required": [

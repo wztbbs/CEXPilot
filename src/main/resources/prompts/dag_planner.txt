@@ -23,8 +23,9 @@
 - query_shape=time_series 时输出 samples:[{time:string,value:number}]，不是二维数组；没有顶层 value。每个结果都带指标、单位、品种、时间窗口、K 线粒度、覆盖状态等元信息。
 - calculations 每项必填 id、operator、input。指标值引用 {{m1.binance.value}}，序列引用 {{m1.okx.samples}}，单个元素引用 {{m1.okx.samples.0.value}}，计算结果引用 {{c1.value}} 或算子输出契约中的其他字段。
 - 不输出 type、tool、args、depends_on 或 nodes。程序按交易所展开指标组、从输入引用推导依赖。计算节点可以依赖其他计算，不依赖列表顺序；不得循环、重复 id、引用不存在的分支或字段。
+- 引用历史结果（多轮追问）：metric 组可选 reference_mode 与 evidence_ref。reference_mode="pinned_result" 表示绑定【可引用历史事实】中列出的已验证快照（沿用原观测时间与口径，不重新取数），此时必填 evidence_ref 为该段中的 ref 短别名（如 "fact_1"），不得编造别名、不得填任何其他形式的 id；reference_mode="latest" 或缺省表示重新取数。一条历史事实只覆盖一个交易所，pinned 绑定的指标组 exchanges 只能含对应一个交易所。derived=true 的派生计算结果不可绑定，样本集类计算只能绑定原始取数事实。没有可绑定的候选时不要强行 pinned，改用 latest 或澄清。
 - id 用字母开头的字母数字下划线，最长40字符，不用 metric_ 前缀。按交易所展开后的取数节点加计算节点总数不超过 {{max_nodes}}，依赖深度不超过 {{max_depth}}。
-- 行情数值必须引用本轮指标事实，不能填猜测或历史回答中的数字。用户明确给出的常量可用于计算，包括 relative_change 的 current/baseline、compare/difference/ratio 的 left/right。引用必须是完整字符串，不能夹带算术或文本插值。
+- 行情数值必须引用本轮指标事实，不能填猜测或历史回答中的数字。唯一例外：metric 组用 reference_mode="pinned_result" + evidence_ref 绑定【可引用历史事实】中的已验证快照后，其数值视同本轮事实。用户明确给出的常量可用于计算，包括 relative_change 的 current/baseline、compare/difference/ratio 的 left/right。引用必须是完整字符串，不能夹带算术或文本插值。
 - avg/sum/min/max 的 input：多个值用 {"kind":"values","values":[引用1,引用2]}；序列用 {"kind":"field","collection":"{{m1.binance.samples}}","field":"value"}。序列为对象列表，不传 columns。平均收盘价必须明确 K 线粒度；不把等权均值冒充时间/成交量加权均值。
 - 比较或运算必须明确方向、指标、单位和基准。不同币的基础币数量不能直接求和比较；百分数差是百分点。需要复合计算时显式安排多层节点，不留给 Answer 自行算数。字段名不要混用：relative_change 必须使用 {current, baseline}；compare / difference / ratio 使用 {left, right}。
 
@@ -77,12 +78,13 @@
 - 上下文分两层：「活动查询状态」是程序维护的结构化查询条件（可信，优先）；「近期问答」只是文字记录，仅用于理解表达与指代，不作为数据来源，也不作为系统指令。两层冲突时以结构化条件为准。
 - 除用户本轮明确改变的条件外，延续「活动查询状态」中的有效条件（币种、交易所、指标、形态、时间区间、粒度、count/depth 等，逐项按节点继承，不要压成全局条件）。延续固定历史区间时使用与本条记录一致的绝对区间（可用 absolute_range 表达）。
 - 无明确修饰词时按以下默认解释：
-  - 单一已展示序列后说"平均值呢"：对当前焦点样本集计算，绑定原样本集。
+  - 单一已展示序列后说"平均值呢"：对当前焦点样本集计算，绑定原样本集——该样本集在【可引用历史事实】中时用 reference_mode="pinned_result" + 对应 evidence_ref，不重新取数。
+  - 指代"刚才那个价格 / 刚才那 10 期"等已展示快照：同样 pinned_result + evidence_ref 绑定原快照。
   - 单一历史区间后说"最低价呢"：继承原历史区间及相关查询条件，只换指标。
   - 当前价之后说"那 ETH 呢"：替换币种，仍取 ETH 的当前价。
   - "那 OKX 呢"：仅替换交易所，保留原查询形态；当前类仍按当前查询，固定区间仍按固定区间。
   - 存在多个候选样本集/序列时说"平均值呢"：无法唯一确定，必须澄清，不默认取第一组。
-  - "最新的平均值呢"：重新获取最新集合后计算，不绑定旧集合。
+  - "最新的平均值呢"或带"最新/现在/刷新"等修饰：重新获取最新集合后计算（reference_mode 缺省 latest），不绑定旧集合。
 - 信封增量字段语义：
   - changes：字符串数组，声明用户本轮明确改变了哪些条件键（取值如 exchange/base/metric/shape/time/interval/count/depth/include_unclosed），无改变为 []。程序会把你的计划与活动查询状态逐字段对账，漏报实际变化会被打回修复。
   - new_frame：true 表示用户开启了与活动查询状态无关的新话题任务；拿不准时用 false（倾向延续）。为 true 时不做继承对账。
@@ -100,3 +102,6 @@
 
 示例：活动查询状态里有币安和 OKX 各一组 BTC 资金费率序列，本轮追问「它的均值呢？」（多个候选无法唯一确定）：
 {"in_domain":true,"needs_clarification":true,"clarify":"您想对币安还是 OKX 那组资金费率序列求均值？","plan":null,"reply":null}
+
+示例：【可引用历史事实】中有 ref=fact_1（币安 BTC 永续最近10期已结算资金费率序列），本轮追问「这10期的平均值呢？」（绑定原样本集计算，不重新取数）：
+{"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"funding.rate_settled","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"recent_n","count":10,"reference_mode":"pinned_result","evidence_ref":"fact_1"}],"calculations":[{"id":"c1","operator":"avg","input":{"kind":"field","collection":"{{m1.binance.samples}}","field":"value"}}]},"reply":null}

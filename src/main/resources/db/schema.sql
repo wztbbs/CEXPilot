@@ -71,6 +71,9 @@ CREATE TABLE IF NOT EXISTS conversation_state (
 -- 5. 阶段一(b) 增量列（旧部署需手工 ALTER；新列均可空，存量行不受影响）：
 --      ALTER TABLE conversation_query ADD COLUMN logical_plan_json JSON NULL;
 --      ALTER TABLE conversation_state ADD COLUMN active_frame_json JSON NULL;
+-- 6. 阶段二（migrations/008_conversation_artifact.sql）：trace_event.event_type 加宽到 VARCHAR(32)
+--    （EVIDENCE_REUSE_DECISION 等长事件名），ask_trace 加 reused_facts 列，新建 conversation_artifact。
+--    必须先迁移后部署，否则新事件名写库会被截断报错。
 
 -- 一次问答 = 一条 ask_trace（就是 Trace 的主表，👎 之后靠它完整回放）
 CREATE TABLE IF NOT EXISTS ask_trace (
@@ -86,6 +89,7 @@ CREATE TABLE IF NOT EXISTS ask_trace (
     build_commit      VARCHAR(64)   NULL, -- 构建时打入的 git commit 指纹（定位答案对应的代码版本）
     llm_steps         INT           NOT NULL DEFAULT 0,
     tool_calls        INT           NOT NULL DEFAULT 0,
+    reused_facts      INT           NOT NULL DEFAULT 0, -- 本轮复用的历史事实数（阶段二 FACT_REUSED 计数）
     prompt_tokens     INT           NULL,
     completion_tokens INT           NULL,
     cost              DECIMAL(12,8) NULL,
@@ -102,7 +106,7 @@ CREATE TABLE IF NOT EXISTS trace_event (
     id                BIGINT      NOT NULL AUTO_INCREMENT PRIMARY KEY,
     trace_id          VARCHAR(64) NOT NULL,
     seq               INT         NOT NULL,
-    event_type        VARCHAR(16) NOT NULL, -- LLM_CALL / TOOL_CALL / PLAN
+    event_type        VARCHAR(32) NOT NULL, -- LLM_CALL / TOOL_CALL / PLAN / METRIC_RESULT / EVIDENCE_REUSE_DECISION / FACT_REUSED 等
     name              VARCHAR(64) NULL,     -- tool 名或 llm
     input_json        JSON        NULL,
     output_json       JSON        NULL,
@@ -114,6 +118,28 @@ CREATE TABLE IF NOT EXISTS trace_event (
     error             TEXT        NULL,
     created_at        DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     KEY idx_event_trace (trace_id, seq)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- 会话级取数事实（多轮追问阶段二）：一轮成功取数的完整 MetricResultJson 输出，
+-- 供后续轮次以 reference_mode=pinned_result + evidence_ref 绑定复用（REUSE_FACT）。
+-- kind 本期固定 'FACT'；payload 超 256KB 不缓存（payload_json=NULL，metadata_json 记原因）；
+-- retained_until = 保存时 +24h，过期清理后引用走"原快照不可恢复"澄清路径，禁止重查冒充。
+CREATE TABLE IF NOT EXISTS conversation_artifact (
+    artifact_id     VARCHAR(64)  NOT NULL PRIMARY KEY,
+    conversation_id VARCHAR(64)  NOT NULL,
+    kind            VARCHAR(16)  NOT NULL DEFAULT 'FACT',
+    source_turn_id  VARCHAR(64)  NULL,
+    source_trace_id VARCHAR(64)  NULL,
+    lookup_key      CHAR(64)     NOT NULL,
+    schema_version  VARCHAR(16)  NOT NULL,
+    derived         TINYINT(1)   NOT NULL DEFAULT 0,
+    metadata_json   JSON         NOT NULL,
+    payload_json    JSON         NULL,
+    fetched_at      DATETIME(6)  NOT NULL,
+    created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    retained_until  DATETIME(6)  NOT NULL,
+    KEY idx_artifact_conv (conversation_id, kind, lookup_key),
+    KEY idx_artifact_retained (retained_until)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
 CREATE TABLE IF NOT EXISTS feedback (

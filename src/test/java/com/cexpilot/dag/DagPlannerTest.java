@@ -40,7 +40,7 @@ class DagPlannerTest {
             }
             examples++;
         }
-        assertEquals(9, examples);
+        assertEquals(10, examples);
     }
 
     @ParameterizedTest @ValueSource(strings={"", "json_object", "json_schema"})
@@ -359,5 +359,96 @@ class DagPlannerTest {
         assertFalse(result.reply().isBlank());
         assertEquals(2, llm.calls.size());
         assertTrue(events.stream().anyMatch(e -> "CLARIFY_FALLBACK".equals(e.eventType())));
+    }
+
+    // ===== 阶段二：reference_mode / evidence_ref 协议与绑定 =====
+
+    private static ObjectNode pinnedSnapshotGroup(String ref) {
+        ObjectNode group = JSON.createObjectNode().put("id", "m1").put("metric", "price.last")
+                .put("query_shape", "snapshot");
+        group.putArray("exchanges").add("binance");
+        group.putObject("instrument").put("market_type", "perpetual").put("base", "BTC").put("quote", "USDT");
+        if (ref != null) {
+            group.put("reference_mode", "pinned_result").put("evidence_ref", ref);
+        }
+        return group;
+    }
+
+    /** 在库存入一条 price.last 快照事实，返回绑定上下文（候选 ref=fact_1）。 */
+    private com.cexpilot.evidence.EvidenceBindingContext seedContext(com.cexpilot.evidence.EvidenceStore store,
+                                                                     String conversationId) throws Exception {
+        var compiler = new MetricPlanCompiler(new MetricCatalog(LOADER), registry(), catalogProviders());
+        var compiled = compiler.compileFull(plan(pinnedSnapshotGroup(null)), 8);
+        var target = compiled.targets().get(0);
+        ObjectNode payload = JSON.createObjectNode()
+                .put("metric", "price.last").put("exchange", "binance").put("query_shape", "snapshot")
+                .put("unit", "USDT").put("catalog_version", target.catalogVersion())
+                .put("as_of", "2026-10-12 09:00:00").put("value", 83000);
+        payload.set("instrument", target.instrument());
+        payload.putObject("source").put("provider", target.provider()).put("selector", "LAST");
+        store.saveFact(conversationId, "turn-1", "trace-1", target, payload,
+                java.time.Instant.parse("2026-10-12T01:00:00Z"));
+        return new com.cexpilot.evidence.EvidenceBindingContext(conversationId,
+                com.cexpilot.evidence.EvidenceAssembler.assignRefs(
+                        store.listReusable(conversationId, java.time.Instant.parse("2026-10-12T01:30:00Z"))),
+                store);
+    }
+
+    @Test void pinned计划通过服务端绑定并随PlanOutcome返回() throws Exception {
+        var store = new com.cexpilot.evidence.EvidenceStore(new com.cexpilot.evidence.InMemoryEvidenceRepository());
+        var evidenceCtx = seedContext(store, "conv-1");
+        var llm = new Script(envelope(plan(pinnedSnapshotGroup("fact_1"))));
+        List<TraceEvent> events = new ArrayList<>();
+
+        var result = planner(llm, registry(), new DagConfig())
+                .plan("刚才那个价格再确认下", "", "t", events::add, null, FOLLOWUP_CTX, evidenceCtx);
+
+        assertTrue(result.plan().isPresent(), result.lastError());
+        assertNotNull(result.bindings());
+        assertNotNull(result.bindings().reuseFor("metric_0"));
+        assertEquals(83000, result.bindings().reuseFor("metric_0").payload().path("value").asDouble());
+        assertTrue(events.stream().anyMatch(e -> e.eventType().equals("EVIDENCE_REUSE_DECISION")
+                && e.inputJson().contains("\"decision\":\"REUSE\"")));
+        assertEquals(1, llm.calls.size());
+    }
+
+    @Test void 非法evidence_ref进修复_修复后放行() throws Exception {
+        var store = new com.cexpilot.evidence.EvidenceStore(new com.cexpilot.evidence.InMemoryEvidenceRepository());
+        var evidenceCtx = seedContext(store, "conv-1");
+        var llm = new Script(envelope(plan(pinnedSnapshotGroup("fact_9"))),
+                envelope(plan(pinnedSnapshotGroup("fact_1"))));
+
+        var result = planner(llm, registry(), new DagConfig())
+                .plan("刚才那个价格", "", "t", e -> {}, null, FOLLOWUP_CTX, evidenceCtx);
+
+        assertTrue(result.plan().isPresent(), result.lastError());
+        assertEquals(2, llm.calls.size());
+        String repair = llm.calls.get(1).get(3).content();
+        assertTrue(repair.contains("evidence_ref"), repair);
+        assertTrue(repair.contains("fact_1"), repair);
+    }
+
+    @Test void 绑定修复一次仍失败则澄清原快照不可恢复() throws Exception {
+        var store = new com.cexpilot.evidence.EvidenceStore(new com.cexpilot.evidence.InMemoryEvidenceRepository());
+        var evidenceCtx = seedContext(store, "conv-1");
+        var bad = envelope(plan(pinnedSnapshotGroup("fact_9")));
+        var llm = new Script(bad, bad, bad);
+        List<TraceEvent> events = new ArrayList<>();
+
+        var result = planner(llm, registry(), new DagConfig())
+                .plan("刚才那个价格", "", "t", events::add, null, FOLLOWUP_CTX, evidenceCtx);
+
+        assertTrue(result.needsClarification());
+        assertTrue(result.reply().contains("不可恢复"), result.reply());
+        assertTrue(result.plan().isEmpty(), "绑定失败不得带计划执行，禁止重查冒充");
+        assertEquals(2, llm.calls.size(), "绑定失败只修复一次");
+    }
+
+    @Test void 无证据上下文时pinned字段不触发绑定() {
+        // 单轮/老链路：没有证据上下文，pinned 字段只作协议解析，不做绑定（保持旧行为兼容）
+        var llm = new Script(envelope(plan(pinnedSnapshotGroup("fact_1"))));
+        var result = planner(llm, registry(), new DagConfig()).plan("问题", "", "t", e -> {});
+        assertTrue(result.plan().isPresent(), result.lastError());
+        assertNull(result.bindings());
     }
 }

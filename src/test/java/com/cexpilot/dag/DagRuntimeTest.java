@@ -239,4 +239,99 @@ class DagRuntimeTest {
         assertEquals("10.95", result(r, "c").at("/data/percent").asText());
     }
 
+    // ===== 阶段二：REUSE_FACT 全链路（服务端绑定 → 播种 → Answer 标注 → 不重复入库） =====
+
+    private static ObjectNode snapshotGroup(String id, String exchange, String evidenceRef) {
+        ObjectNode group = JSON.createObjectNode().put("id", id).put("metric", "price.last")
+                .put("query_shape", "snapshot");
+        group.putArray("exchanges").add(exchange);
+        group.putObject("instrument").put("market_type", "perpetual").put("base", "BTC").put("quote", "USDT");
+        if (evidenceRef != null) {
+            group.put("reference_mode", "pinned_result").put("evidence_ref", evidenceRef);
+        }
+        return group;
+    }
+
+    private com.cexpilot.evidence.EvidenceStore seededStore(String conversationId) throws Exception {
+        var store = new com.cexpilot.evidence.EvidenceStore(new com.cexpilot.evidence.InMemoryEvidenceRepository());
+        var compiler = new MetricPlanCompiler(new MetricCatalog(LOADER), registry(), catalogProviders());
+        var target = compiler.compileFull(plan(snapshotGroup("m1", "binance", null)), 8).targets().get(0);
+        ObjectNode payload = JSON.createObjectNode()
+                .put("group_id", "m1").put("metric", "price.last").put("exchange", "binance")
+                .put("query_shape", "snapshot").put("unit", "USDT")
+                .put("catalog_version", target.catalogVersion())
+                .put("as_of", "2026-10-12 09:00:00").put("value", 83000)
+                .put("estimated", false).put("truncated", false);
+        payload.set("instrument", target.instrument());
+        payload.putObject("source").put("provider", target.provider()).put("selector", "LAST");
+        store.saveFact(conversationId, "turn-1", "trace-1", target, payload,
+                Instant.parse("2026-10-12T01:00:00Z"));
+        return store;
+    }
+
+    private DagRuntime runtimeWithStore(Script llm, ToolRegistry registry, MetricProvider provider,
+                                        com.cexpilot.evidence.EvidenceStore store) {
+        var config = new DagConfig();
+        var executor = new DagExecutor(registry, config, providers(provider));
+        executors.add(executor);
+        return new DagRuntime(llm, planner(llm, registry, config), executor, new PromptStore(LOADER),
+                Clock.fixed(Instant.parse("2026-10-12T02:00:00Z"), ZoneOffset.UTC), store);
+    }
+
+    @Test void reusedFactSeedsAnswerWithoutProviderAndIsNotResaved() throws Exception {
+        var store = seededStore("conv-1");
+        var entries = com.cexpilot.evidence.EvidenceAssembler.assignRefs(
+                store.listReusable("conv-1", Instant.parse("2026-10-12T01:30:00Z")));
+        var plannerInput = new com.cexpilot.conversation.PlannerInput("", null, entries);
+        var llm = new Script(envelope(plan(snapshotGroup("m1", "binance", "fact_1"))), "83000（昨日快照）");
+        var trace = new ArrayList<TraceEvent>();
+        // Provider 一旦调用即失败：证明 REUSE 不取数
+        var runtime = runtimeWithStore(llm, registry(), provider((q, c) -> {
+            throw new IllegalStateException("REUSE 轮次不得取数");
+        }), store);
+
+        var r = runtime.execute("刚才那个价格用了多少？", "", "t", trace::add, null,
+                new RequestContext(ZoneId.of("Asia/Shanghai"), Instant.parse("2026-10-12T02:00:00Z")),
+                null, null, plannerInput, new com.cexpilot.evidence.EvidenceSession("conv-1", "turn-2"));
+
+        assertEquals("83000（昨日快照）", r.answer());
+        assertEquals(1, r.reusedFactCount());
+        JsonNode entry = result(r, "metric_0");
+        assertTrue(entry.path("reused").asBoolean());
+        assertEquals("turn-1", entry.path("source_turn_id").asText());
+        assertEquals("2026-10-12 09:00:00", entry.path("observed_at").asText());
+        assertEquals(83000, entry.at("/data/value").asDouble());
+        assertTrue(entry.has("fact_id"));
+        assertTrue(trace.stream().anyMatch(e -> e.eventType().equals("FACT_REUSED")));
+        assertTrue(trace.stream().anyMatch(e -> e.eventType().equals("EVIDENCE_REUSE_DECISION")));
+        assertTrue(trace.stream().noneMatch(e -> e.eventType().equals("METRIC_RESULT")));
+        // 复用节点不重复入库；Answer 看到的 FACTS 带复用标注
+        assertEquals(1, store.listReusable("conv-1", Instant.parse("2026-10-12T03:00:00Z")).size());
+        assertTrue(llm.calls.get(1).get(1).content().contains("\"reused\":true"));
+    }
+
+    @Test void freshFetchIsSavedAsFactBeforeAnswer() throws Exception {
+        var store = new com.cexpilot.evidence.EvidenceStore(new com.cexpilot.evidence.InMemoryEvidenceRepository());
+        var plannerInput = new com.cexpilot.conversation.PlannerInput("", null, List.of());
+        var llm = new Script(envelope(plan(snapshotGroup("m1", "binance", null))), "最新价 90000");
+        var ticker = namedProvider(TickerMetricProvider.NAME, TickerMetric::valueOf, (q, c) ->
+                new MetricResult.Point(new MetricResult.SnapshotMetadata(
+                        Instant.parse("2026-10-12T02:00:00Z"), ZoneId.of("Asia/Shanghai")),
+                        new java.math.BigDecimal("90000")));
+        var runtime = runtimeWithStore(llm, registry(), ticker, store);
+
+        var r = runtime.execute("BTC 现价", "", "t", e -> {}, null,
+                new RequestContext(ZoneId.of("Asia/Shanghai"), Instant.parse("2026-10-12T02:00:00Z")),
+                null, null, plannerInput, new com.cexpilot.evidence.EvidenceSession("conv-1", "turn-9"));
+
+        assertEquals(0, r.reusedFactCount());
+        JsonNode entry = result(r, "metric_0");
+        assertTrue(entry.has("fact_id"), "本轮新取事实应落库并标注 fact_id");
+        assertFalse(entry.has("reused"));
+        var facts = store.listReusable("conv-1", Instant.parse("2026-10-12T02:00:01Z"));
+        assertEquals(1, facts.size());
+        assertEquals("turn-9", facts.get(0).sourceTurnId());
+        assertEquals("t", facts.get(0).sourceTraceId());
+    }
+
 }

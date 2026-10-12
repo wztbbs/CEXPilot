@@ -13,6 +13,8 @@ import com.cexpilot.runtime.TraceSink;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.time.Clock;
@@ -22,6 +24,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.Consumer;
 
 /**
@@ -35,6 +38,7 @@ import java.util.function.Consumer;
 public class DagRuntime {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final Logger log = LoggerFactory.getLogger(DagRuntime.class);
     private static final String ANSWER_PROMPT_NAME = "agent_system";
     // 与行情工具未携带用户时区时的默认口径一致，不使用服务器本地时区。
     private static final ZoneId DEFAULT_USER_ZONE = ZoneOffset.ofHours(8);
@@ -46,14 +50,23 @@ public class DagRuntime {
     private final DagExecutor executor;
     private final PromptStore prompts;
     private final Clock clock;
+    // 阶段二：历史事实存取；null 时跳过事实保存与 REUSE_FACT 绑定（单轮旧行为）
+    private final com.cexpilot.evidence.EvidenceStore evidenceStore;
 
     public DagRuntime(LlmClient llm, DagPlanner planner, DagExecutor executor, PromptStore prompts,
                       Clock clock) {
+        this(llm, planner, executor, prompts, clock, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public DagRuntime(LlmClient llm, DagPlanner planner, DagExecutor executor, PromptStore prompts,
+                      Clock clock, com.cexpilot.evidence.EvidenceStore evidenceStore) {
         this.llm = llm;
         this.planner = planner;
         this.executor = executor;
         this.prompts = prompts;
         this.clock = clock;
+        this.evidenceStore = evidenceStore;
     }
 
     public ExecutionResult execute(String question, String conversationContext, String traceId, TraceSink sink) {
@@ -110,15 +123,35 @@ public class DagRuntime {
                                    RequestContext requestContext, Consumer<String> progress,
                                    Consumer<com.cexpilot.metric.CompiledPlan> compiledPlanSink,
                                    com.cexpilot.conversation.PlannerInput plannerInput) {
+        return execute(question, conversationContext, traceId, sink, answerDelta, requestContext, progress,
+                compiledPlanSink, plannerInput, null);
+    }
+
+    /**
+     * @param evidenceSession 事实保存会话（阶段二）：非 null 且有 EvidenceStore 时，
+     *                        执行后、Answer 前把本轮取数结果保存为 FACT（Answer 失败也已保存，F13），
+     *                        并启用 pinned_result → REUSE_FACT 绑定
+     */
+    public ExecutionResult execute(String question, String conversationContext, String traceId,
+                                   TraceSink sink, Consumer<String> answerDelta,
+                                   RequestContext requestContext, Consumer<String> progress,
+                                   Consumer<com.cexpilot.metric.CompiledPlan> compiledPlanSink,
+                                   com.cexpilot.conversation.PlannerInput plannerInput,
+                                   com.cexpilot.evidence.EvidenceSession evidenceSession) {
         RequestContext effectiveContext = resolveRequestContext(requestContext);
         ObjectNode timeContext = answerTimeContext(effectiveContext,
                 requestContext != null && requestContext.userZone() != null);
         String plannerContext = plannerInput != null && plannerInput.contextText() != null
                 ? plannerInput.contextText() : conversationContext;
         com.cexpilot.conversation.QueryFrame activeFrame = plannerInput != null ? plannerInput.activeFrame() : null;
+        com.cexpilot.evidence.EvidenceBindingContext evidenceContext =
+                plannerInput != null && evidenceSession != null && evidenceStore != null
+                        ? new com.cexpilot.evidence.EvidenceBindingContext(
+                                evidenceSession.conversationId(), plannerInput.evidence(), evidenceStore)
+                        : null;
         emit(progress, "正在生成执行计划…");
         DagPlanner.PlanOutcome outcome = planner.plan(question, plannerContext, traceId, sink,
-                activeFrame, effectiveContext);
+                activeFrame, effectiveContext, evidenceContext);
         int totalPromptTokens = outcome.promptTokens();
         int totalCompletionTokens = outcome.completionTokens();
 
@@ -167,20 +200,31 @@ public class DagRuntime {
             queryStatus.put("missing", missing.length() <= 200 ? missing : missing.substring(0, 200));
         }
         DagPlan plan = outcome.plan().orElseThrow().dagPlan();
+        com.cexpilot.metric.ExecutionBindings bindings = outcome.bindings();
         if (compiledPlanSink != null) {
             compiledPlanSink.accept(outcome.plan().orElseThrow());
         }
         emit(progress, "执行计划已生成（" + plan.nodes().size() + " 项查询），正在获取数据…");
-        DagExecutor.ExecutionOutcome execution = executor.execute(plan, traceId, sink, effectiveContext);
+        DagExecutor.ExecutionOutcome execution = executor.execute(plan, traceId, sink, effectiveContext, bindings);
         emit(progress, "数据获取完毕，正在组装答案…");
         steps = execution.layers();
+        Map<String, String> savedFactIds = new java.util.HashMap<>();
+        int reusedFactCount = 0;
         for (PlanNode node : plan.nodes()) {
             ToolResult result = execution.context().get(node.id());
             if (result == null) {
                 continue;
             }
             toolCallCount++;
-            appendEvidence(evidence, node, result);
+            // 事实保存在 Answer 之前：即使 Answer 失败，本轮已取事实也已落库（F13）
+            if (evidenceSession != null && evidenceStore != null) {
+                savedFactIds.putAll(saveFacts(outcome.plan().orElseThrow(), node, result, bindings,
+                        savedFactIds, evidenceSession, traceId, effectiveContext.requestTime()));
+            }
+            appendEvidence(evidence, node, result, bindings, savedFactIds);
+            if (bindings != null && bindings.reuseFor(node.id()) != null && result.ok()) {
+                reusedFactCount++;
+            }
         }
         String userContent = question + "\n\n<FACTS>\n" + evidence + "\n</FACTS>\n<QUERY_STATUS>\n"
                 + queryStatus + "\n</QUERY_STATUS>";
@@ -196,7 +240,47 @@ public class DagRuntime {
         totalCompletionTokens += answer.completionTokens() == null ? 0 : answer.completionTokens();
 
         return new ExecutionResult(answer.content(), evidence, toolCallCount, steps,
-                totalPromptTokens, totalCompletionTokens);
+                totalPromptTokens, totalCompletionTokens, null, null, reusedFactCount);
+    }
+
+    /**
+     * 单节点事实保存：metric 节点存原始 FACT（REUSE_FACT 节点不重复入库，沿用原 factId）；
+     * 计算节点存派生 FACT（derived=true + sourceFactIds，不作为样本集来源）。
+     * 返回本节点 nodeId→factId 映射（供下游派生事实记录来源与 evidence 标注）。保存失败只记日志。
+     */
+    private Map<String, String> saveFacts(com.cexpilot.metric.CompiledPlan compiled, PlanNode node,
+                                          ToolResult result, com.cexpilot.metric.ExecutionBindings bindings,
+                                          Map<String, String> savedFactIds,
+                                          com.cexpilot.evidence.EvidenceSession session,
+                                          String traceId, java.time.Instant now) {
+        if (!result.ok() || result.data() == null) {
+            return Map.of();
+        }
+        try {
+            if (node.metric() != null) {
+                if (bindings != null && bindings.reuseFor(node.id()) != null) {
+                    return Map.of(node.id(), bindings.reuseFor(node.id()).factId());
+                }
+                com.cexpilot.metric.EffectiveTarget target = compiled.targets().stream()
+                        .filter(t -> t.physicalId().equals(node.id())).findFirst().orElse(null);
+                if (target == null) {
+                    return Map.of();
+                }
+                return evidenceStore.saveFact(session.conversationId(), session.turnId(), traceId,
+                                target, result.data(), now)
+                        .map(f -> Map.of(node.id(), f.factId())).orElse(Map.of());
+            }
+            if (node.tool() != null) {
+                List<String> sourceFactIds = node.dependsOn().stream()
+                        .map(dep -> savedFactIds.get(dep)).filter(Objects::nonNull).distinct().toList();
+                return evidenceStore.saveDerivedFact(session.conversationId(), session.turnId(), traceId,
+                                node.tool(), result.data(), sourceFactIds, now)
+                        .map(f -> Map.of(node.id(), f.factId())).orElse(Map.of());
+            }
+        } catch (Exception e) {
+            log.warn("事实保存失败（不影响本轮回答）node={}: {}", node.id(), e.getMessage());
+        }
+        return Map.of();
     }
 
     private static void emit(Consumer<String> progress, String text) {
@@ -243,7 +327,9 @@ public class DagRuntime {
         return node;
     }
 
-    private void appendEvidence(ArrayNode evidence, PlanNode node, ToolResult result) {
+    private void appendEvidence(ArrayNode evidence, PlanNode node, ToolResult result,
+                                com.cexpilot.metric.ExecutionBindings bindings,
+                                Map<String, String> savedFactIds) {
         ObjectNode entry = evidence.addObject();
         entry.put("node_id", node.id());
         if (node.metric() != null) {
@@ -255,6 +341,19 @@ public class DagRuntime {
             entry.set("input_references", node.args());
         }
         entry.put("ok", result.ok());
+        String factId = savedFactIds.get(node.id());
+        if (factId != null) {
+            entry.put("fact_id", factId);
+        }
+        com.cexpilot.metric.ExecutionBindings.ReuseFact reuse =
+                bindings == null ? null : bindings.reuseFor(node.id());
+        if (reuse != null) {
+            // 复用事实的口径标注：Answer 必须说明数据时间点，不得当成本轮新取
+            entry.put("reused", true);
+            entry.put("source_turn_id", reuse.sourceTurnId());
+            if (reuse.observedAt() != null) entry.put("observed_at", reuse.observedAt());
+            entry.put("fetched_at", reuse.fetchedAt());
+        }
         if (result.data() != null) {
             entry.set("data", result.data());
         }

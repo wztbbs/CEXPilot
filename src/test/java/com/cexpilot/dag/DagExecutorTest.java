@@ -9,6 +9,7 @@ import com.cexpilot.runtime.TraceEvent;
 import com.cexpilot.runtime.TraceSink;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -280,6 +281,78 @@ class DagExecutorTest {
             assertFalse(execution.context().get("n3").ok());
             assertTrue(execution.context().get("n3").error().contains("maximum"));
             assertEquals(1, calls.get());
+        } finally {
+            executor.shutdown();
+        }
+    }
+
+    @Test
+    void reuseFactSeedsContextWithoutProviderAndFeedsCalculation() throws Exception {
+        // F05 形态：m1 币安（REUSE 旧快照 83000）+ m2 OKX（FETCH 90000）→ relative_change
+        java.util.function.BiFunction<String, String, com.fasterxml.jackson.databind.node.ObjectNode> group =
+                (id, exchange) -> {
+                    var g = MAPPER.createObjectNode().put("id", id).put("metric", "price.last")
+                            .put("query_shape", "snapshot");
+                    g.putArray("exchanges").add(exchange);
+                    g.putObject("instrument").put("market_type", "perpetual").put("base", "BTC").put("quote", "USDT");
+                    return g;
+                };
+        ObjectNode planJson = MAPPER.createObjectNode();
+        var metrics = planJson.putArray("metrics");
+        metrics.add(group.apply("m1", "binance"));
+        metrics.add(group.apply("m2", "okx"));
+        planJson.putArray("calculations").addObject().put("id", "c1").put("operator", "relative_change")
+                .set("input", MAPPER.readTree("{\"current\":\"{{m2.okx.value}}\",\"baseline\":\"{{m1.binance.value}}\"}"));
+        var compiler = new com.cexpilot.metric.MetricPlanCompiler(
+                new com.cexpilot.metric.MetricCatalog(new org.springframework.core.io.DefaultResourceLoader()),
+                com.cexpilot.dag.MetricTestSupport.registry(), com.cexpilot.dag.MetricTestSupport.catalogProviders());
+        var compiled = compiler.compileFull(planJson, 8);
+
+        // 币安节点绑定历史快照（payload 为缓存的 MetricResultJson 输出）
+        var target = compiled.targets().stream().filter(t -> t.physicalId().equals("metric_0")).findFirst().orElseThrow();
+        ObjectNode payload = MAPPER.createObjectNode();
+        payload.put("group_id", "m1").put("metric", "price.last").put("exchange", "binance")
+                .put("query_shape", "snapshot").put("unit", "USDT")
+                .put("catalog_version", target.catalogVersion())
+                .put("as_of", "2026-10-12 09:00:00").put("value", 83000)
+                .put("estimated", false).put("truncated", false);
+        payload.set("instrument", target.instrument());
+        payload.putObject("source").put("provider", target.provider()).put("selector", "LAST");
+        var bindings = new com.cexpilot.metric.ExecutionBindings(java.util.Map.of("metric_0",
+                new com.cexpilot.metric.ExecutionBindings.ReuseFact("fact-1", "turn-1",
+                        "2026-10-12 09:00:00", "2026-10-12T01:00:00Z", payload)));
+
+        // Provider 桩：币安被复用不得调用；OKX 返回 90000
+        var ticker = MetricTestSupport.namedProvider(
+                com.cexpilot.metric.TickerMetricProvider.NAME, com.cexpilot.metric.TickerMetric::valueOf, (q, c) -> {
+                    if (((com.cexpilot.metric.SnapshotQuery) q).exchange() == com.cexpilot.market.Exchange.BINANCE) {
+                        throw new AssertionError("REUSE_FACT 节点不得访问 Provider");
+                    }
+                    return new com.cexpilot.metric.MetricResult.Point(
+                            new com.cexpilot.metric.MetricResult.SnapshotMetadata(
+                                    java.time.Instant.parse("2026-10-12T02:00:00Z"), java.time.ZoneId.of("Asia/Shanghai")),
+                            new java.math.BigDecimal("90000"));
+                });
+        ListSink sink = new ListSink();
+        DagExecutor executor = new DagExecutor(com.cexpilot.dag.MetricTestSupport.registry(), config(),
+                new com.cexpilot.metric.MetricProviderRegistry(List.of(ticker)));
+        try {
+            var outcome = executor.execute(compiled.dagPlan(), "trace-reuse", sink, null, bindings);
+
+            assertTrue(outcome.context().get("metric_0").ok());
+            assertEquals(83000, outcome.context().get("metric_0").data().path("value").asDouble());
+            assertTrue(outcome.context().get("metric_1").ok());
+            ToolResult calc = outcome.context().get("c1");
+            assertTrue(calc.ok(), String.valueOf(calc.error()));
+            // current=90000(OKX 新取) baseline=83000(币安复用) → 正百分比，方向不得交换
+            assertEquals(8.4337, calc.data().path("percent").asDouble(), 0.001);
+            // 复用不落 METRIC_RESULT（保持"本轮真实取数"语义），落 FACT_REUSED
+            assertEquals(1, sink.events.stream().filter(e -> e.eventType().equals("FACT_REUSED")).count());
+            assertEquals(1, sink.events.stream().filter(e -> e.eventType().equals("METRIC_RESULT")).count());
+            var reused = sink.events.stream().filter(e -> e.eventType().equals("FACT_REUSED")).findFirst().orElseThrow();
+            assertTrue(reused.inputJson().contains("\"fact_id\":\"fact-1\""));
+            assertTrue(reused.inputJson().contains("\"source_turn_id\":\"turn-1\""));
+            assertTrue(reused.inputJson().contains("PINNED_RESULT"));
         } finally {
             executor.shutdown();
         }

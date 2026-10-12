@@ -71,6 +71,13 @@ public record QueryFrame(
                 if (entry.has("operator")) {
                     node.put("operator", entry.path("operator").asText());
                 }
+                // 阶段二：本轮新产生/复用的 factId 随 focus 落 frame，供下一轮事实索引与审计对照
+                if (entry.has("fact_id")) {
+                    node.put("fact_id", entry.path("fact_id").asText());
+                }
+                if (entry.has("reused")) {
+                    node.put("reused", entry.path("reused").asBoolean());
+                }
             }
         }
         return focus;

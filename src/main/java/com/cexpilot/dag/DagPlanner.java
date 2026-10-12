@@ -1,6 +1,7 @@
 package com.cexpilot.dag;
 
 import com.cexpilot.config.DagConfig;
+import com.cexpilot.evidence.EvidenceBindingContext;
 import com.cexpilot.metric.MetricCatalog;
 import com.cexpilot.metric.MetricPlanCompiler;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -74,10 +75,12 @@ public class DagPlanner {
      * 模型判断工具不足以回答（reply 说明缺口）或 repair 耗尽（lastError 非空）。
      * plan 持有完整编译产物 CompiledPlan（含 LogicalPlan 与逻辑→物理映射），执行用其中的 dagPlan。
      * needsClarification=true 时表示 Planner 要求澄清（reply 为澄清文案），不执行、不落 frame。
+     * bindings 为服务端生成的执行期绑定（阶段二 REUSE_FACT）；无证据上下文或未绑定时为 null。
      */
     public record PlanOutcome(boolean inDomain, String reply,
                               Optional<com.cexpilot.metric.CompiledPlan> plan, int promptTokens, int completionTokens,
-                              String lastError, boolean needsClarification) {
+                              String lastError, boolean needsClarification,
+                              com.cexpilot.metric.ExecutionBindings bindings) {
     }
 
     public PlanOutcome plan(String question, String conversationContext, String traceId, TraceSink sink) {
@@ -91,6 +94,17 @@ public class DagPlanner {
     public PlanOutcome plan(String question, String conversationContext, String traceId, TraceSink sink,
                             com.cexpilot.conversation.QueryFrame activeFrame,
                             com.cexpilot.runtime.RequestContext requestContext) {
+        return plan(question, conversationContext, traceId, sink, activeFrame, requestContext, null);
+    }
+
+    /**
+     * @param evidenceContext 历史事实绑定上下文（阶段二）：非 null 时校验 pinned_result 的 evidence_ref
+     *                        并把通过校验的 ExecutionBindings 挂到 PlanOutcome
+     */
+    public PlanOutcome plan(String question, String conversationContext, String traceId, TraceSink sink,
+                            com.cexpilot.conversation.QueryFrame activeFrame,
+                            com.cexpilot.runtime.RequestContext requestContext,
+                            EvidenceBindingContext evidenceContext) {
         int maxToolCalls = llmConfig.getMaxToolCalls();
         String systemPrompt = systemPrompt(conversationContext);
         JsonNode responseFormat = plannerResponseFormat();
@@ -102,6 +116,7 @@ public class DagPlanner {
         int promptTokens = 0;
         int completionTokens = 0;
         String lastError = null;
+        boolean bindingRetried = false;
         int attempts = dagConfig.getPlannerMaxRetries() + 1;
         for (int attempt = 1; attempt <= attempts; attempt++) {
             ChatResponse response = callLlm(messages, traceId, sink, attempt, responseFormat);
@@ -109,32 +124,55 @@ public class DagPlanner {
             completionTokens += response.completionTokens() == null ? 0 : response.completionTokens();
 
             PlanDecision decision = evaluateResponse(response.content(), maxToolCalls, traceId, sink,
-                    activeFrame, requestContext, attempt);
+                    activeFrame, requestContext, evidenceContext, attempt);
             if (decision.error() == null) {
                 return decision.toOutcome(promptTokens, completionTokens);
+            }
+            if (decision.bindingFailure()) {
+                // 绑定失败只修复一次；仍不行则澄清"原快照不可恢复"，禁止重查当前值冒充（F21）
+                if (bindingRetried) {
+                    return new PlanOutcome(true, BINDING_UNAVAILABLE_CLARIFY, Optional.empty(),
+                            promptTokens, completionTokens, null, true, null);
+                }
+                bindingRetried = true;
             }
             lastError = decision.error();
             appendRepair(messages, response.content(), lastError);
         }
         // repair 耗尽：runtime 直接返回固定失败话术，禁止继续生成无事实答案。
         return new PlanOutcome(true, null,
-                Optional.empty(), promptTokens, completionTokens, lastError, false);
+                Optional.empty(), promptTokens, completionTokens, lastError, false, null);
     }
+
+    /** 绑定修复仍失败时的澄清话术：说明原快照不可恢复，把"是否按最新数据重查"的选择权交还用户。 */
+    static final String BINDING_UNAVAILABLE_CLARIFY =
+            "您想引用的那条历史数据快照已不可恢复（可能已过期、被清理或查询口径已变化），无法按原样复用；"
+                    + "请确认是否按当前最新数据重新查询。";
 
     /** 单轮判断不负责 token 累计；error 非空时由 plan 统一追加修复消息并重试。 */
     private record PlanDecision(boolean inDomain, String reply, com.cexpilot.metric.CompiledPlan plan,
-                                String error, boolean needsClarification) {
+                                String error, boolean needsClarification,
+                                com.cexpilot.metric.ExecutionBindings bindings, boolean bindingFailure) {
         private static PlanDecision accepted(boolean inDomain, String reply, com.cexpilot.metric.CompiledPlan plan) {
-            return new PlanDecision(inDomain, reply, plan, null, false);
+            return new PlanDecision(inDomain, reply, plan, null, false, null, false);
+        }
+
+        private static PlanDecision accepted(boolean inDomain, String reply, com.cexpilot.metric.CompiledPlan plan,
+                                             com.cexpilot.metric.ExecutionBindings bindings) {
+            return new PlanDecision(inDomain, reply, plan, null, false, bindings, false);
         }
 
         private static PlanDecision clarification(String reply) {
-            return new PlanDecision(true, reply, null, null, true);
+            return new PlanDecision(true, reply, null, null, true, null, false);
+        }
+
+        private static PlanDecision bindingError(String error) {
+            return new PlanDecision(true, null, null, error, false, null, true);
         }
 
         private PlanOutcome toOutcome(int promptTokens, int completionTokens) {
             return new PlanOutcome(inDomain, reply, Optional.ofNullable(plan),
-                    promptTokens, completionTokens, error, needsClarification);
+                    promptTokens, completionTokens, error, needsClarification, bindings);
         }
     }
 
@@ -142,6 +180,7 @@ public class DagPlanner {
                                           String traceId, TraceSink sink,
                                           com.cexpilot.conversation.QueryFrame activeFrame,
                                           com.cexpilot.runtime.RequestContext requestContext,
+                                          EvidenceBindingContext evidenceContext,
                                           int attempt) {
         JsonNode parsed;
         try {
@@ -159,13 +198,15 @@ public class DagPlanner {
             sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
             return PlanDecision.accepted(false, textOrNull(parsed.path("reply")), null);
         }
-        return evaluateInDomainResponse(parsed, maxToolCalls, traceId, sink, activeFrame, requestContext, attempt);
+        return evaluateInDomainResponse(parsed, maxToolCalls, traceId, sink, activeFrame, requestContext,
+                evidenceContext, attempt);
     }
 
     private PlanDecision evaluateInDomainResponse(JsonNode parsed, int maxToolCalls,
                                                   String traceId, TraceSink sink,
                                                   com.cexpilot.conversation.QueryFrame activeFrame,
                                                   com.cexpilot.runtime.RequestContext requestContext,
+                                                  EvidenceBindingContext evidenceContext,
                                                   int attempt) {
         String reply = textOrNull(parsed.path("reply"));
         // 澄清决策（阶段一 c 协议增量字段，缺省按旧行为 false）：不执行、不落 frame，由程序落 NEEDS_CLARIFICATION
@@ -190,7 +231,8 @@ public class DagPlanner {
         if (!planNode.isObject()) {
             return evaluateReplyWithoutPlan(parsed, reply, traceId, sink);
         }
-        return validatePlan(parsed, reply, maxToolCalls, traceId, sink, activeFrame, requestContext, attempt);
+        return validatePlan(parsed, reply, maxToolCalls, traceId, sink, activeFrame, requestContext,
+                evidenceContext, attempt);
     }
 
     private PlanDecision evaluateReplyWithoutPlan(JsonNode parsed, String reply,
@@ -216,6 +258,7 @@ public class DagPlanner {
                                       String traceId, TraceSink sink,
                                       com.cexpilot.conversation.QueryFrame activeFrame,
                                       com.cexpilot.runtime.RequestContext requestContext,
+                                      EvidenceBindingContext evidenceContext,
                                       int attempt) {
         String error;
         try {
@@ -249,9 +292,27 @@ public class DagPlanner {
                 sink.record(new TraceEvent(traceId, "PLAN_COMPILED", "metric_compiler",
                         MAPPER.createObjectNode().put("catalog_version", catalog.version()).toString(),
                         plan.toJson().toString(), null, null, null, null, null, null));
+                // 历史事实绑定（阶段二）：evidence_ref 协议校验 + 服务端实体绑定；
+                // 失败走绑定修复（只一次），再失败由 plan() 转澄清，禁止重查冒充
+                com.cexpilot.metric.ExecutionBindings bindings = null;
+                if (evidenceContext != null && requestContext != null) {
+                    EvidenceBinder binder = new EvidenceBinder(evidenceContext.store());
+                    String protocolError = binder.checkProtocol(compiled.logicalPlan(), evidenceContext.candidates());
+                    if (protocolError != null) {
+                        sink.record(TraceEvent.plan(traceId, parsed.toString(), protocolError));
+                        return PlanDecision.bindingError(protocolError);
+                    }
+                    EvidenceBinder.BindResult bind = binder.bind(compiled, evidenceContext.candidates(),
+                            evidenceContext.conversationId(), requestContext, traceId, sink);
+                    if (bind.error() != null) {
+                        sink.record(TraceEvent.plan(traceId, parsed.toString(), bind.error()));
+                        return PlanDecision.bindingError(bind.error());
+                    }
+                    bindings = bind.bindings();
+                }
                 // plan 已合法时，超长 reply 直接丢弃，不再为 reply 重试。
                 String effectiveReply = isReasoningDump(reply) ? null : reply;
-                return PlanDecision.accepted(true, effectiveReply, compiled);
+                return PlanDecision.accepted(true, effectiveReply, compiled, bindings);
             }
             error = planValidationError(compiler.logicalErrors(plan, errors));
         } catch (Exception e) {
@@ -281,7 +342,7 @@ public class DagPlanner {
 
     private PlanDecision repairDecision(String traceId, TraceSink sink, String output, String error) {
         sink.record(TraceEvent.plan(traceId, output, error));
-        return new PlanDecision(true, null, null, error, false);
+        return new PlanDecision(true, null, null, error, false, null, false);
     }
 
     /** 判断 reply 是否是推理 dump：合法话术很短，超长即视为协议误用。 */

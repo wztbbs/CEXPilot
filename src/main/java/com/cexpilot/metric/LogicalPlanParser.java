@@ -21,7 +21,7 @@ public final class LogicalPlanParser {
     private static final Set<String> ALLOWED_EXCHANGES = Set.of("binance", "okx");
     private static final Set<String> PLAN_FIELDS = Set.of("metrics", "calculations");
     private static final Set<String> METRIC_COMMON_FIELDS = Set.of(
-            "id", "metric", "exchanges", "instrument", "query_shape");
+            "id", "metric", "exchanges", "instrument", "query_shape", "reference_mode", "evidence_ref");
     private static final Set<String> CALCULATION_FIELDS = Set.of("id", "operator", "input");
 
     public LogicalPlan parse(JsonNode plan) {
@@ -83,7 +83,34 @@ public final class LogicalPlanParser {
         if (id == null || metric == null || shape == null || instrument == null || exchanges == null) {
             return null;
         }
-        return new MetricRequest(id, metric, instrument, shape, exchanges, params);
+        String referenceMode = parseReferenceMode(node, path, errors);
+        String evidenceRef = parseEvidenceRef(node, path, referenceMode, errors);
+        return new MetricRequest(id, metric, instrument, shape, exchanges, params, referenceMode, evidenceRef);
+    }
+
+    private String parseReferenceMode(JsonNode node, String path, List<String> errors) {
+        if (!node.has("reference_mode") || node.path("reference_mode").isNull()) {
+            return null;
+        }
+        String mode = text(node, "reference_mode", path, errors);
+        if (mode != null && !mode.equals("pinned_result") && !mode.equals("latest")) {
+            errors.add(path + ".reference_mode 只支持 pinned_result / latest（缺省 latest）");
+            return null;
+        }
+        return mode;
+    }
+
+    private String parseEvidenceRef(JsonNode node, String path, String referenceMode, List<String> errors) {
+        boolean present = node.has("evidence_ref") && !node.path("evidence_ref").isNull();
+        String ref = present ? text(node, "evidence_ref", path, errors) : null;
+        if ("pinned_result".equals(referenceMode) && ref == null) {
+            errors.add(path + ".evidence_ref 在 reference_mode=\"pinned_result\" 时必填，"
+                    + "取值只能是【可引用历史事实】列表中的 ref 短别名");
+        }
+        if (ref != null && !"pinned_result".equals(referenceMode)) {
+            errors.add(path + ".evidence_ref 仅在 reference_mode=\"pinned_result\" 时有效");
+        }
+        return ref;
     }
 
     private InstrumentSpec parseInstrument(JsonNode node, String path, List<String> errors) {
