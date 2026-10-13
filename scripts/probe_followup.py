@@ -1205,6 +1205,17 @@ def scenario_f11():
     md("\n## F11 澄清填入：「币安」填入原任务，再聚合")
     conv = str(uuid.uuid4())
     t1 = turn(conv, "BTC 最近 10 期已结算费率。", timezone="Asia/Shanghai", tag="F11/1")
+    # 前置条件（4.1）：首轮必须真的进入澄清（未取数）。「币安。」才有"填入"语义——
+    # 首轮直接返回两所数据时，后续轮验证的是普通继承而非澄清接续，记 SKIP 不记 PASS
+    clarified = tool_calls(t1) == 0 and not mrows(t1)
+    if not clarified:
+        return finish("F11", F_TITLES["F11"],
+                      ["「币安」填入原任务；后续均值绑定完成后的唯一序列"],
+                      [("首轮确实进入澄清（未取数）", False,
+                        "未触发：首轮直接取数（toolCalls=%d metric=%s），验证的是普通继承分支"
+                        % (tool_calls(t1), metrics(t1)))],
+                      "SKIP（未触发：首轮未澄清）",
+                      ["换成必然多候选歧义的问法可再触发"], min_phase=1)
     t2 = turn(conv, "币安。", timezone="Asia/Shanghai", tag="F11/2")
     t3 = turn(conv, "均值呢？", timezone="Asia/Shanghai", tag="F11/3")
     k2, v2 = funding_samples(t2)
@@ -1232,8 +1243,8 @@ def scenario_f12():
     # catalog 不含「波动率曲面/隐含波动率」类指标，用来尝试触发取数/计划失败
     t1 = turn(conv, "昨天币安 BTC 的隐含波动率曲面。", timezone="Asia/Shanghai", tag="F12/1")
     t2 = turn(conv, "那 OKX 呢？", timezone="Asia/Shanghai", tag="F12/2")
-    t1_failed = (not mrows(t1)) or not (t1["d"] or {}).get("ok") \
-        or bool(FALLBACK_REFUSAL_RE.search(ans(t1)))
+    # 4.1 修正：响应没有顶层 ok 字段，原判据把缺失当作失败信号，正常返回也会被判成失败
+    t1_failed = (not mrows(t1)) or bool(FALLBACK_REFUSAL_RE.search(ans(t1)))
     if not t1_failed:
         return finish("F12", F_TITLES["F12"],
                       ["继承最近有效请求并替换交易所，不退回失败之前的旧话题"],
@@ -1338,8 +1349,8 @@ def scenario_f16():
     ]
     verdict = _f_verdict(checks)
     if not gap:
-        verdict = ("PASS（本次未遇到缺口，完整性分支未触发；算子与口径正常）"
-                   if all(h for _, h, _ in checks) else verdict)
+        # 4.1 修正：缺口分支未触发不该记 PASS（关键场景未覆盖不算通过），记 SKIP
+        verdict = "SKIP（未触发：本次区间无数据缺口，完整性分支未验证；算子与口径正常）"
     return finish("F16", F_TITLES["F16"],
                   ["延续完整性约束；不把部分成交量包装成完整区间成交量"],
                   checks, verdict,
@@ -1446,17 +1457,17 @@ def scenario_f21():
     events = event_names((t2["d"] or {}).get("traceId"))
     types = {tp for tp, _ in events}
     has_reuse_ev = bool(types & {"CONTEXT_RESOLVED", "EVIDENCE_REUSE_DECISION", "FACT_REUSED"})
+    # 4.1 修正：第二条恒真断言删除——"冒充检测"的行为面在线上无法构造（需清缓存/改版本注入），
+    # 只验证 trace 证据面不能算该场景通过，整例记 SKIP，行为断言移交测试环境确定性注入
     checks = [
-        ("trace 中有引用解析/复用决策事件", has_reuse_ev,
-         "证据缺失：现有 trace 无 CONTEXT_RESOLVED / EVIDENCE_REUSE_DECISION / FACT_REUSED 事件，"
-         "无法验证「缓存被清理后的回退与冒充检测」；事件类型=%s" % sorted(t for t in types if t)[:8]),
-        ("未把重查的当前价冒充成原快照（答案含「刚才/原」字样时需能对上首轮值）",
-         True, "行为面占位：缓存不可恢复场景需测试环境构造（清缓存/改 payload 版本）"),
+        ("trace 中有引用解析/复用决策事件（仅证据面，非场景通过）", has_reuse_ev,
+         "事件类型=%s" % sorted(t for t in types if t)[:8]),
     ]
     return finish("F21", F_TITLES["F21"],
                   ["明确回退或解释原快照不可恢复；不能重查当前价后冒充原快照"],
-                  checks, _f_verdict(checks),
-                  ["缓存版本变化/容量清理无法在线上构造，本用例只验证 trace 证据面是否存在",
+                  checks,
+                  "SKIP（线上无法构造：缓存不可恢复场景需测试环境注入；行为断言不在本用例判定）",
+                  ["缓存版本变化/容量清理无法在线上构造；冒充检测由集成测试确定性覆盖",
                    "trace：%s%s" % (TRACE, (t2["d"] or {}).get("traceId"))], min_phase=2)
 
 
