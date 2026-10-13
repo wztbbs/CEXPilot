@@ -77,12 +77,12 @@ class ConversationServiceTest {
     @Test
     void 登记轮次成功时写入RUNNING行并返回句柄() {
         when(repository.acquireTurn(eq("c1"), anyString(), anyLong()))
-                .thenAnswer(inv -> new ConversationRepository.ConversationStateRow(4, inv.getArgument(1), 7));
+                .thenAnswer(inv -> new ConversationRepository.ConversationStateRow(3, inv.getArgument(1), 7));
 
         ConversationService.TurnHandle turn = service.beginTurn("c1", "BTC 多少钱", "parent-1", T0);
 
         assertNotNull(turn);
-        assertEquals(3, turn.queryNo()); // next_query_no=4 表示本轮分到 3
+        assertEquals(3, turn.queryNo()); // last_query_no=3 就是本轮已分配的序号
         assertEquals(7, turn.fencingToken());
         // started_at 用应用时钟（requestTime）写入，不依赖 DB 的 NOW()，避免服务器/会话时区错位
         verify(repository).insertRunningTurn(eq("c1"), eq(3L), eq(turn.turnId()), eq("parent-1"),
@@ -106,6 +106,8 @@ class ConversationServiceTest {
 
         verify(repository).finishTurn("t1", "SUCCEEDED", "答案", "trace-1", null);
         verify(repository, never()).saveActiveFrame(anyString(), anyString(), anyLong(), anyString());
+        // 成功 = 澄清任务与失败尝试都已了结（R1/R2）
+        verify(repository).clearTaskState("c1", "t1", 7);
         verify(repository).releaseTurn("c1", "t1", 7);
         verify(repository).touchConversation("c1", null);
     }
@@ -118,5 +120,40 @@ class ConversationServiceTest {
 
         verify(repository).finishTurn("t1", "SUCCEEDED", "答案", "trace-1", "{\"metrics\":[]}");
         verify(repository).saveActiveFrame("c1", "t1", 7, "{\"frameId\":\"f1\"}");
+        verify(repository).clearTaskState("c1", "t1", 7);
+    }
+
+    @Test
+    void 失败轮次保存lastAttempt不清空澄清任务() {
+        ConversationService.TurnHandle turn = new ConversationService.TurnHandle(3, "t1", 7);
+
+        service.finishTurn("c1", turn, "FAILED", null, "trace-1", null, null,
+                "{\"turnId\":\"t1\",\"question\":\"ETH 昨日收盘价\",\"status\":\"FAILED\"}");
+
+        verify(repository).saveLastAttempt(eq("c1"), eq("t1"), eq(7L), anyString());
+        verify(repository, never()).clearTaskState(anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    void 澄清轮次不清空任务状态也不写lastAttempt() {
+        ConversationService.TurnHandle turn = new ConversationService.TurnHandle(3, "t1", 7);
+
+        service.finishTurn("c1", turn, "NEEDS_CLARIFICATION", "哪家交易所？", "trace-1", null, null, null);
+
+        verify(repository, never()).clearTaskState(anyString(), anyString(), anyLong());
+        verify(repository, never()).saveLastAttempt(anyString(), anyString(), anyLong(), anyString());
+    }
+
+    @Test
+    void 澄清任务独立保存且带原问题() {
+        ConversationService.TurnHandle turn = new ConversationService.TurnHandle(3, "t1", 7);
+
+        service.recordPendingTask("c1", turn, "BTC 和 ETH 谁的费率均值更高？", "您想看哪家交易所？");
+
+        var captor = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(repository).savePendingTask(eq("c1"), eq("t1"), eq(7L), captor.capture());
+        assertTrue(captor.getValue().contains("BTC 和 ETH 谁的费率均值更高？"));
+        assertTrue(captor.getValue().contains("您想看哪家交易所？"));
+        assertTrue(captor.getValue().contains("t1"));
     }
 }

@@ -94,8 +94,8 @@ public class ConversationService {
         if (!turnId.equals(state.runningTurnId())) {
             return null;
         }
-        // acquireTurn 成功时已把 next_query_no +1，本轮拿到的是加之前的值
-        long queryNo = state.nextQueryNo() - 1;
+        // acquireTurn 成功时已推进 last_query_no，返回值就是本轮分配的序号
+        long queryNo = state.lastQueryNo();
         repository.insertRunningTurn(conversationId, queryNo, turnId, parentTurnId, question, requestTime);
         return new TurnHandle(queryNo, turnId, state.fencingToken());
     }
@@ -107,30 +107,46 @@ public class ConversationService {
      *
      * @param logicalPlanJson 校验通过的 LogicalPlan 原文 JSON，规划未通过校验时为 null
      * @param frameJson       本轮产生的活动 QueryFrame JSON；仅成功轮次传入，失败轮次传 null（不覆盖活动 frame）
+     * @param lastAttemptJson 失败轮次传入的任务快照 JSON（R2），成功轮次传 null；SUCCEEDED 同时清空
+     *                        待补澄清任务与历史失败尝试（任务已了结，NEEDS_CLARIFICATION 不清）
      */
     @Transactional
     public void finishTurn(String conversationId, TurnHandle turn, String status, String answer, String traceId,
-                           String logicalPlanJson, String frameJson) {
+                           String logicalPlanJson, String frameJson, String lastAttemptJson) {
         repository.finishTurn(turn.turnId(), status, answer, traceId, logicalPlanJson);
         if (frameJson != null) {
             repository.saveActiveFrame(conversationId, turn.turnId(), turn.fencingToken(), frameJson);
+        }
+        if ("SUCCEEDED".equals(status)) {
+            repository.clearTaskState(conversationId, turn.turnId(), turn.fencingToken());
+        } else if ("FAILED".equals(status) && lastAttemptJson != null) {
+            repository.saveLastAttempt(conversationId, turn.turnId(), turn.fencingToken(), lastAttemptJson);
         }
         // 返回 false = 租约过期、占用已被新请求接管：正常路径，不覆盖新状态即可
         repository.releaseTurn(conversationId, turn.turnId(), turn.fencingToken());
         repository.touchConversation(conversationId, null);
     }
 
+    /** 兼容旧调用（无失败任务快照）。 */
+    @Transactional
+    public void finishTurn(String conversationId, TurnHandle turn, String status, String answer, String traceId,
+                           String logicalPlanJson, String frameJson) {
+        finishTurn(conversationId, turn, status, answer, traceId, logicalPlanJson, frameJson, null);
+    }
+
     /**
-     * 澄清轮次（NEEDS_CLARIFICATION）：把澄清问题并入活动 frame 的 pendingClarification，
-     * 保留 targets 等已知条件，用户补一个字段后能接上原任务。须在 finishTurn 释放占用前调用。
+     * 澄清轮次（NEEDS_CLARIFICATION）：独立保存待补任务（原问题 + 澄清问题，R1）——
+     * 不依赖活动 frame 存在，新会话首轮澄清也能接续；澄清不挂在旧任务的 frame 上。
+     * 须在 finishTurn 释放占用前调用。
      */
     @Transactional
-    public void recordPendingClarification(String conversationId, TurnHandle turn, String clarify) {
+    public void recordPendingTask(String conversationId, TurnHandle turn, String question, String clarify) {
         com.fasterxml.jackson.databind.node.ObjectNode pending =
                 new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+        pending.put("question", question);
         pending.put("clarify", clarify);
         pending.put("turnId", turn.turnId());
-        repository.updatePendingClarification(conversationId, turn.turnId(), turn.fencingToken(), pending.toString());
+        repository.savePendingTask(conversationId, turn.turnId(), turn.fencingToken(), pending.toString());
     }
 
     private static String abbreviate(String text, int max) {

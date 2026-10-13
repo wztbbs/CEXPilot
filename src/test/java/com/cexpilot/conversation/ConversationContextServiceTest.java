@@ -89,6 +89,51 @@ class ConversationContextServiceTest {
     }
 
     @Test
+    void 首轮澄清任务独立渲染不要求frame存在() {
+        // R1：新会话没有活动 frame，澄清任务也要进 prompt，且带原问题
+        when(repository.findActiveFrameJson("conv-1")).thenReturn(null);
+        when(repository.recentQueries("conv-1", 5)).thenReturn(List.of());
+        when(repository.findPendingTaskJson("conv-1")).thenReturn(
+                "{\"question\":\"BTC 和 ETH 谁的费率均值更高？\",\"clarify\":\"您想看哪家交易所？\",\"turnId\":\"t1\"}");
+
+        PlannerInput input = service.buildPlannerInput("conv-1");
+
+        assertNull(input.activeFrame());
+        String ctx = input.contextText();
+        assertTrue(ctx.contains("【待补条件】"), ctx);
+        assertTrue(ctx.contains("BTC 和 ETH 谁的费率均值更高？"), "原问题必须回传给 Planner");
+        assertTrue(ctx.contains("您想看哪家交易所？"), ctx);
+        assertTrue(ctx.contains("完成原任务"), ctx);
+    }
+
+    @Test
+    void 失败尝试独立渲染供重试接续() {
+        // R2：FAILED 轮次不进文本历史，但"再试一次"需要结构化失败任务
+        when(repository.findActiveFrameJson("conv-1")).thenReturn(null);
+        when(repository.recentQueries("conv-1", 5)).thenReturn(List.of());
+        when(repository.findLastAttemptJson("conv-1")).thenReturn(
+                "{\"turnId\":\"t2\",\"question\":\"ETH 昨日收盘价\",\"status\":\"FAILED\"}");
+
+        PlannerInput input = service.buildPlannerInput("conv-1");
+
+        String ctx = input.contextText();
+        assertTrue(ctx.contains("【最近失败尝试】"), ctx);
+        assertTrue(ctx.contains("ETH 昨日收盘价"), ctx);
+        assertTrue(ctx.contains("以它为基准"), ctx);
+    }
+
+    @Test
+    void 澄清任务损坏时忽略该段不报错() {
+        when(repository.findActiveFrameJson("conv-1")).thenReturn(null);
+        when(repository.recentQueries("conv-1", 5)).thenReturn(List.of());
+        when(repository.findPendingTaskJson("conv-1")).thenReturn("{损坏");
+
+        PlannerInput input = service.buildPlannerInput("conv-1");
+
+        assertFalse(input.contextText().contains("【待补条件】"));
+    }
+
+    @Test
     void 答案截断放宽到500且结构化条件不参与截断() throws Exception {
         String longAnswer = "数".repeat(600);
         when(repository.findActiveFrameJson("conv-1")).thenReturn(sampleFrame().toJson());
@@ -112,7 +157,8 @@ class ConversationContextServiceTest {
                  "requested_range":{"start_inclusive":"2026-10-11 00:00:00","end_exclusive":"2026-10-12 00:00:00",
                  "timezone":"Asia/Shanghai"},"value":83955}
                 """);
-        store.saveFact("conv-1", "turn-1", "trace-1", target, payload, Instant.parse("2026-10-12T01:00:00Z"));
+        // 本例验证候选渲染，获取时间保持在保留期内，避免固定日期经过 24 小时后失效。
+        store.saveFact("conv-1", "turn-1", "trace-1", target, payload, Instant.now());
         var withEvidence = new ConversationContextService(repository, store);
         String longAnswer = "数".repeat(600);
         when(repository.findActiveFrameJson("conv-1")).thenReturn(frame.toJson());

@@ -46,7 +46,25 @@ public class ConversationContextService {
         QueryFrame frame = loadActiveFrame(conversationId);
         List<com.cexpilot.evidence.EvidenceAssembler.Entry> evidence = loadEvidence(conversationId);
         TextHistory history = renderTextHistory(conversationId);
-        return new PlannerInput(render(frame, history.text(), evidence), frame, evidence, history.count());
+        com.fasterxml.jackson.databind.JsonNode pendingTask = loadStateJson(
+                repository.findPendingTaskJson(conversationId), "pending_task");
+        com.fasterxml.jackson.databind.JsonNode lastAttempt = loadStateJson(
+                repository.findLastAttemptJson(conversationId), "last_attempt");
+        return new PlannerInput(render(frame, history.text(), evidence, pendingTask, lastAttempt),
+                frame, evidence, history.count());
+    }
+
+    /** 会话状态列的 JSON 读取：损坏时降级为 null 只记日志。 */
+    private com.fasterxml.jackson.databind.JsonNode loadStateJson(String json, String name) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        try {
+            return new com.fasterxml.jackson.databind.ObjectMapper().readTree(json);
+        } catch (Exception e) {
+            log.warn("会话状态 {} 反序列化失败，本轮忽略 {}: {}", name, name, e.getMessage());
+            return null;
+        }
     }
 
     /** 可引用历史事实：未过期且有缓存 payload 的 FACT，按取数时间倒序分配稳定短别名。读不到就空列表。 */
@@ -98,11 +116,18 @@ public class ConversationContextService {
     }
 
     static String render(QueryFrame frame, String textHistory) {
-        return render(frame, textHistory, List.of());
+        return render(frame, textHistory, List.of(), null, null);
     }
 
     static String render(QueryFrame frame, String textHistory,
                          List<com.cexpilot.evidence.EvidenceAssembler.Entry> evidence) {
+        return render(frame, textHistory, evidence, null, null);
+    }
+
+    static String render(QueryFrame frame, String textHistory,
+                         List<com.cexpilot.evidence.EvidenceAssembler.Entry> evidence,
+                         com.fasterxml.jackson.databind.JsonNode pendingTask,
+                         com.fasterxml.jackson.databind.JsonNode lastAttempt) {
         StringBuilder sb = new StringBuilder();
         if (frame != null) {
             sb.append("【活动查询状态】（程序维护的结构化条件，可信，优先于下方文字历史）\n");
@@ -114,6 +139,18 @@ public class ConversationContextService {
             if (frame.pendingClarification() != null && !frame.pendingClarification().isNull()) {
                 sb.append("【待补条件】上一轮未完成的澄清：").append(frame.pendingClarification()).append('\n');
             }
+        }
+        // 待补任务独立于 frame 渲染（R1）：新会话首轮澄清没有 frame 也要能接续原任务
+        if (pendingTask != null) {
+            sb.append("【待补条件】上一轮有未完成的澄清，原问题：「").append(pendingTask.path("question").asText())
+                    .append("」，等待用户补充：").append(pendingTask.path("clarify").asText())
+                    .append("。若用户本轮在补充该条件，请基于原问题完成原任务，不要当作全新问题。\n");
+        }
+        // 失败尝试独立于 frame 渲染（R2）：重试/换条件延续失败任务时以此为基准，不退回更早话题
+        if (lastAttempt != null) {
+            sb.append("【最近失败尝试】问题：「").append(lastAttempt.path("question").asText())
+                    .append("」执行失败。用户表达\"再试一次\"或在该问题上换条件延续时，以它为基准生成计划，")
+                    .append("不要接续更早的话题。\n");
         }
         // 可引用事实段先于文本历史：预算不足时优先裁文本历史，事实索引完整保留
         sb.append(com.cexpilot.evidence.EvidenceAssembler.render(evidence));

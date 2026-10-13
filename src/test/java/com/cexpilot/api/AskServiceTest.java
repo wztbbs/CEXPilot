@@ -38,6 +38,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -93,7 +94,7 @@ class AskServiceTest {
         assertFalse(response.busy());
         assertEquals("答案", response.answer());
         verify(conversation).beginTurn("conv-1", "BTC 多少钱", "parent-1", T0);
-        verify(conversation).finishTurn("conv-1", turn, "SUCCEEDED", "答案", response.traceId(), null, null);
+        verify(conversation).finishTurn("conv-1", turn, "SUCCEEDED", "答案", response.traceId(), null, null, null);
         verify(traceRepository).finishTrace(eq(response.traceId()), eq("SUCCESS"), eq("答案"),
                 anyInt(), anyInt(), anyInt(), anyInt(), any(), anyLong(), isNull(), eq(0),
                 anyInt(), anyInt(), anyInt(), anyInt(), anyInt());
@@ -115,17 +116,73 @@ class AskServiceTest {
     }
 
     @Test
-    void 执行失败时轮次落FAILED且不覆盖frame() {
+    void 执行失败时轮次落FAILED且带失败任务快照() {
         when(runtime.execute(anyString(), anyString(), anyString(), any(), any(), any(), any(), any(), any(), any()))
                 .thenThrow(new RuntimeException("LLM 超时"));
 
         assertThrows(RuntimeException.class,
-                () -> service.ask("conv-1", "BTC 多少钱", "v1", null, null, null));
+                () -> service.ask("conv-1", "ETH 昨日收盘价", "v1", null, null, null));
 
         verify(traceRepository).finishTrace(anyString(), eq("FAILED"), isNull(), anyInt(), anyInt(),
                 isNull(), isNull(), isNull(), anyLong(), eq("LLM 超时"));
+        var captor = org.mockito.ArgumentCaptor.forClass(String.class);
         verify(conversation).finishTurn(eq("conv-1"), eq(turn), eq("FAILED"), isNull(), anyString(),
-                isNull(), isNull());
+                isNull(), isNull(), captor.capture());
+        // R2：失败任务快照带原问题，供"再试一次"接续
+        assertTrue(captor.getValue().contains("ETH 昨日收盘价"), captor.getValue());
+        assertTrue(captor.getValue().contains("FAILED"));
+    }
+
+    @Test
+    void 建trace失败时轮次仍收尾且不写trace事件() {
+        // R8：beginTurn 之后、startTrace 本身失败（如 DB 抖动），轮次必须落 FAILED 释放占用
+        // startTrace 返回 void，桩要用 doThrow 语法；promptVersion/buildCommit 来自 mock 可能为 null
+        org.mockito.Mockito.doThrow(new IllegalStateException("db down"))
+                .when(traceRepository).startTrace(anyString(), anyString(), anyString(),
+                        anyString(), nullable(String.class), any(), nullable(String.class));
+
+        assertThrows(IllegalStateException.class,
+                () -> service.ask("conv-1", "BTC 多少钱", "v1", null, null, null));
+
+        verify(conversation).finishTurn(eq("conv-1"), eq(turn), eq("FAILED"), isNull(),
+                anyString(), isNull(), isNull(), anyString());
+        // trace 行不存在，不应对它 finishTrace / 落事件
+        verify(traceRepository, never()).finishTrace(anyString(), anyString(), any(), anyInt(), anyInt(),
+                any(), any(), any(), anyLong(), any());
+    }
+
+    @Test
+    void onDone推送失败不改写已成功的轮次() {
+        stubRuntimeSuccess();
+
+        AskResponse response = service.ask("conv-1", "BTC 多少钱", "v1", null, null,
+                new AskService.AskStreamListener() {
+                    @Override
+                    public void onMeta(String conversationId, String traceId, String turnId) {
+                    }
+
+                    @Override
+                    public void onProgress(String text) {
+                    }
+
+                    @Override
+                    public void onDelta(String text) {
+                    }
+
+                    @Override
+                    public void onDone(AskResponse r) {
+                        throw new IllegalStateException("sse broken");
+                    }
+                });
+
+        // R8：答案与轮次已成功提交，SSE 推送失败只记日志，不把 SUCCEEDED 改写成 FAILED
+        assertEquals("答案", response.answer());
+        verify(conversation).finishTurn(eq("conv-1"), eq(turn), eq("SUCCEEDED"), eq("答案"),
+                anyString(), isNull(), isNull(), isNull());
+        verify(conversation, never()).finishTurn(eq("conv-1"), eq(turn), eq("FAILED"),
+                any(), any(), any(), any(), any());
+        verify(traceRepository, never()).finishTrace(anyString(), eq("FAILED"), any(), anyInt(), anyInt(),
+                any(), any(), any(), anyLong(), any());
     }
 
     @Test
@@ -196,7 +253,7 @@ class AskServiceTest {
         var captor = org.mockito.ArgumentCaptor.forClass(String.class);
         var frameCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
         verify(conversation).finishTurn(eq("conv-1"), eq(turn), eq("SUCCEEDED"), eq("答案"),
-                eq(response.traceId()), captor.capture(), frameCaptor.capture());
+                eq(response.traceId()), captor.capture(), frameCaptor.capture(), isNull());
         assertEquals(planJson.toString(), captor.getValue());
 
         JsonNode frame = MAPPER.readTree(frameCaptor.getValue());

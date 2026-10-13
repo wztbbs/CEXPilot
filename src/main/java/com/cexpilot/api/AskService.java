@@ -128,35 +128,40 @@ public class AskService {
             return busy;
         }
 
-        // 3. 渲染对话上下文：Answer 侧仍用 renderContext 纯文本（口径不变）；
-        //    Planner 侧用分层结构化上下文（活动 frame + 带时间的近期问答，阶段一 c）。
-        String conversationContext = conversation.renderContext(resolvedConversationId);
-        com.cexpilot.conversation.PlannerInput plannerInput =
-                contextService.buildPlannerInput(resolvedConversationId);
-
-        // 4. 开启 trace：写入一条 RUNNING 记录。traceId 是本次问答的全局标识——
-        //    后续每次 LLM 调用、每次工具调用都会以它为外键落 trace_event，
-        //    用户点 👎 后凭它完整回放"当时调了什么工具、拿到了什么数据"。
-        //    同时记录 model、promptVersion（prompt 内容的哈希）和 buildCommit（代码版本指纹），
-        //    便于排查答案可复现性。
-        String traceId = UUID.randomUUID().toString();
-        traceRepository.startTrace(traceId, resolvedConversationId, question,
-                llmConfig.getNormal().getModel(), runtime.promptVersion(), visitorId, buildCommit);
-        if (listener != null) {
-            listener.onMeta(resolvedConversationId, traceId, turn.turnId());
-        }
-        // CONTEXT_RESOLVED（阶段三观测）：Planner 输入组装完成后的上下文摘要
-        traceSink.record(new com.cexpilot.runtime.TraceEvent(traceId, "CONTEXT_RESOLVED", "context_service",
-                null, contextResolvedSummary(resolvedConversationId, turn, plannerInput),
-                null, null, null, null, null, null));
-
+        // 3. 取得轮次后立即进入 try/finally（R8）：上下文读取、建 trace、SSE meta 任何一步失败
+        //    都要走到轮次收尾，不留 RUNNING 行和执行占用卡死会话。
         long start = System.currentTimeMillis();
         boolean turnFinished = false;
+        boolean traceStarted = false;
+        boolean traceFinished = false;
+        String traceId = UUID.randomUUID().toString();
         // 计划通过校验后（执行前）由 runtime 回调，成功路径用它提交 frame，失败路径用它落 logical_plan_json
         java.util.concurrent.atomic.AtomicReference<com.cexpilot.metric.CompiledPlan> compiledPlanRef =
                 new java.util.concurrent.atomic.AtomicReference<>();
         try {
-            // 5. 执行 DAG（合并规划 → 并行执行 → 生成回答），成功后收尾：trace 置为 SUCCESS，
+            // 4. 渲染对话上下文：Answer 侧仍用 renderContext 纯文本（口径不变）；
+            //    Planner 侧用分层结构化上下文（活动 frame + 待补任务/失败尝试 + 带时间的近期问答）。
+            String conversationContext = conversation.renderContext(resolvedConversationId);
+            com.cexpilot.conversation.PlannerInput plannerInput =
+                    contextService.buildPlannerInput(resolvedConversationId);
+
+            // 5. 开启 trace：写入一条 RUNNING 记录。traceId 是本次问答的全局标识——
+            //    后续每次 LLM 调用、每次工具调用都会以它为外键落 trace_event，
+            //    用户点 👎 后凭它完整回放"当时调了什么工具、拿到了什么数据"。
+            //    同时记录 model、promptVersion（prompt 内容的哈希）和 buildCommit（代码版本指纹），
+            //    便于排查答案可复现性。
+            traceRepository.startTrace(traceId, resolvedConversationId, question,
+                    llmConfig.getNormal().getModel(), runtime.promptVersion(), visitorId, buildCommit);
+            traceStarted = true;
+            if (listener != null) {
+                listener.onMeta(resolvedConversationId, traceId, turn.turnId());
+            }
+            // CONTEXT_RESOLVED（阶段三观测）：Planner 输入组装完成后的上下文摘要
+            traceSink.record(new com.cexpilot.runtime.TraceEvent(traceId, "CONTEXT_RESOLVED", "context_service",
+                    null, contextResolvedSummary(resolvedConversationId, turn, plannerInput),
+                    null, null, null, null, null, null));
+
+            // 6. 执行 DAG（合并规划 → 并行执行 → 生成回答），成功后收尾：trace 置为 SUCCESS，
             //    记录答案、层数、工具调用数、token 用量与成本；
             //    轮次提交 SUCCEEDED（补 answer/trace_id/finished_at、释放执行占用），成为后续追问的上下文。
             ExecutionResult result = runtime.execute(question, conversationContext, traceId, traceSink,
@@ -171,6 +176,7 @@ public class AskService {
                     cost, durationMs, null, result.reusedFactCount(),
                     result.plannerLlmCalls(), result.answerLlmCalls(), result.metricFetchCount(),
                     result.calculationCount(), result.httpRequestCount());
+            traceFinished = true;
 
             // QueryFrame 随成功轮次提交覆盖活动 frame（失败/澄清轮次不覆盖）；下一轮由
             // ConversationContextService 读取注入 Planner 并做继承对账（阶段一 c）。
@@ -182,60 +188,93 @@ public class AskService {
                             turn.turnId(), question, requestContext.requestTime(), requestContext.userZone(),
                             compiledPlan, result.evidence()).toJson()
                     : null;
-            // 澄清轮次：先把澄清问题并入活动 frame 的 pendingClarification（ fencing 保护），再提交轮次
+            // 澄清轮次：先独立保存待补任务（原问题 + 澄清问题，R1），再提交轮次
             if ("NEEDS_CLARIFICATION".equals(turnStatus) && result.clarify() != null) {
-                conversation.recordPendingClarification(resolvedConversationId, turn, result.clarify());
+                conversation.recordPendingTask(resolvedConversationId, turn, question, result.clarify());
             }
             conversation.finishTurn(resolvedConversationId, turn, turnStatus, result.answer(), traceId,
-                    logicalPlanJson, frameJson);
+                    logicalPlanJson, frameJson, null);
             turnFinished = true;
             // CONTEXT_COMMITTED（阶段三观测）：轮次状态提交后的最终状态摘要
             traceSink.record(new com.cexpilot.runtime.TraceEvent(traceId, "CONTEXT_COMMITTED", "ask_service",
                     null, contextCommittedSummary(turnStatus, result.savedFactIds(), frameJson != null),
                     null, null, null, null, null, null));
 
-            // 6. evidence（工具产出的事实集）随答案一起返回，前端可展示"答案引用了哪些数据"。
+            // 7. evidence（工具产出的事实集）随答案一起返回，前端可展示"答案引用了哪些数据"。
             AskResponse response = new AskResponse(resolvedConversationId, traceId, result.answer(),
                     result.evidence(), result.toolCallCount(), result.steps(), durationMs, turn.turnId(), false,
                     result.plannerLlmCalls(), result.answerLlmCalls(), result.metricFetchCount(),
                     result.calculationCount(), result.httpRequestCount(), result.reusedFactCount());
             if (listener != null) {
-                listener.onDone(response);
+                try {
+                    listener.onDone(response);
+                } catch (Exception ex) {
+                    // 答案与轮次状态已提交成功，SSE 推送失败只影响本次连接，不得把轮次改写成 FAILED（R8）
+                    log.warn("onDone 推送失败（答案已提交）turnId={}: {}", turn.turnId(), ex.getMessage());
+                }
             }
             return response;
         } catch (Exception e) {
             // 失败同样要落 trace 与轮次：失败的现场数据正是后续定位问题、固化评测 case 的原料。
             long durationMs = System.currentTimeMillis() - start;
             log.warn("问答失败 traceId={}: {}", traceId, e.getMessage());
-            traceRepository.finishTrace(traceId, "FAILED", null, 0, 0,
-                    null, null, null, durationMs, e.getMessage());
-            com.cexpilot.metric.CompiledPlan compiledPlan = compiledPlanRef.get();
-            turnFinished = failTurnQuietly(resolvedConversationId, turn, traceId,
-                    compiledPlan != null ? compiledPlan.logicalPlanJson().toString() : null);
+            if (traceStarted && !traceFinished) {
+                traceRepository.finishTrace(traceId, "FAILED", null, 0, 0,
+                        null, null, null, durationMs, e.getMessage());
+            }
+            if (!turnFinished) {
+                com.cexpilot.metric.CompiledPlan compiledPlan = compiledPlanRef.get();
+                turnFinished = failTurnQuietly(resolvedConversationId, turn, question, traceId,
+                        compiledPlan != null ? compiledPlan.logicalPlanJson().toString() : null,
+                        traceStarted);
+            }
             throw e;
         } finally {
             // 兜底释放执行占用（如 catch 里收尾也失败、或抛出的是 Error），避免会话被永久锁死
             if (!turnFinished) {
                 com.cexpilot.metric.CompiledPlan compiledPlan = compiledPlanRef.get();
-                failTurnQuietly(resolvedConversationId, turn, traceId,
-                        compiledPlan != null ? compiledPlan.logicalPlanJson().toString() : null);
+                failTurnQuietly(resolvedConversationId, turn, question, traceId,
+                        compiledPlan != null ? compiledPlan.logicalPlanJson().toString() : null,
+                        traceStarted);
             }
         }
     }
 
-    /** 失败收尾：轮次置 FAILED 并释放占用（frame 传 null，不覆盖活动 frame）；自身再失败只记日志，不掩盖原始异常。返回是否完成收尾。 */
-    private boolean failTurnQuietly(String conversationId, ConversationService.TurnHandle turn,
-                                    String traceId, String logicalPlanJson) {
+    /**
+     * 失败收尾：轮次置 FAILED（带失败任务快照 lastAttempt，R2）并释放占用（frame 传 null，不覆盖活动 frame）；
+     * 自身再失败只记日志，不掩盖原始异常。返回是否完成收尾。
+     */
+    private boolean failTurnQuietly(String conversationId, ConversationService.TurnHandle turn, String question,
+                                    String traceId, String logicalPlanJson, boolean traceStarted) {
         try {
-            conversation.finishTurn(conversationId, turn, "FAILED", null, traceId, logicalPlanJson, null);
-            traceSink.record(new com.cexpilot.runtime.TraceEvent(traceId, "CONTEXT_COMMITTED", "ask_service",
-                    null, contextCommittedSummary("FAILED", java.util.List.of(), false),
-                    null, null, null, null, null, null));
+            String lastAttemptJson = lastAttemptSummary(turn.turnId(), question, traceId, logicalPlanJson);
+            conversation.finishTurn(conversationId, turn, "FAILED", null, traceId, logicalPlanJson, null,
+                    lastAttemptJson);
+            if (traceStarted) {
+                traceSink.record(new com.cexpilot.runtime.TraceEvent(traceId, "CONTEXT_COMMITTED", "ask_service",
+                        null, contextCommittedSummary("FAILED", java.util.List.of(), false),
+                        null, null, null, null, null, null));
+            }
             return true;
         } catch (Exception ex) {
             log.warn("轮次失败收尾失败 turnId={}: {}", turn.turnId(), ex.getMessage());
             return false;
         }
+    }
+
+    /** 失败任务快照（R2）：下一轮"再试一次/那 OKX 呢"接续的依据；独立于成功 frame 保存。 */
+    private static String lastAttemptSummary(String turnId, String question, String traceId, String logicalPlanJson) {
+        var out = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+        out.put("turnId", turnId);
+        out.put("question", question);
+        out.put("status", "FAILED");
+        if (traceId != null) {
+            out.put("traceId", traceId);
+        }
+        if (logicalPlanJson != null) {
+            out.put("has_valid_plan", true);
+        }
+        return out.toString();
     }
 
     /** CONTEXT_RESOLVED 的 output_json：轮次序号、活动 frame 摘要（targets 关键条件）、可引用事实候选数、文本历史条数。 */

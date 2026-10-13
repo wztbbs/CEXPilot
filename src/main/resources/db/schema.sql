@@ -36,12 +36,12 @@ CREATE TABLE IF NOT EXISTS conversation_query (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
 -- 会话状态行：原子序号分配 + 同会话串行执行占用（多轮追问阶段一 a）。
--- next_query_no 存"下一个可用序号"，分配时原子 +1；running_turn_id/lease_until 为执行占用，
+-- last_query_no 存"最后已分配的序号"，初始为 0，分配时原子 +1；running_turn_id/lease_until 为执行占用，
 -- fencing_token 单调递增，提交时校验——租约过期被新请求接管后，旧执行者凭过期 token 无法覆盖状态。
 CREATE TABLE IF NOT EXISTS conversation_state (
     conversation_id VARCHAR(64)  NOT NULL PRIMARY KEY,
     version         BIGINT       NOT NULL DEFAULT 0,
-    next_query_no   BIGINT       NOT NULL DEFAULT 1,
+    last_query_no   BIGINT       NOT NULL DEFAULT 0,
     running_turn_id VARCHAR(64)  NULL,
     lease_until     DATETIME(6)  NULL,
     fencing_token   BIGINT       NOT NULL DEFAULT 0,
@@ -49,6 +49,12 @@ CREATE TABLE IF NOT EXISTS conversation_state (
     -- 下一轮由 ConversationContextService 读取注入 Planner 并做继承对账（阶段一 c）；
     -- 写入同样带 running_turn_id + fencing_token 条件，过期执行者不得覆盖新 frame
     active_frame_json JSON       NULL,
+    -- 待补澄清任务（审查 R1）：独立于活动 frame 保存——新会话没有 frame 也能接续澄清，
+    -- 澄清不挂在旧任务上。结构 {question, clarify, turnId}；成功轮次提交时清空。
+    pending_task_json JSON       NULL,
+    -- 最近失败尝试（审查 R2）："再试一次/那 OKX 呢"接续失败任务的依据。
+    -- 结构 {turnId, question, status, traceId, has_valid_plan}；成功轮次提交时清空。
+    last_attempt_json JSON       NULL,
     updated_at      DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
@@ -76,6 +82,10 @@ CREATE TABLE IF NOT EXISTS conversation_state (
 --    必须先迁移后部署，否则新事件名写库会被截断报错。
 -- 7. 阶段三（migrations/009_turn_counters.sql）：ask_trace 加 planner_llm_calls / answer_llm_calls /
 --    metric_fetch_count / calculation_count / http_request_count 计数列。
+-- 8. 序号语义调整（migrations/010_last_query_no.sql）：旧库 next_query_no 转为 last_query_no，值减 1。
+-- 9. 审查修复 R1/R2（migrations/011_pending_task_and_last_attempt.sql）：conversation_state 加
+--    pending_task_json / last_attempt_json 两列（澄清任务与失败尝试独立于活动 frame 保存）。
+--    停止旧应用并等待在途问答结束后迁移，再启动新版本；新库无需执行该迁移。
 
 -- 一次问答 = 一条 ask_trace（就是 Trace 的主表，👎 之后靠它完整回放）
 CREATE TABLE IF NOT EXISTS ask_trace (

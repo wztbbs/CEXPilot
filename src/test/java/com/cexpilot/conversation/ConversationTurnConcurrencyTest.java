@@ -29,7 +29,7 @@ class ConversationTurnConcurrencyTest {
     /** 内存模拟 conversation_state 行：acquireTurn 是临界区，语义与 SQL 版 IF(...) 一致。 */
     static class InMemoryRepository extends ConversationRepository {
 
-        record State(long nextQueryNo, String runningTurnId, long fencingToken, long leaseUntilMillis) {
+        record State(long lastQueryNo, String runningTurnId, long fencingToken, long leaseUntilMillis) {
         }
 
         private final Map<String, State> states = new ConcurrentHashMap<>();
@@ -44,16 +44,16 @@ class ConversationTurnConcurrencyTest {
             long now = System.currentTimeMillis();
             State current = states.get(conversationId);
             if (current == null) {
-                states.put(conversationId, new State(2, turnId, 1, now + leaseMillis));
-                return new ConversationStateRow(2, turnId, 1);
+                states.put(conversationId, new State(1, turnId, 1, now + leaseMillis));
+                return new ConversationStateRow(1, turnId, 1);
             }
             if (current.runningTurnId() == null || current.leaseUntilMillis() <= now) {
-                State next = new State(current.nextQueryNo() + 1, turnId,
+                State next = new State(current.lastQueryNo() + 1, turnId,
                         current.fencingToken() + 1, now + leaseMillis);
                 states.put(conversationId, next);
-                return new ConversationStateRow(next.nextQueryNo(), turnId, next.fencingToken());
+                return new ConversationStateRow(next.lastQueryNo(), turnId, next.fencingToken());
             }
-            return new ConversationStateRow(current.nextQueryNo(), current.runningTurnId(), current.fencingToken());
+            return new ConversationStateRow(current.lastQueryNo(), current.runningTurnId(), current.fencingToken());
         }
 
         @Override
@@ -76,7 +76,7 @@ class ConversationTurnConcurrencyTest {
         public synchronized boolean releaseTurn(String conversationId, String turnId, long fencingToken) {
             State current = states.get(conversationId);
             if (current != null && turnId.equals(current.runningTurnId()) && fencingToken == current.fencingToken()) {
-                states.put(conversationId, new State(current.nextQueryNo(), null, current.fencingToken(), 0));
+                states.put(conversationId, new State(current.lastQueryNo(), null, current.fencingToken(), 0));
                 return true;
             }
             return false;
@@ -86,11 +86,26 @@ class ConversationTurnConcurrencyTest {
         public void touchConversation(String conversationId, String title) {
         }
 
+        // R1/R2 任务状态：并发语义与占用无关，内存版只做 no-op 保证 SUCCEEDED 路径不触库
+        @Override
+        public boolean savePendingTask(String conversationId, String turnId, long fencingToken, String pendingJson) {
+            return true;
+        }
+
+        @Override
+        public boolean saveLastAttempt(String conversationId, String turnId, long fencingToken, String attemptJson) {
+            return true;
+        }
+
+        @Override
+        public void clearTaskState(String conversationId, String turnId, long fencingToken) {
+        }
+
         /** 测试辅助：把当前占用租约置为已过期，模拟"执行者崩溃后租约到期"。 */
         synchronized void expireLease(String conversationId) {
             State current = states.get(conversationId);
             if (current != null && current.runningTurnId() != null) {
-                states.put(conversationId, new State(current.nextQueryNo(), current.runningTurnId(),
+                states.put(conversationId, new State(current.lastQueryNo(), current.runningTurnId(),
                         current.fencingToken(), 0));
             }
         }
@@ -101,6 +116,32 @@ class ConversationTurnConcurrencyTest {
     private final InMemoryRepository repository = new InMemoryRepository();
     private final ConversationConfig config = new ConversationConfig();
     private final ConversationService service = new ConversationService(repository, config);
+
+    @Test
+    void 已有零计数状态从第一轮开始且失败轮次也保留序号() {
+        repository.states.put("c1", new InMemoryRepository.State(0, null, 0, 0));
+
+        ConversationService.TurnHandle first = service.beginTurn("c1", "问题", null, NOW);
+        assertNotNull(first);
+        assertEquals(1, first.queryNo());
+        assertNull(service.beginTurn("c1", "忙碌请求", null, NOW));
+
+        service.finishTurn("c1", first, "FAILED", "失败", "trace-1", null, null);
+        ConversationService.TurnHandle second = service.beginTurn("c1", "重试", null, NOW);
+        assertNotNull(second);
+        assertEquals(2, second.queryNo(), "失败轮次保留序号，忙碌请求不消耗序号");
+    }
+
+    @Test
+    void 已有最后序号继续递增() {
+        repository.states.put("c1", new InMemoryRepository.State(37, null, 8, 0));
+
+        ConversationService.TurnHandle turn = service.beginTurn("c1", "追问", null, NOW);
+
+        assertNotNull(turn);
+        assertEquals(38, turn.queryNo());
+        assertEquals(9, turn.fencingToken());
+    }
 
     @Test
     void 同会话并发登记只有一个成功且序号唯一() throws Exception {
