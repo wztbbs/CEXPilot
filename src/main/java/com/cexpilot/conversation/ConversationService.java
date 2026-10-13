@@ -9,10 +9,10 @@ import java.util.UUID;
 
 /**
  * Conversation Context：不做长期记忆，
- * 只把本对话最近几个 Query 注入 prompt，追问的指代消解交给 LLM 在这份上下文上完成。
+ * 按独立任务维护状态与版本，Planner 根据当前任务、历史候选和文字记录解析意图。
  *
  * 轮次生命周期（多轮追问阶段一 a）：beginTurn 在请求开始即登记 RUNNING 轮次并占用会话执行权，
- * finishTurn 在结束（成功/失败）时提交状态并释放占用。DB 事务只覆盖登记与提交，不跨越 LLM 调用。
+ * finishTaskTurn 原子提交成功/澄清/失败任务、轮次快照及活动指针。事务不跨 LLM 调用。
  */
 @Service
 public class ConversationService {
@@ -128,6 +128,49 @@ public class ConversationService {
         repository.releaseTurn(conversationId, turn.turnId(), turn.fencingToken());
         repository.touchConversation(conversationId, null);
         return frameUpdated;
+    }
+
+    public record TaskCommit(boolean updated, String frameId, long version, TaskState state) {}
+
+    /** 任务状态、轮次快照、活动指针和占用释放原子提交；来源版本与新增版本分开。 */
+    @Transactional
+    public TaskCommit finishTaskTurn(String conversationId, TurnHandle turn, String question, String status,
+            String answer, String traceId, com.cexpilot.metric.CompiledPlan plan,
+            com.fasterxml.jackson.databind.JsonNode evidence, TaskScope scope, java.time.Instant requestTime,
+            java.time.ZoneId zone, String taskResponse) {
+        String logicalJson = plan == null ? null : plan.logicalPlanJson().toString();
+        if (!repository.ownsTurnForUpdate(conversationId, turn.turnId(), turn.fencingToken())) {
+            repository.finishTurn(turn.turnId(), status, answer, traceId, logicalJson, null);
+            return new TaskCommit(false, null, 0, null);
+        }
+        if (scope == null) {
+            // 出域/无任务决策的普通说明不改变已有任务。
+            repository.finishTurn(turn.turnId(), status, answer, traceId, logicalJson, null);
+            repository.releaseTurn(conversationId, turn.turnId(), turn.fencingToken());
+            repository.touchConversation(conversationId, null);
+            return new TaskCommit(false, null, 0, null);
+        }
+        TaskState base = scope.action() == TaskScope.Action.NEW ? null : scope.base();
+        if (base != null && !conversationId.equals(base.conversationId())) {
+            throw new IllegalArgumentException("任务不属于当前会话");
+        }
+        String frameId = base == null ? UUID.randomUUID().toString() : base.frameId();
+        TaskState latest = repository.findTask(conversationId, frameId);
+        long version = latest == null ? (base == null ? 1 : base.version() + 1) : latest.version() + 1;
+        var selectedContext = scope.executionContext(new com.cexpilot.runtime.RequestContext(zone, requestTime));
+        TaskState next = TaskState.complete(frameId, conversationId, version, base, turn, question, status,
+                taskResponse == null && plan == null ? answer : taskResponse, plan, evidence,
+                selectedContext.requestTime(), selectedContext.userZone());
+        // 来源版本可以很旧，但失败/澄清不能把该任务最近成功状态倒退到那个旧版本。
+        if (latest != null && (!"SUCCEEDED".equals(status) || plan == null)) {
+            next = next.withSuccessfulFrame(latest.successfulFrame());
+        }
+        repository.saveTask(next);
+        repository.finishTaskQuery(turn.turnId(), status, answer, traceId, logicalJson, next, scope);
+        repository.activateTask(conversationId, next);
+        repository.releaseTurn(conversationId, turn.turnId(), turn.fencingToken());
+        repository.touchConversation(conversationId, null);
+        return new TaskCommit(true, frameId, version, next);
     }
 
     /** 兼容旧调用（无失败任务快照）。 */

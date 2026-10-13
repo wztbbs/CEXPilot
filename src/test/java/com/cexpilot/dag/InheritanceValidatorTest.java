@@ -178,6 +178,36 @@ class InheritanceValidatorTest {
         assertTrue(error.contains("base"), error);
     }
 
+    @Test
+    void 同所同币多指标的不同时间窗口未变时不误报() {
+        var original = multiWindowPlan(-2, false);
+        var f = new QueryFrame("f", "conv-1", 1, "t1", "两个区间", T1.toString(), SH.getId(),
+                original.targets(), null, null, null);
+        org.junit.jupiter.api.Assertions.assertEquals(Set.of(), validator.diffKeys(f, original, new RequestContext(SH, T1)));
+        org.junit.jupiter.api.Assertions.assertEquals(Set.of(), validator.diffKeys(f, multiWindowPlan(-2, true),
+                new RequestContext(SH, T1)), "重排节点不能改变配对");
+    }
+
+    @Test
+    void 同所同币的第二个指标改变时间必须检出() {
+        var original = multiWindowPlan(-2, false);
+        var f = new QueryFrame("f", "conv-1", 1, "t1", "两个区间", T1.toString(), SH.getId(),
+                original.targets(), null, null, null);
+        org.junit.jupiter.api.Assertions.assertEquals(Set.of("time"),
+                validator.diffKeys(f, multiWindowPlan(-1, false), new RequestContext(SH, T1)));
+        assertNotNull(validator.check(f, multiWindowPlan(-1, true), Set.of(), new RequestContext(SH, T1)));
+        assertNull(validator.check(f, multiWindowPlan(-1, true), Set.of("time"), new RequestContext(SH, T1)));
+    }
+
+    private static CompiledPlan multiWindowPlan(int lowOffset, boolean reverse) {
+        var high = MetricTestSupport.metric("high", "price.high", "range_statistic", "binance");
+        var low = MetricTestSupport.metric("low", "price.low", "range_statistic", "binance");
+        ((com.fasterxml.jackson.databind.node.ObjectNode) low.get("time")).put("offset", lowOffset);
+        var logical = reverse ? MetricTestSupport.plan(low, high) : MetricTestSupport.plan(high, low);
+        return new com.cexpilot.metric.MetricPlanCompiler(new com.cexpilot.metric.MetricCatalog(MetricTestSupport.LOADER),
+                MetricTestSupport.registry(), MetricTestSupport.catalogProviders()).compileFull(logical, 8);
+    }
+
     /** 双目标计划（每个目标独立 MetricRequest，供配对对账用例构造）。 */
     private static CompiledPlan twoTargetPlan(EffectiveTarget t1, EffectiveTarget t2,
                                               String timeJson) throws Exception {

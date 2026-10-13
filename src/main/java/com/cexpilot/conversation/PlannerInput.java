@@ -9,13 +9,19 @@ import java.util.List;
  * contextText 注入 planner prompt 的 conversation_context 槽位；activeFrame 供程序侧继承对账使用；
  * evidence 为【可引用历史事实】段对应的结构化候选（短别名→事实），供服务端绑定校验，
  * 必须与 contextText 中渲染的别名完全一致。
- * tasks 为【近期任务索引】对应的结构化快照（R3 一期）：模型用 task_action=RESUME + task_ref（轮次 id）
- * 选择回访目标，服务端据此外查并把继承对账基准切到所选快照。
+ * tasks 为本轮任务/版本候选：模型用 task_action=RESUME + task_ref/state_ref
+ * 选择回访目标；currentTask 是 CONTINUE 的基准，包含澄清/失败接续状态。
  * textHistoryCount 为【近期问答】文本历史条数（阶段三 CONTEXT_RESOLVED 观测用）。
  */
 public record PlannerInput(String contextText, QueryFrame activeFrame,
                            List<EvidenceAssembler.Entry> evidence, int textHistoryCount,
-                           List<TaskSnapshot> tasks) {
+                           List<TaskSnapshot> tasks, TaskState currentTask) {
+
+    public PlannerInput(String contextText, QueryFrame activeFrame, List<EvidenceAssembler.Entry> evidence,
+                        int textHistoryCount, List<TaskSnapshot> tasks) {
+        this(contextText, activeFrame, evidence, textHistoryCount, tasks,
+                activeFrame == null ? null : TaskState.legacy(activeFrame, 0, activeFrame.originalQuestion()));
+    }
 
     public PlannerInput(String contextText, QueryFrame activeFrame) {
         this(contextText, activeFrame, List.of(), 0, List.of());

@@ -113,6 +113,8 @@ OKX 请求必须携带 `User-Agent`，否则可能收到 `403 error code: 1010`�
 
 已有 `next_query_no` 的库需应用 [010_last_query_no.sql](src/main/resources/db/migrations/010_last_query_no.sql)，将计数转换为 `last_query_no = next_query_no - 1`。先停止旧应用并等待在途问答结束，完成迁移后再启动新版本。新库直接使用 `last_query_no`，不执行这条迁移。
 
+新增任务生命周期使用 [013_task_lifecycle.sql](src/main/resources/db/migrations/013_task_lifecycle.sql)：创建独立任务表并保存每轮版本。旧库先完成此前迁移，停旧应用后执行 013，再启动新版；新库无需执行迁移脚本。
+
 构建及运行 JAR：
 
 ```bash

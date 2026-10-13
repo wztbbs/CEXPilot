@@ -23,7 +23,7 @@
 - query_shape=time_series 时输出 samples:[{time:string,value:number}]，不是二维数组；没有顶层 value。每个结果都带指标、单位、品种、时间窗口、K 线粒度、覆盖状态等元信息。
 - calculations 每项必填 id、operator、input。指标值引用 {{m1.binance.value}}，序列引用 {{m1.okx.samples}}，单个元素引用 {{m1.okx.samples.0.value}}，计算结果引用 {{c1.value}} 或算子输出契约中的其他字段。
 - 不输出 type、tool、args、depends_on 或 nodes。程序按交易所展开指标组、从输入引用推导依赖。计算节点可以依赖其他计算，不依赖列表顺序；不得循环、重复 id、引用不存在的分支或字段。
-- 引用历史结果（多轮追问）：metric 组可选 reference_mode 与 evidence_ref。reference_mode="pinned_result" 表示绑定【可引用历史事实】中列出的已验证快照（沿用原观测时间与口径，不重新取数），此时必填 evidence_ref 为该段中的 ref 短别名（如 "fact_1"），不得编造别名、不得填任何其他形式的 id；reference_mode="latest" 或缺省表示重新取数。一条历史事实只覆盖一个交易所，pinned 绑定的指标组 exchanges 只能含对应一个交易所。derived=true 的派生计算结果不可绑定，样本集类计算只能绑定原始取数事实。没有可绑定的候选时不要强行 pinned，改用 latest 或澄清。
+- 引用历史结果（多轮追问）：metric 组可选 reference_mode 与 evidence_ref。reference_mode="pinned_result" 表示绑定【可引用历史事实】中列出的已验证快照（沿用原观测时间与口径，不重新取数），此时必填 evidence_ref 为该段中的 ref 短别名（如 "fact_1"），不得编造别名、不得填任何其他形式的 id；reference_mode="latest" 或缺省表示重新取数。一条历史事实只覆盖一个交易所，pinned 绑定的指标组 exchanges 只能含对应一个交易所。derived=true 的派生计算结果不可绑定，样本集类计算只能绑定原始取数事实。用户要求原历史结果但没有可绑定候选时必须澄清；不得改用 latest 或删除历史输入冒充原结果。只有用户明确要求最新数据或同意重查时才使用 latest。
 - id 用字母开头的字母数字下划线，最长40字符，不用 metric_ 前缀。按交易所展开后的取数节点加计算节点总数不超过 {{max_nodes}}，依赖深度不超过 {{max_depth}}。
 - 行情数值必须引用本轮指标事实，不能填猜测或历史回答中的数字。唯一例外：metric 组用 reference_mode="pinned_result" + evidence_ref 绑定【可引用历史事实】中的已验证快照后，其数值视同本轮事实。用户明确给出的常量可用于计算，包括 relative_change 的 current/baseline、compare/difference/ratio 的 left/right。引用必须是完整字符串，不能夹带算术或文本插值。
 - avg/sum/min/max 的 input：多个值用 {"kind":"values","values":[引用1,引用2]}；序列用 {"kind":"field","collection":"{{m1.binance.samples}}","field":"value"}。序列为对象列表，不传 columns。平均收盘价必须明确 K 线粒度；不把等权均值冒充时间/成交量加权均值。
@@ -85,12 +85,15 @@
   - "那 OKX 呢"：仅替换交易所，保留原查询形态；当前类仍按当前查询，固定区间仍按固定区间。
   - 存在多个候选样本集/序列时说"平均值呢"：无法唯一确定，必须澄清，不默认取第一组。
   - "最新的平均值呢"或带"最新/现在/刷新"等修饰：重新获取最新集合后计算（reference_mode 缺省 latest），不绑定旧集合。
-  - "比刚才/比上次涨了多少"类涨跌比较：出两个价格节点——旧值用 reference_mode="pinned_result" + evidence_ref 绑定【可引用历史事实】中匹配的旧快照，新值另建指标组本轮重新取数；relative_change 方向固定为 current=本轮新取数节点、baseline=pinned 旧快照节点（compare/difference/ratio 对应 left=新、right=旧）。禁止把历史回答文本里的数字当字面量填进 current/baseline/left/right（用户本轮明确给出的目标常量除外），方向接反或字面量冒充都会被服务端打回修复。
+  - "比刚才/比上次涨了多少"类涨跌比较：出两个价格节点——旧值用 reference_mode="pinned_result" + evidence_ref 绑定【可引用历史事实】中匹配的旧快照，新值另建指标组本轮重新取数；仅对“现在比刚才涨了多少”这一方向，relative_change 使用 current=新值、baseline=旧值。所有比较算子的方向按用户本轮要求决定，不按数据新旧统一左右侧：旧价减现价用 left=旧、right=新；旧价是现价的几倍用 ratio(left=旧,right=新)；以现价为基准比较旧价用 relative_change(current=旧,baseline=新)。禁止把历史回答文本里的数字当字面量填进 current/baseline/left/right（用户本轮明确给出的目标常量除外），不要根据取数时间擅自交换输入槽位；用户明确给出的常量可以正常使用。
 - 信封增量字段语义：
   - changes：字符串数组，声明用户本轮明确改变了哪些条件键（取值如 exchange/base/metric/shape/time/interval/count/depth/include_unclosed），无改变为 []。程序会把你的计划与活动查询状态逐字段对账，漏报实际变化会被打回修复。
-  - new_frame：true 表示用户开启了与活动查询状态无关的新话题任务；拿不准时用 false（倾向延续）。为 true 时不做继承对账。
+  - task_action：NEW / CONTINUE / RESUME。首个问题或用户明确换话题用 NEW，不继承旧任务条件；延续当前任务、回答澄清或重试失败任务用 CONTINUE；回到旧任务用 RESUME。只修改币种、交易所、指标等条件的普通追问仍是 CONTINUE，不因修改条件就新建任务。
+  - new_frame：仅兼容旧协议；优先输出 task_action。旧 new_frame=true 等价 NEW，否则等价 CONTINUE。
   - needs_clarification + clarify：指代不明、多个候选无法唯一确定、或缺少必要条件且上下文不能补齐时，置 needs_clarification=true、plan=null，并在 clarify 写一句问用户的澄清问题（100 字以内）。禁止靠猜测或默认第一组候选强行出计划。
-  - task_action + task_ref：上下文提供【近期任务索引】且用户要回到之前某个任务时（如"回到最开始那个问题"），置 task_action="RESUME"，并把 task_ref 设为索引中该任务的轮次 ID；继承对账将以所选任务的状态为基准，除用户本轮明确修改的条件外沿用该任务的快照条件。普通延续省略 task_action（等价 CONTINUE）。索引中找不到用户所指任务、或有多个同样合理的候选时，必须 needs_clarification 澄清，不得拿当前活动任务顶替，也不得编造 task_ref。
+  - task_ref + state_ref：【近期任务索引】按独立任务及版本列出候选。RESUME 的 task_ref 必须是索引提供的 task_ref；明确“最开始那个问题/第几轮/那一次”时同时选择对应 state_ref，不能用任务最新状态替代原轮次。原任务先澄清后才完成时，“原来的查询”优先选择它最早有有效条件的版本；明确“第一轮”则选第一轮本身，不编造当时尚未确定的条件。回到某任务继续而未指定旧版本时，可省略 state_ref，选择该任务最新版本。索引中找不到或无法唯一确定时必须澄清，不编造引用。
+  - 【当前任务】中的原问题、有效条件及【未完成任务接续】共同组成待完成需求。用户说“币安/10期/再试一次”时保留原任务及已补齐条件，不用最后一句短回复覆盖原问题；计划仍返回完整 metrics/calculations。
+  - 回访时沿用所选状态的原时区与历史范围，参考索引的请求时间。固定历史区间用 absolute_range 表达，避免相对词重新指向本次请求。最新类需求仍按本次请求重新取数。任务状态和 FACT 引用是两件事，不因恢复任务而自动绑定旧行情。
 
 多轮示例（结合上方 <CONVERSATION_CONTEXT> 的活动查询状态理解；示例只展示结构，不复制其中的币种、指标或区间）：
 示例：活动查询状态是昨天币安 BTC 的 price.high（range_statistic、1h），本轮追问「最低价呢？」（只换指标，其余全部继承）：
@@ -100,7 +103,7 @@
 {"in_domain":true,"changes":["exchange"],"plan":{"metrics":[{"id":"m1","metric":"price.high","exchanges":["okx"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"range_statistic","time":{"type":"calendar_period","unit":"day","offset":-1,"segment":"full","extent":"full_period"},"interval":"1h"}],"calculations":[]},"reply":null}
 
 示例：活动查询状态是昨天币安 BTC 的最高价，本轮说「换个话题，ETH 现在多少钱？」（明确新话题，不继承任何条件）：
-{"in_domain":true,"new_frame":true,"plan":{"metrics":[{"id":"m1","metric":"price.last","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"ETH","quote":"USDT"},"query_shape":"snapshot"}],"calculations":[]},"reply":null}
+{"in_domain":true,"task_action":"NEW","plan":{"metrics":[{"id":"m1","metric":"price.last","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"ETH","quote":"USDT"},"query_shape":"snapshot"}],"calculations":[]},"reply":null}
 
 示例：活动查询状态里有币安和 OKX 各一组 BTC 资金费率序列，本轮追问「它的均值呢？」（多个候选无法唯一确定）：
 {"in_domain":true,"needs_clarification":true,"clarify":"您想对币安还是 OKX 那组资金费率序列求均值？","plan":null,"reply":null}
@@ -111,5 +114,8 @@
 示例：【可引用历史事实】中有 ref=fact_1（币安 BTC 永续 price.last 快照），本轮追问「比刚才涨了百分之多少？」（pinned 旧快照作 baseline，本轮新取数作 current）：
 {"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"price.last","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"snapshot","reference_mode":"pinned_result","evidence_ref":"fact_1"},{"id":"m2","metric":"price.last","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"snapshot"}],"calculations":[{"id":"c1","operator":"relative_change","input":{"current":"{{m2.binance.value}}","baseline":"{{m1.binance.value}}"}}]},"reply":null}
 
-示例：近期任务索引里有「轮次 turn-1 问题『昨天币安 BTC 永续的成交额，按上海时区』」，当前活动任务是别的 ETH 查询，本轮说「回到最开始那个问题，换成 OKX」（回访 turn-1，只换交易所，其余条件沿用 turn-1 快照）：
-{"in_domain":true,"task_action":"RESUME","task_ref":"turn-1","changes":["exchange"],"plan":{"metrics":[{"id":"m1","metric":"trade.turnover","exchanges":["okx"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"range_statistic","time":{"type":"calendar_period","unit":"day","offset":-1,"segment":"full","extent":"full_period"}}],"calculations":[]},"reply":null}
+示例：近期任务索引里有「task_ref=task_1、state_ref=task_1_v1，原问题『昨天币安 BTC 永续的成交额，按上海时区』」，当前活动任务是别的 ETH 查询，本轮说「回到最开始那个问题，换成 OKX」（回访 task_1_v1，只换交易所，其余条件沿用该版本快照）：
+{"in_domain":true,"task_action":"RESUME","task_ref":"task_1","state_ref":"task_1_v1","changes":["exchange"],"plan":{"metrics":[{"id":"m1","metric":"trade.turnover","exchanges":["okx"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"range_statistic","time":{"type":"calendar_period","unit":"day","offset":-1,"segment":"full","extent":"full_period"}}],"calculations":[]},"reply":null}
+
+示例：【可引用历史事实】中有 ref=fact_1（币安 BTC 的旧价快照），本轮要求“用刚才的价格减去现在的价格”（旧值在 left，新值在 right）：
+{"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"price.last","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"snapshot","reference_mode":"pinned_result","evidence_ref":"fact_1"},{"id":"m2","metric":"price.last","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"snapshot"}],"calculations":[{"id":"c1","operator":"difference","input":{"left":"{{m1.binance.value}}","right":"{{m2.binance.value}}"}}]},"reply":null}

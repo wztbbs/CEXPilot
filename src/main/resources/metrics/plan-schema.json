@@ -196,7 +196,7 @@
         "boolean",
         "null"
       ],
-      "description": "是否开启与活动查询状态无关的新话题；缺省 false"
+      "description": "旧协议兼容字段；新代码使用 task_action，显式 task_action 优先"
     },
     "needs_clarification": {
       "type": [
@@ -211,17 +211,19 @@
         "null"
       ],
       "enum": [
+        "NEW",
         "CONTINUE",
-        "RESUME"
+        "RESUME",
+        null
       ],
-      "description": "RESUME=回访【近期任务索引】中的历史任务（须同时给 task_ref=该任务轮次 ID），普通延续省略"
+      "description": "NEW=新任务；CONTINUE=当前任务（含澄清/失败接续）；RESUME=回访任务及版本"
     },
     "task_ref": {
       "type": [
         "string",
         "null"
       ],
-      "description": "task_action=RESUME 时必填：任务索引中目标任务的轮次 ID"
+      "description": "RESUME 必填：任务索引提供的 task_ref 别名，不能编造数据库 ID"
     },
     "clarify": {
       "type": [
@@ -229,6 +231,13 @@
         "null"
       ],
       "description": "needs_clarification=true 时给用户的澄清问题"
+    },
+    "state_ref": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "RESUME 可选：任务索引提供的 state_ref；明确回到某轮时必填，不填选择该任务最新候选版本"
     }
   },
   "required": [

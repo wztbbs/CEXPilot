@@ -11,6 +11,7 @@ import com.cexpilot.runtime.ToolResult;
 import com.cexpilot.runtime.TraceEvent;
 import com.cexpilot.runtime.TraceSink;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
@@ -154,10 +155,15 @@ public class DagRuntime {
         try {
             outcome = planner.plan(question, plannerContext, traceId, sink,
                     activeFrame, effectiveContext, evidenceContext,
-                    plannerInput == null ? List.of() : plannerInput.tasks());
+                    plannerInput == null ? List.of() : plannerInput.tasks(),
+                    plannerInput == null ? null : plannerInput.currentTask());
         } catch (DagPlanner.PlanningFailure pf) {
             // 4.3：planner 阶段失败（LLM 欠费/超时）同样带出已发生的调用计数
-            throw new ExecutionFailure(pf, new TurnCounters(pf.llmCalls, 0, 0, 0, 0, 0, List.of()));
+            throw new ExecutionFailure(pf, new TurnCounters(pf.llmCalls, 0, 0, 0, 0, 0, List.of()), pf.taskScope);
+        }
+        if (outcome.taskScope() != null) {
+            effectiveContext = outcome.taskScope().executionContext(effectiveContext);
+            timeContext = answerTimeContext(effectiveContext, requestContext != null && requestContext.userZone() != null);
         }
         int totalPromptTokens = outcome.promptTokens();
         int totalCompletionTokens = outcome.completionTokens();
@@ -171,7 +177,7 @@ public class DagRuntime {
             }
             return new ExecutionResult(answer, MAPPER.createArrayNode(), 0, 0,
                     totalPromptTokens, totalCompletionTokens, null, null, 0,
-                    plannerLlmCalls, 0, 0, 0, 0, List.of());
+                    plannerLlmCalls, 0, 0, 0, 0, List.of()).withTaskScope(outcome.inDomain() ? outcome.taskScope() : null);
         }
 
         // 澄清：不执行、不落 frame；编排层把轮次标 NEEDS_CLARIFICATION 并把澄清问题写入 pendingClarification
@@ -183,7 +189,7 @@ public class DagRuntime {
             }
             return new ExecutionResult(answer, MAPPER.createArrayNode(), 0, 0,
                     totalPromptTokens, totalCompletionTokens, "NEEDS_CLARIFICATION", outcome.reply(), 0,
-                    plannerLlmCalls, 0, 0, 0, 0, List.of());
+                    plannerLlmCalls, 0, 0, 0, 0, List.of()).withTaskScope(outcome.inDomain() ? outcome.taskScope() : null);
         }
 
         // 没有获准执行的计划，就没有 Answer 调用；拒答也走同一个 SSE 返回路径。
@@ -196,8 +202,8 @@ public class DagRuntime {
                 answerDelta.accept(answer);
             }
             return new ExecutionResult(answer, MAPPER.createArrayNode(), 0, 0,
-                    totalPromptTokens, totalCompletionTokens, null, null, 0,
-                    plannerLlmCalls, 0, 0, 0, 0, List.of());
+                    totalPromptTokens, totalCompletionTokens, outcome.lastError() == null ? null : "FAILED", null, 0,
+                    plannerLlmCalls, 0, 0, 0, 0, List.of()).withTaskScope(outcome.inDomain() ? outcome.taskScope() : null);
         }
 
         ArrayNode evidence = MAPPER.createArrayNode();
@@ -272,12 +278,12 @@ public class DagRuntime {
             return new ExecutionResult(answer.content(), evidence, toolCallCount, steps,
                     totalPromptTokens, totalCompletionTokens, null, null, reusedFactCount,
                     plannerLlmCalls, 1, metricFetchCount, calculationCount, execution.httpRequests(),
-                    newFactIds);
+                    newFactIds).withTaskScope(outcome.taskScope());
         } catch (Exception e) {
             // 4.3：失败不等于统计归零——把已发生的调用计数与已保存事实随异常带出，
             // 编排层失败路径据此落 trace，耗时/成本分析才有完整口径
             throw new ExecutionFailure(e, new TurnCounters(plannerLlmCalls, answerAttempted ? 1 : 0,
-                    metricFetchCount, calculationCount, 0, reusedFactCount, List.copyOf(newFactIds)));
+                    metricFetchCount, calculationCount, 0, reusedFactCount, List.copyOf(newFactIds)), outcome.taskScope(), evidence);
         }
     }
 
@@ -295,10 +301,18 @@ public class DagRuntime {
     public static final class ExecutionFailure extends RuntimeException {
 
         public final TurnCounters counters;
+        public final com.cexpilot.conversation.TaskScope taskScope;
+        public final JsonNode evidence;
 
-        public ExecutionFailure(Throwable cause, TurnCounters counters) {
+        public ExecutionFailure(Throwable cause, TurnCounters counters) { this(cause, counters, null); }
+        public ExecutionFailure(Throwable cause, TurnCounters counters, com.cexpilot.conversation.TaskScope taskScope) {
+            this(cause, counters, taskScope, null);
+        }
+        public ExecutionFailure(Throwable cause, TurnCounters counters, com.cexpilot.conversation.TaskScope taskScope, JsonNode evidence) {
             super(cause.getMessage(), cause);
             this.counters = counters;
+            this.taskScope = taskScope;
+            this.evidence = evidence == null ? null : evidence.deepCopy();
         }
     }
 

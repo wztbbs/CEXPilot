@@ -52,10 +52,11 @@ public final class EvidenceAssembler {
 
     static String describe(EvidenceFact fact) {
         StringBuilder s = new StringBuilder();
+        s.append("source_turn_id=").append(fact.sourceTurnId()).append(' ');
         var id = fact.identity();
         if (fact.derived()) {
             s.append("derived=true（派生计算结果 operator=").append(id.path("operator").asText())
-                    .append("，不可作为样本集来源绑定）");
+                    .append("，不可绑定为原始取数事实）");
         } else {
             s.append("metric=").append(id.path("metric").asText())
                     .append("，shape=").append(id.path("query_shape").asText())

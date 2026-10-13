@@ -28,4 +28,8 @@ public record EffectiveTarget(
         String unit,
         String provider,
         String catalogVersion) {
+    public EffectiveTarget {
+        // Jackson 的 JsonNode null 反序列化为 NullNode；统一缺省值，避免落库后快照被误判成时间变化。
+        if (timeExpression != null && timeExpression.isNull()) timeExpression = null;
+    }
 }

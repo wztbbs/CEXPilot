@@ -14,8 +14,8 @@ import java.util.UUID;
 
 /**
  * 查询状态（设计文档 5.1）：一项正在讨论的查询任务，不是聊天记录摘要。
- * 成功轮次提交时持久化到 conversation_state.active_frame_json（失败/澄清轮次不覆盖）；
- * 下一轮由 ConversationContextService 读取注入 Planner prompt，并由 InheritanceValidator 做继承对账（阶段一 c）。
+ * 有效计划状态保存在 TaskState，按稳定任务 ID 和版本写入独立任务及轮次快照；
+ * TaskState 另保留最近成功状态及未完成链，下一轮按 Planner 选中的任务版本继承。
  *
  * @param requestTime 请求时间的 ISO-8601 表示（UTC）；timezone 为请求携带的用户时区（null = 未携带）
  */
@@ -36,6 +36,8 @@ public record QueryFrame(
 
     public QueryFrame {
         targets = targets == null ? List.of() : List.copyOf(targets);
+        if (focus != null && focus.isNull()) focus = null;
+        if (pendingClarification != null && pendingClarification.isNull()) pendingClarification = null;
     }
 
     /** 最近尝试（设计文档 5.4 lastAttempt）：哪一轮、以什么状态结束。 */
@@ -49,10 +51,17 @@ public record QueryFrame(
     public static QueryFrame fromCompiledPlan(String conversationId, String turnId, String question,
                                               Instant requestTime, ZoneId userZone,
                                               CompiledPlan plan, JsonNode evidence) {
-        return new QueryFrame(UUID.randomUUID().toString(), conversationId, 1, turnId, question,
+        return fromCompiledPlan(UUID.randomUUID().toString(), 1, conversationId, turnId, question,
+                requestTime, userZone, plan, evidence, "SUCCEEDED");
+    }
+
+    public static QueryFrame fromCompiledPlan(String frameId, long version, String conversationId,
+            String turnId, String question, Instant requestTime, ZoneId userZone, CompiledPlan plan,
+            JsonNode evidence, String status) {
+        return new QueryFrame(frameId, conversationId, version, turnId, question,
                 requestTime == null ? null : requestTime.toString(),
-                userZone == null ? null : userZone.getId(),
-                plan.targets(), focusFromEvidence(evidence), null, new LastAttempt(turnId, "SUCCEEDED"));
+                userZone == null ? null : userZone.getId(), plan.targets(), focusFromEvidence(evidence), null,
+                new LastAttempt(turnId, status));
     }
 
     /** focus 的描述性引用：只留节点身份与成功标记，完整数据仍在 trace / evidence。 */

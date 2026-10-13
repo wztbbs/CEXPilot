@@ -29,13 +29,19 @@ CREATE TABLE IF NOT EXISTS conversation_query (
     finished_at     DATETIME(6)  NULL,
     -- 校验通过的 LogicalPlan 原文 JSON（Planner 草稿不落这里；规划未通过校验时为空）
     logical_plan_json JSON       NULL,
-    -- 当轮提交时的 QueryFrame 快照（审查 R3 一期，成功轮次写入）：历史任务回访的依据，
-    -- Planner 通过【近期任务索引】以 task_action=RESUME + task_ref（轮次 id）回访旧任务
+    -- 当轮有效 QueryFrame 缓存；完整任务版本（含澄清/失败）以 task_state_json 为准。
+    -- 稳定 frame_id + frame_version 定位版本，base_frame_version 表示实际继承来源。
     frame_json     JSON          NULL,
+    frame_id       VARCHAR(64)   NULL,
+    frame_version  BIGINT        NULL,
+    base_frame_version BIGINT    NULL,
+    task_action    VARCHAR(16)   NULL,
+    task_state_json JSON         NULL,
     created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uk_query_turn (turn_id),
     UNIQUE KEY uk_query_conv_no (conversation_id, query_no),
-    KEY idx_query_conversation (conversation_id, query_no)
+    KEY idx_query_conversation (conversation_id, query_no),
+    UNIQUE KEY uk_query_frame_version (conversation_id, frame_id, frame_version)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
 -- 会话状态行：原子序号分配 + 同会话串行执行占用（多轮追问阶段一 a）。
@@ -52,13 +58,29 @@ CREATE TABLE IF NOT EXISTS conversation_state (
     -- 下一轮由 ConversationContextService 读取注入 Planner 并做继承对账（阶段一 c）；
     -- 写入同样带 running_turn_id + fencing_token 条件，过期执行者不得覆盖新 frame
     active_frame_json JSON       NULL,
-    -- 待补澄清任务（审查 R1）：独立于活动 frame 保存——新会话没有 frame 也能接续澄清，
-    -- 澄清不挂在旧任务上。结构 {question, clarify, turnId}；成功轮次提交时清空。
+    active_frame_id VARCHAR(64)   NULL, -- 当前讨论任务，包含澄清/失败任务；JSON 为有效条件缓存
+    -- 未完成状态兼容缓存；新流程以 conversation_frame.state_json / active_frame_id 为准。
+    -- 澄清/失败保存完整 TaskState，包含原问题、完整计划和补充链。
     pending_task_json JSON       NULL,
-    -- 最近失败尝试（审查 R2）："再试一次/那 OKX 呢"接续失败任务的依据。
-    -- 结构 {turnId, question, status, traceId, has_valid_plan}；成功轮次提交时清空。
+    -- 失败任务兼容缓存，不再只存 has_valid_plan 标志。
     last_attempt_json JSON       NULL,
     updated_at      DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- 会话与任务一对多；state_json 包含有效条件、成功状态与未完成补充链。
+-- 完整版本保存在 conversation_query.task_state_json，按稳定 frame_id + frame_version 定位。
+CREATE TABLE IF NOT EXISTS conversation_frame (
+    frame_id VARCHAR(64) NOT NULL PRIMARY KEY,
+    conversation_id VARCHAR(64) NOT NULL,
+    version BIGINT NOT NULL,
+    first_query_no BIGINT NOT NULL,
+    last_query_no BIGINT NOT NULL,
+    last_turn_id VARCHAR(64) NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    state_json JSON NOT NULL,
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    KEY idx_frame_recent (conversation_id, last_query_no),
+    KEY idx_frame_first (conversation_id, first_query_no)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
 -- ============ 已有部署的迁移注意点（DBA 手工执行，schema 演进不自动跑） ============
@@ -91,6 +113,8 @@ CREATE TABLE IF NOT EXISTS conversation_state (
 --    停止旧应用并等待在途问答结束后迁移，再启动新版本；新库无需执行该迁移。
 -- 10. 审查修复 R3 一期（migrations/012_turn_frame_snapshot.sql）：conversation_query 加
 --    frame_json 列（轮次级 frame 快照，历史任务回访）。存量行留 NULL，读取方兼容。
+
+-- 013_task_lifecycle.sql：独立任务与轮次版本，含旧快照、未完成任务的迁移。先停旧应用迁移再启动新版。
 
 -- 一次问答 = 一条 ask_trace（就是 Trace 的主表，👎 之后靠它完整回放）
 CREATE TABLE IF NOT EXISTS ask_trace (

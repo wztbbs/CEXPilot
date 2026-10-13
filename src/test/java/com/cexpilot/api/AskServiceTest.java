@@ -73,6 +73,10 @@ class AskServiceTest {
         when(conversation.getOrCreateConversation(any(), anyString(), any())).thenReturn("conv-1");
         when(conversation.beginTurn(eq("conv-1"), anyString(), any(), any())).thenReturn(turn);
         when(conversation.renderContext("conv-1")).thenReturn("");
+        when(contextService.buildPlannerInput("conv-1")).thenReturn(new com.cexpilot.conversation.PlannerInput("", null));
+        when(conversation.finishTaskTurn(anyString(), any(), anyString(), anyString(), any(), anyString(),
+                any(), any(), any(), any(), any(), any()))
+                .thenReturn(new ConversationService.TaskCommit(false, null, 0, null));
     }
 
     private ExecutionResult successResult() {
@@ -94,7 +98,8 @@ class AskServiceTest {
         assertFalse(response.busy());
         assertEquals("答案", response.answer());
         verify(conversation).beginTurn("conv-1", "BTC 多少钱", "parent-1", T0);
-        verify(conversation).finishTurn("conv-1", turn, "SUCCEEDED", "答案", response.traceId(), null, null, null);
+        verify(conversation).finishTaskTurn(eq("conv-1"), eq(turn), eq("BTC 多少钱"), eq("SUCCEEDED"),
+                eq("答案"), eq(response.traceId()), isNull(), isNull(), isNull(), eq(T0), isNull(), isNull());
         verify(traceRepository).finishTrace(eq(response.traceId()), eq("SUCCESS"), eq("答案"),
                 anyInt(), anyInt(), anyInt(), anyInt(), any(), anyLong(), isNull(), eq(0),
                 anyInt(), anyInt(), anyInt(), anyInt(), anyInt());
@@ -126,12 +131,10 @@ class AskServiceTest {
         verify(traceRepository).finishTrace(anyString(), eq("FAILED"), isNull(), anyInt(), anyInt(),
                 isNull(), isNull(), isNull(), anyLong(), eq("LLM 超时"),
                 isNull(), isNull(), isNull(), isNull(), isNull(), isNull());
-        var captor = org.mockito.ArgumentCaptor.forClass(String.class);
-        verify(conversation).finishTurn(eq("conv-1"), eq(turn), eq("FAILED"), isNull(), anyString(),
-                isNull(), isNull(), captor.capture());
-        // R2：失败任务快照带原问题，供"再试一次"接续
-        assertTrue(captor.getValue().contains("ETH 昨日收盘价"), captor.getValue());
-        assertTrue(captor.getValue().contains("FAILED"));
+        var scope = org.mockito.ArgumentCaptor.forClass(com.cexpilot.conversation.TaskScope.class);
+        verify(conversation).finishTaskTurn(eq("conv-1"), eq(turn), eq("ETH 昨日收盘价"), eq("FAILED"),
+                isNull(), anyString(), isNull(), isNull(), scope.capture(), eq(T0), any(), eq("LLM 超时"));
+        assertEquals(com.cexpilot.conversation.TaskScope.Action.NEW, scope.getValue().action());
     }
 
     @Test
@@ -145,8 +148,8 @@ class AskServiceTest {
         assertThrows(IllegalStateException.class,
                 () -> service.ask("conv-1", "BTC 多少钱", "v1", null, null, null));
 
-        verify(conversation).finishTurn(eq("conv-1"), eq(turn), eq("FAILED"), isNull(),
-                anyString(), isNull(), isNull(), anyString());
+        verify(conversation).finishTaskTurn(eq("conv-1"), eq(turn), eq("BTC 多少钱"), eq("FAILED"), isNull(),
+                anyString(), isNull(), isNull(), any(), eq(T0), any(), eq("db down"));
         // trace 行不存在，不应对它 finishTrace / 落事件
         verify(traceRepository, never()).finishTrace(anyString(), anyString(), any(), anyInt(), anyInt(),
                 any(), any(), any(), anyLong(), any());
@@ -178,10 +181,10 @@ class AskServiceTest {
 
         // R8：答案与轮次已成功提交，SSE 推送失败只记日志，不把 SUCCEEDED 改写成 FAILED
         assertEquals("答案", response.answer());
-        verify(conversation).finishTurn(eq("conv-1"), eq(turn), eq("SUCCEEDED"), eq("答案"),
-                anyString(), isNull(), isNull(), isNull());
-        verify(conversation, never()).finishTurn(eq("conv-1"), eq(turn), eq("FAILED"),
-                any(), any(), any(), any(), any());
+        verify(conversation).finishTaskTurn(eq("conv-1"), eq(turn), eq("BTC 多少钱"), eq("SUCCEEDED"), eq("答案"),
+                anyString(), isNull(), isNull(), isNull(), eq(T0), isNull(), isNull());
+        verify(conversation, never()).finishTaskTurn(eq("conv-1"), eq(turn), anyString(), eq("FAILED"),
+                any(), any(), any(), any(), any(), any(), any(), any());
         verify(traceRepository, never()).finishTrace(anyString(), eq("FAILED"), any(), anyInt(), anyInt(),
                 any(), any(), any(), anyLong(), any());
     }
@@ -251,29 +254,14 @@ class AskServiceTest {
 
         AskResponse response = service.ask("conv-1", "昨天 BTC 最高价", "v1", "Asia/Shanghai", null, null);
 
-        var captor = org.mockito.ArgumentCaptor.forClass(String.class);
-        var frameCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
-        verify(conversation).finishTurn(eq("conv-1"), eq(turn), eq("SUCCEEDED"), eq("答案"),
-                eq(response.traceId()), captor.capture(), frameCaptor.capture(), isNull());
-        assertEquals(planJson.toString(), captor.getValue());
-
-        JsonNode frame = MAPPER.readTree(frameCaptor.getValue());
-        assertEquals("conv-1", frame.path("conversationId").asText());
-        assertEquals("turn-1", frame.path("sourceTurnId").asText());
-        assertEquals("昨天 BTC 最高价", frame.path("originalQuestion").asText());
-        assertEquals("2026-10-12T00:00:00Z", frame.path("requestTime").asText());
-        assertEquals("Asia/Shanghai", frame.path("timezone").asText());
-        assertEquals("turn-1", frame.path("lastAttempt").path("turnId").asText());
-        assertEquals("SUCCEEDED", frame.path("lastAttempt").path("status").asText());
-        JsonNode frameTarget = frame.path("targets").get(0);
-        assertEquals("metric_0", frameTarget.path("physicalId").asText());
-        assertEquals("BTC", frameTarget.path("instrument").path("base").asText());
-        assertEquals("DEFAULT", frameTarget.path("settleOrigin").asText());
-        assertEquals("DEFAULT", frameTarget.path("intervalOrigin").asText());
-        assertEquals("calendar_period", frameTarget.path("timeExpression").path("type").asText());
-        JsonNode focusNode = frame.path("focus").path("evidence_nodes").get(0);
-        assertEquals("metric_0", focusNode.path("node_id").asText());
-        assertEquals("price.high", focusNode.path("identity").path("metric").asText());
+        var planCaptor = org.mockito.ArgumentCaptor.forClass(CompiledPlan.class);
+        var scopeCaptor = org.mockito.ArgumentCaptor.forClass(com.cexpilot.conversation.TaskScope.class);
+        verify(conversation).finishTaskTurn(eq("conv-1"), eq(turn), eq("昨天 BTC 最高价"), eq("SUCCEEDED"),
+                eq("答案"), eq(response.traceId()), planCaptor.capture(), eq(evidence), scopeCaptor.capture(),
+                eq(T0), eq(java.time.ZoneId.of("Asia/Shanghai")), isNull());
+        assertEquals(compiledPlan, planCaptor.getValue());
+        assertEquals(planJson, planCaptor.getValue().logicalPlanJson());
+        assertEquals(com.cexpilot.conversation.TaskScope.Action.NEW, scopeCaptor.getValue().action());
     }
 
     @Test

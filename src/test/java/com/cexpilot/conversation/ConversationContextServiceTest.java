@@ -15,6 +15,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -167,7 +169,91 @@ class ConversationContextServiceTest {
         String ctx = service.buildPlannerInput("conv-1").contextText();
 
         assertTrue(ctx.contains("【当前焦点】"), ctx);
-        assertTrue(ctx.contains("fact-9"), ctx);
+        assertTrue(ctx.contains("evidence_ref=不可用"), ctx);
+        assertFalse(ctx.contains("fact-9"), "不能把无可用候选的 UUID 当成模型可引用的 ref");
+    }
+
+    private static QueryFrame frameWithFocus(String... ids) throws Exception {
+        QueryFrame base = sampleFrame();
+        var focus = MAPPER.createObjectNode();
+        var nodes = focus.putArray("evidence_nodes");
+        for (int i = 0; i < ids.length; i++) {
+            var node = nodes.addObject().put("node_id", "node_" + i).put("fact_id", ids[i]);
+            node.putObject("identity").put("metric", "funding.rate_settled");
+        }
+        return new QueryFrame(base.frameId(), base.conversationId(), base.version(), base.sourceTurnId(),
+                base.originalQuestion(), base.requestTime(), base.timezone(), base.targets(), focus, null, null);
+    }
+
+    private static com.cexpilot.evidence.EvidenceFact fact(String id, String turn, boolean derived) {
+        var identity = MAPPER.createObjectNode().put("metric", "funding.rate_settled")
+                .put("exchange", "binance").put("query_shape", "recent_n").put("count", 10);
+        identity.putObject("instrument").put("base", "BTC");
+        if (derived) identity.put("operator", "avg");
+        Instant now = Instant.now();
+        return new com.cexpilot.evidence.EvidenceFact(id, "conv-1", turn, "trace", derived, List.of(),
+                identity, null, null, "key", MAPPER.createObjectNode(), null, now, now.plusSeconds(86400), "1");
+    }
+
+    @Test
+    void 多个同身份焦点明确映射到本轮ref而不是猜排序() throws Exception {
+        var store = mock(com.cexpilot.evidence.EvidenceStore.class);
+        var a = fact("uuid-a", "turn-a", false);
+        var b = fact("uuid-b", "turn-b", false);
+        when(store.listReusable(eq("conv-1"), any(Instant.class))).thenReturn(List.of(b, a));
+        when(repository.findActiveFrameJson("conv-1")).thenReturn(frameWithFocus("uuid-a", "uuid-b").toJson());
+        var input = new ConversationContextService(repository, store).buildPlannerInput("conv-1");
+        assertEquals("uuid-b", input.evidence().get(0).fact().factId());
+        String ctx = input.contextText();
+        assertTrue(ctx.contains("node=node_0，metric=funding.rate_settled，evidence_ref=fact_2，source_turn_id=turn-a"), ctx);
+        assertTrue(ctx.contains("node=node_1，metric=funding.rate_settled，evidence_ref=fact_1，source_turn_id=turn-b"), ctx);
+        assertTrue(ctx.contains("ref=fact_2 source_turn_id=turn-a"), ctx);
+    }
+
+    @Test
+    void 历史任务焦点也使用本轮同一份候选映射() throws Exception {
+        var store = mock(com.cexpilot.evidence.EvidenceStore.class);
+        when(store.listReusable(eq("conv-1"), any(Instant.class))).thenReturn(List.of(fact("uuid-old", "turn-old", false)));
+        when(repository.recentFrames("conv-1", 5)).thenReturn(List.of(
+                new TaskSnapshot(1, "turn-old", "之前那10期", frameWithFocus("uuid-old"))));
+        String ctx = new ConversationContextService(repository, store).buildPlannerInput("conv-1").contextText();
+        assertTrue(ctx.contains("【该历史任务焦点】"), ctx);
+        assertTrue(ctx.contains("evidence_ref=fact_1，source_turn_id=turn-old"), ctx);
+    }
+
+    @Test
+    void 派生焦点明确标注不可绑定() throws Exception {
+        var store = mock(com.cexpilot.evidence.EvidenceStore.class);
+        when(store.listReusable(eq("conv-1"), any(Instant.class))).thenReturn(List.of(fact("uuid-avg", "turn-avg", true)));
+        when(repository.findActiveFrameJson("conv-1")).thenReturn(frameWithFocus("uuid-avg").toJson());
+        String ctx = new ConversationContextService(repository, store).buildPlannerInput("conv-1").contextText();
+        assertTrue(ctx.contains("evidence_ref=fact_1，source_turn_id=turn-avg（派生结果，不可绑定为原始取数事实）"), ctx);
+        assertFalse(ctx.contains("原始事实，可按此 ref 绑定"), ctx);
+    }
+
+    @Test
+    void 失败计划的旧ref按持久化焦点重映射且不修改原计划() throws Exception {
+        var store = mock(com.cexpilot.evidence.EvidenceStore.class);
+        var old = fact("uuid-old", "old-turn", false);
+        old.identity().put("metric", "price.high");
+        when(store.listReusable(eq("conv-1"), any(Instant.class))).thenReturn(List.of(fact("uuid-new", "new-turn", false), old));
+        var base = sampleFrame();
+        var plan = MAPPER.readTree("{\"metrics\":[{\"id\":\"m1\",\"reference_mode\":\"pinned_result\",\"evidence_ref\":\"fact_9\"}],\"calculations\":[]}");
+        var compiled = new com.cexpilot.metric.CompiledPlan(new com.cexpilot.metric.LogicalPlan(List.of(), List.of()),
+                plan, new com.cexpilot.dag.DagPlan(List.of()), java.util.Map.of(), base.targets());
+        var evidence = MAPPER.createArrayNode();
+        evidence.addObject().put("node_id", "metric_0").put("type", "metric").put("ok", true).put("fact_id", "uuid-old");
+        var state = TaskState.complete("stable-task", "conv-1", 1, null,
+                new ConversationService.TurnHandle(1, "turn-1", 1), "原样本", "FAILED", "Answer超时",
+                compiled, evidence, Instant.now(), java.time.ZoneId.of("Asia/Shanghai"));
+        when(repository.findActiveTask("conv-1")).thenReturn(state);
+        var service = new ConversationContextService(repository, store);
+        String ctx = service.buildPlannerInput("conv-1").contextText();
+        assertTrue(ctx.contains("\"evidence_ref\":\"fact_1\""), ctx);
+        assertFalse(ctx.contains("fact_9"), ctx);
+        assertEquals("fact_9", state.logicalPlan().at("/metrics/0/evidence_ref").asText());
+        when(store.listReusable(eq("conv-1"), any(Instant.class))).thenReturn(List.of());
+        assertTrue(service.buildPlannerInput("conv-1").contextText().contains("\"evidence_ref\":\"不可用\""));
     }
 
     @Test

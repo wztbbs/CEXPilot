@@ -3,6 +3,8 @@ package com.cexpilot.dag;
 import com.cexpilot.config.DagConfig;
 import com.cexpilot.evidence.EvidenceBindingContext;
 import com.cexpilot.metric.MetricCatalog;
+import com.cexpilot.conversation.TaskState;
+import com.cexpilot.conversation.TaskScope;
 import com.cexpilot.metric.MetricPlanCompiler;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.DefaultResourceLoader;
@@ -75,14 +77,20 @@ public class DagPlanner {
      * 规划结果。inDomain=false 时 reply 为边界话术；inDomain=true 且 plan 为空表示
      * 模型判断工具不足以回答（reply 说明缺口）或 repair 耗尽（lastError 非空）。
      * plan 持有完整编译产物 CompiledPlan（含 LogicalPlan 与逻辑→物理映射），执行用其中的 dagPlan。
-     * needsClarification=true 时表示 Planner 要求澄清（reply 为澄清文案），不执行、不落 frame。
+     * needsClarification=true 时不执行 DAG，编排层在所选任务上追加澄清版本。
      * bindings 为服务端生成的执行期绑定（阶段二 REUSE_FACT）；无证据上下文或未绑定时为 null。
      * llmCalls 为本轮 planner 阶段真实 LLM 调用次数（含修复重试，阶段三计数拆分）。
      */
     public record PlanOutcome(boolean inDomain, String reply,
                               Optional<com.cexpilot.metric.CompiledPlan> plan, int promptTokens, int completionTokens,
                               String lastError, boolean needsClarification,
-                              com.cexpilot.metric.ExecutionBindings bindings, int llmCalls) {
+                              com.cexpilot.metric.ExecutionBindings bindings, int llmCalls, TaskScope taskScope) {
+        public PlanOutcome(boolean inDomain, String reply, Optional<com.cexpilot.metric.CompiledPlan> plan,
+                int promptTokens, int completionTokens, String lastError, boolean needsClarification,
+                com.cexpilot.metric.ExecutionBindings bindings, int llmCalls) {
+            this(inDomain, reply, plan, promptTokens, completionTokens, lastError, needsClarification,
+                    bindings, llmCalls, null);
+        }
     }
 
     public PlanOutcome plan(String question, String conversationContext, String traceId, TraceSink sink) {
@@ -110,14 +118,23 @@ public class DagPlanner {
     /**
      * @param evidenceContext 历史事实绑定上下文（阶段二）：非 null 时校验 pinned_result 的 evidence_ref
      *                        并把通过校验的 ExecutionBindings 挂到 PlanOutcome
-     * @param taskIndex       可回访任务索引（R3 一期）：task_action=RESUME 时按 task_ref 在此定位
-     *                        历史快照，继承对账基准切到所选任务；服务端校验归属，模型只给轮次 id
+     * @param taskIndex       可回访任务/版本候选：RESUME 时按 task_ref/state_ref 定位
+     *                        历史状态，服务端校验候选归属；新协议用候选别名，旧轮次引用仅作兼容
      */
     public PlanOutcome plan(String question, String conversationContext, String traceId, TraceSink sink,
                             com.cexpilot.conversation.QueryFrame activeFrame,
                             com.cexpilot.runtime.RequestContext requestContext,
                             EvidenceBindingContext evidenceContext,
                             List<com.cexpilot.conversation.TaskSnapshot> taskIndex) {
+        return plan(question, conversationContext, traceId, sink, activeFrame, requestContext, evidenceContext,
+                taskIndex, activeFrame == null ? null : TaskState.legacy(activeFrame, 0, activeFrame.originalQuestion()));
+    }
+
+    public PlanOutcome plan(String question, String conversationContext, String traceId, TraceSink sink,
+                            com.cexpilot.conversation.QueryFrame activeFrame,
+                            com.cexpilot.runtime.RequestContext requestContext, EvidenceBindingContext evidenceContext,
+                            List<com.cexpilot.conversation.TaskSnapshot> taskIndex, TaskState currentTask) {
+        TaskScope lastScope = TaskScope.current(currentTask);
         int maxToolCalls = llmConfig.getMaxToolCalls();
         String systemPrompt = systemPrompt(conversationContext);
         JsonNode responseFormat = plannerResponseFormat();
@@ -131,9 +148,8 @@ public class DagPlanner {
         int llmCalls = 0;
         String lastError = null;
         boolean bindingRetried = false;
-        // R4：绑定失败轮的 pinned 指标组集合——修复轮若把这些组删成 latest，视为绕过
-        // "不能重查最新值冒充原快照"的边界，不再接受计划，直接按原快照不可恢复澄清
-        Set<String> failedPinnedGroups = new java.util.LinkedHashSet<>();
+        // R4：首次绑定失败后，逐项保留历史输入的条件及计算用途；修复改名不影响约束。
+        PinnedRequirements pinnedRequirements = new PinnedRequirements();
         int attempts = dagConfig.getPlannerMaxRetries() + 1;
         try {
             for (int attempt = 1; attempt <= attempts; attempt++) {
@@ -144,16 +160,16 @@ public class DagPlanner {
                 completionTokens += response.completionTokens() == null ? 0 : response.completionTokens();
 
                 PlanDecision decision = evaluateResponse(response.content(), maxToolCalls, traceId, sink,
-                        activeFrame, requestContext, evidenceContext, attempt, failedPinnedGroups, taskIndex);
+                        activeFrame, requestContext, evidenceContext, attempt, pinnedRequirements, taskIndex, currentTask);
+                if (decision.taskScope() != null) lastScope = decision.taskScope();
                 if (decision.error() == null) {
-                    if (!failedPinnedGroups.isEmpty() && decision.plan() != null
-                            && java.util.Collections.disjoint(
-                                    pinnedGroupIds(decision.plan().logicalPlan()), failedPinnedGroups)) {
+                    if (!pinnedRequirements.isEmpty() && decision.plan() != null
+                            && !pinnedRequirements.preservedBy(decision.plan())) {
                         sink.record(new TraceEvent(traceId, "PLAN", "dag_planner", null,
                                 MAPPER.createObjectNode().put("note", "pinned_downgrade_blocked").toString(),
-                                null, null, null, null, null, "修复轮删除了 pinned_result 引用，按原快照不可恢复处理"));
+                                null, null, null, null, null, "修复轮改变或删除了必要的历史输入，按原快照不可恢复处理"));
                         return new PlanOutcome(true, BINDING_UNAVAILABLE_CLARIFY, Optional.empty(),
-                                promptTokens, completionTokens, null, true, null, llmCalls);
+                                promptTokens, completionTokens, null, true, null, llmCalls, lastScope);
                     }
                     return decision.toOutcome(promptTokens, completionTokens, llmCalls);
                 }
@@ -161,7 +177,7 @@ public class DagPlanner {
                     // 绑定失败只修复一次；仍不行则澄清"原快照不可恢复"，禁止重查当前值冒充（F21）
                     if (bindingRetried) {
                         return new PlanOutcome(true, BINDING_UNAVAILABLE_CLARIFY, Optional.empty(),
-                                promptTokens, completionTokens, null, true, null, llmCalls);
+                                promptTokens, completionTokens, null, true, null, llmCalls, lastScope);
                     }
                     bindingRetried = true;
                 }
@@ -171,21 +187,24 @@ public class DagPlanner {
         } catch (Exception e) {
             // 4.3：planner 阶段失败（LLM 欠费/超时等）也要把已发生的 LLM 调用次数带出——
             // planner 是最常见的失败源，裸抛会让失败 trace 的计数归零
-            throw new PlanningFailure(e, llmCalls);
+            throw new PlanningFailure(e, llmCalls, lastScope);
         }
         // repair 耗尽：runtime 直接返回固定失败话术，禁止继续生成无事实答案。
         return new PlanOutcome(true, null,
-                Optional.empty(), promptTokens, completionTokens, lastError, false, null, llmCalls);
+                Optional.empty(), promptTokens, completionTokens, lastError, false, null, llmCalls, lastScope);
     }
 
     /** planner 阶段失败（LLM 传输错误等）携带已发生的调用次数（4.3），由 DagRuntime 转成 ExecutionFailure。 */
     public static final class PlanningFailure extends RuntimeException {
 
         public final int llmCalls;
+        public final TaskScope taskScope;
 
-        public PlanningFailure(Throwable cause, int llmCalls) {
+        public PlanningFailure(Throwable cause, int llmCalls) { this(cause, llmCalls, null); }
+        public PlanningFailure(Throwable cause, int llmCalls, TaskScope taskScope) {
             super(cause.getMessage(), cause);
             this.llmCalls = llmCalls;
+            this.taskScope = taskScope;
         }
     }
 
@@ -197,27 +216,31 @@ public class DagPlanner {
     /** 单轮判断不负责 token 累计；error 非空时由 plan 统一追加修复消息并重试。 */
     private record PlanDecision(boolean inDomain, String reply, com.cexpilot.metric.CompiledPlan plan,
                                 String error, boolean needsClarification,
-                                com.cexpilot.metric.ExecutionBindings bindings, boolean bindingFailure) {
+                                com.cexpilot.metric.ExecutionBindings bindings, boolean bindingFailure, TaskScope taskScope) {
         private static PlanDecision accepted(boolean inDomain, String reply, com.cexpilot.metric.CompiledPlan plan) {
-            return new PlanDecision(inDomain, reply, plan, null, false, null, false);
+            return new PlanDecision(inDomain, reply, plan, null, false, null, false, null);
         }
 
         private static PlanDecision accepted(boolean inDomain, String reply, com.cexpilot.metric.CompiledPlan plan,
                                              com.cexpilot.metric.ExecutionBindings bindings) {
-            return new PlanDecision(inDomain, reply, plan, null, false, bindings, false);
+            return new PlanDecision(inDomain, reply, plan, null, false, bindings, false, null);
         }
 
         private static PlanDecision clarification(String reply) {
-            return new PlanDecision(true, reply, null, null, true, null, false);
+            return new PlanDecision(true, reply, null, null, true, null, false, null);
         }
 
         private static PlanDecision bindingError(String error) {
-            return new PlanDecision(true, null, null, error, false, null, true);
+            return new PlanDecision(true, null, null, error, false, null, true, null);
+        }
+
+        private PlanDecision withScope(TaskScope scope) {
+            return new PlanDecision(inDomain, reply, plan, error, needsClarification, bindings, bindingFailure, scope);
         }
 
         private PlanOutcome toOutcome(int promptTokens, int completionTokens, int llmCalls) {
             return new PlanOutcome(inDomain, reply, Optional.ofNullable(plan),
-                    promptTokens, completionTokens, error, needsClarification, bindings, llmCalls);
+                    promptTokens, completionTokens, error, needsClarification, bindings, llmCalls, taskScope);
         }
     }
 
@@ -226,8 +249,8 @@ public class DagPlanner {
                                           com.cexpilot.conversation.QueryFrame activeFrame,
                                           com.cexpilot.runtime.RequestContext requestContext,
                                           EvidenceBindingContext evidenceContext,
-                                          int attempt, Set<String> failedPinnedGroups,
-                                          List<com.cexpilot.conversation.TaskSnapshot> taskIndex) {
+                                          int attempt, PinnedRequirements pinnedRequirements,
+                                          List<com.cexpilot.conversation.TaskSnapshot> taskIndex, TaskState currentTask) {
         JsonNode parsed;
         try {
             parsed = LlmJson.parse(content);
@@ -245,7 +268,7 @@ public class DagPlanner {
             return PlanDecision.accepted(false, textOrNull(parsed.path("reply")), null);
         }
         return evaluateInDomainResponse(parsed, maxToolCalls, traceId, sink, activeFrame, requestContext,
-                evidenceContext, attempt, failedPinnedGroups, taskIndex);
+                evidenceContext, attempt, pinnedRequirements, taskIndex, currentTask);
     }
 
     private PlanDecision evaluateInDomainResponse(JsonNode parsed, int maxToolCalls,
@@ -253,8 +276,15 @@ public class DagPlanner {
                                                   com.cexpilot.conversation.QueryFrame activeFrame,
                                                   com.cexpilot.runtime.RequestContext requestContext,
                                                   EvidenceBindingContext evidenceContext,
-                                                  int attempt, Set<String> failedPinnedGroups,
-                                                  List<com.cexpilot.conversation.TaskSnapshot> taskIndex) {
+                                                  int attempt, PinnedRequirements pinnedRequirements,
+                                                  List<com.cexpilot.conversation.TaskSnapshot> taskIndex, TaskState currentTask) {
+        TaskScope selected;
+        try { selected = selectTask(parsed, currentTask, taskIndex); }
+        catch (IllegalArgumentException e) {
+            return PlanDecision.clarification(e.getMessage()).withScope(
+                    currentTask != null && !currentTask.dialogue().isEmpty()
+                            ? TaskScope.current(currentTask) : new TaskScope(TaskScope.Action.NEW, null));
+        }
         String reply = textOrNull(parsed.path("reply"));
         // 澄清决策（阶段一 c 协议增量字段，缺省按旧行为 false）：不执行、不落 frame，由程序落 NEEDS_CLARIFICATION
         if (parsed.path("needs_clarification").asBoolean(false)) {
@@ -269,37 +299,46 @@ public class DagPlanner {
                 // 澄清决策本身有效，用通用话术兜底并记审计事件，不因文案缺失丢掉澄清轮
                 sink.record(new TraceEvent(traceId, "CLARIFY_FALLBACK", "dag_planner",
                         parsed.toString(), null, null, null, null, null, null, null));
-                return PlanDecision.clarification(CLARIFY_FALLBACK_TEXT);
+                return PlanDecision.clarification(CLARIFY_FALLBACK_TEXT).withScope(selected);
             }
             sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
-            return PlanDecision.clarification(text);
+            return PlanDecision.clarification(text).withScope(selected);
         }
         JsonNode planNode = parsed.path("plan");
         if (!planNode.isObject()) {
-            return evaluateReplyWithoutPlan(parsed, reply, traceId, sink);
+            return evaluateReplyWithoutPlan(parsed, reply, traceId, sink).withScope(selected);
         }
-        // R3 一期：RESUME 回访——task_ref 必须命中任务索引；命中后继承对账基准切到所选任务的
-        // 历史快照（而非当前活动任务），"回到最开始那个问题"才有正确的作用域。服务端校验归属，
-        // 模型只给索引里的轮次 id；定位不到就修复/澄清，不得拿当前活动任务顶替。
-        com.cexpilot.conversation.QueryFrame reconciliationBase = activeFrame;
-        if ("RESUME".equalsIgnoreCase(parsed.path("task_action").asText(""))) {
-            String taskRef = textOrNull(parsed.path("task_ref"));
-            com.cexpilot.conversation.TaskSnapshot matched = null;
-            if (taskIndex != null && taskRef != null) {
-                matched = taskIndex.stream()
-                        .filter(t -> t.turnId().equals(taskRef))
-                        .findFirst().orElse(null);
-            }
-            if (matched == null) {
-                return repairDecision(traceId, sink, parsed.toString(),
-                        "task_action=RESUME 时 task_ref 必须是【近期任务索引】中列出的轮次 ID"
-                                + (taskRef == null ? "（当前缺失）" : ("（\"" + taskRef + "\" 不在索引中）"))
-                                + "；索引中没有用户所指任务时输出 needs_clarification=true 澄清，不得拿当前活动任务顶替");
-            }
-            reconciliationBase = matched.frame();
+        var context = requestContext == null ? null : selected.executionContext(requestContext);
+        return validatePlan(parsed, reply, maxToolCalls, traceId, sink, selected.frame(), context,
+                evidenceContext, attempt, pinnedRequirements).withScope(selected);
+    }
+
+    private static TaskScope selectTask(JsonNode parsed, TaskState current,
+            List<com.cexpilot.conversation.TaskSnapshot> candidates) {
+        String action = textOrNull(parsed.path("task_action"));
+        if (action == null) action = parsed.path("new_frame").asBoolean(false) ? "NEW" : "CONTINUE";
+        TaskScope.Action type;
+        try { type = TaskScope.Action.valueOf(action.toUpperCase(java.util.Locale.ROOT)); }
+        catch (Exception e) { throw new IllegalArgumentException("请确认您要继续当前任务、开启新任务，还是回到哪个历史任务。"); }
+        String ref = textOrNull(parsed.path("task_ref"));
+        String stateRef = textOrNull(parsed.path("state_ref"));
+        if (type == TaskScope.Action.NEW) {
+            if (ref != null || stateRef != null) throw new IllegalArgumentException("新任务不能同时引用历史任务，请明确要查询的新问题。");
+            return new TaskScope(type, null);
         }
-        return validatePlan(parsed, reply, maxToolCalls, traceId, sink, reconciliationBase, requestContext,
-                evidenceContext, attempt, failedPinnedGroups);
+        if (type == TaskScope.Action.CONTINUE) {
+            if (stateRef != null) throw new IllegalArgumentException("回到历史版本请使用 RESUME，并选择对应 state_ref。");
+            if (ref != null && (current == null || candidates.stream().noneMatch(t -> t.taskRef().equals(ref)
+                    && t.state().frameId().equals(current.frameId())))) {
+                throw new IllegalArgumentException("您指定的不是当前任务，请确认要回到哪个历史任务。");
+            }
+            return TaskScope.current(current);
+        }
+        var matched = candidates.stream().filter(t -> ref != null && (t.taskRef().equals(ref) || t.turnId().equals(ref)))
+                .filter(t -> stateRef == null || t.stateRef().equals(stateRef))
+                .max(java.util.Comparator.comparingLong(t -> t.state().version())).orElse(null);
+        if (matched == null) throw new IllegalArgumentException("无法定位 task_ref/state_ref 所指的历史任务或版本，请说明要回到哪个问题。");
+        return new TaskScope(type, matched.state());
     }
 
     private PlanDecision evaluateReplyWithoutPlan(JsonNode parsed, String reply,
@@ -326,7 +365,7 @@ public class DagPlanner {
                                       com.cexpilot.conversation.QueryFrame activeFrame,
                                       com.cexpilot.runtime.RequestContext requestContext,
                                       EvidenceBindingContext evidenceContext,
-                                      int attempt, Set<String> failedPinnedGroups) {
+                                      int attempt, PinnedRequirements pinnedRequirements) {
         String error;
         try {
             com.cexpilot.metric.CompiledPlan compiled =
@@ -337,11 +376,10 @@ public class DagPlanner {
             }
             List<String> errors = validator.validate(plan, compiler.allowedTools(), maxToolCalls);
             if (errors.isEmpty()) {
-                // 继承对账（阶段一 c）：new_frame=true 跳过（本期旧 frame 在成功提交时被简单覆盖，
-                // 近期 frame 索引后续再做）。漏报 changes 的第一次先修复教学；修复后仍不声明则
+                // 继承对账：NEW 无基准，CONTINUE/RESUME 使用已选择的任务版本。漏报 changes 的第一次先修复教学；修复后仍不声明则
                 // shadow 放行——计划本身已通过全部校验，changes 只是审计元数据，不构成拒绝理由——
                 // 并记 INHERIT_SHADOW 事件供观察模型漏报率。
-                if (activeFrame != null && !parsed.path("new_frame").asBoolean(false)) {
+                if (activeFrame != null) {
                     String reconciliation = inheritanceValidator.check(activeFrame, compiled,
                             declaredChanges(parsed), requestContext);
                     if (reconciliation != null) {
@@ -371,14 +409,14 @@ public class DagPlanner {
                     EvidenceBinder binder = new EvidenceBinder(evidenceContext.store());
                     String protocolError = binder.checkProtocol(compiled.logicalPlan(), evidenceContext.candidates());
                     if (protocolError != null) {
-                        failedPinnedGroups.addAll(pinnedGroupIds(parsed));
+                        pinnedRequirements.capture(compiled);
                         sink.record(TraceEvent.plan(traceId, parsed.toString(), protocolError));
                         return PlanDecision.bindingError(protocolError);
                     }
                     EvidenceBinder.BindResult bind = binder.bind(compiled, evidenceContext.candidates(),
                             evidenceContext.conversationId(), requestContext, traceId, sink);
                     if (bind.error() != null) {
-                        failedPinnedGroups.addAll(pinnedGroupIds(parsed));
+                        pinnedRequirements.capture(compiled);
                         sink.record(TraceEvent.plan(traceId, parsed.toString(), bind.error()));
                         return PlanDecision.bindingError(bind.error());
                     }
@@ -411,25 +449,6 @@ public class DagPlanner {
     }
 
     /** 协议增量字段 changes：字符串数组，缺省/非法按空数组（旧行为）处理。 */
-    /** 计划 JSON 里的 pinned 指标组 id 集合（R4 降级拦截用）。 */
-    private static Set<String> pinnedGroupIds(JsonNode parsed) {
-        Set<String> ids = new java.util.LinkedHashSet<>();
-        for (JsonNode m : parsed.path("plan").path("metrics")) {
-            if (m.isObject() && "pinned_result".equals(m.path("reference_mode").asText())) {
-                ids.add(m.path("id").asText());
-            }
-        }
-        return ids;
-    }
-
-    /** 编译产物里的 pinned 指标组 id 集合。 */
-    private static Set<String> pinnedGroupIds(com.cexpilot.metric.LogicalPlan logicalPlan) {
-        return logicalPlan.metrics().stream()
-                .filter(m -> "pinned_result".equals(m.referenceMode()))
-                .map(m -> m.id())
-                .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
-    }
-
     private static java.util.Set<String> declaredChanges(JsonNode parsed) {
         java.util.Set<String> changes = new java.util.LinkedHashSet<>();
         JsonNode node = parsed.path("changes");
@@ -488,7 +507,7 @@ public class DagPlanner {
 
     private PlanDecision repairDecision(String traceId, TraceSink sink, String output, String error) {
         sink.record(TraceEvent.plan(traceId, output, error));
-        return new PlanDecision(true, null, null, error, false, null, false);
+        return new PlanDecision(true, null, null, error, false, null, false, null);
     }
 
     /** 判断 reply 是否是推理 dump：合法话术很短，超长即视为协议误用。 */

@@ -45,7 +45,7 @@ class DagPlannerTest {
                 assertEquals("{{m1.binance.value}}", envelope.at("/plan/calculations/0/input/baseline").asText());
             }
         }
-        assertEquals(12, examples);
+        assertEquals(13, examples);
     }
 
     @ParameterizedTest @ValueSource(strings={"", "json_object", "json_schema"})
@@ -485,6 +485,94 @@ class DagPlannerTest {
         assertFalse(result.needsClarification());
     }
 
+    @Test void 提示词反向比较示例保持旧值在左并可执行() throws Exception {
+        String prompt = new org.springframework.core.io.ClassPathResource("prompts/dag_planner.txt")
+                .getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+        assertFalse(prompt.contains("relative_change 方向固定"));
+        assertFalse(prompt.contains("方向接反或字面量冒充都会被服务端打回"));
+        int exampleStart = prompt.indexOf("示例：【可引用历史事实】中有 ref=fact_1（币安 BTC 的旧价快照）");
+        assertTrue(exampleStart >= 0);
+        String example = prompt.substring(exampleStart).lines().filter(line -> line.startsWith("{\"in_domain\""))
+                .findFirst().orElseThrow();
+        var store = new com.cexpilot.evidence.EvidenceStore(new com.cexpilot.evidence.InMemoryEvidenceRepository());
+        var result = planner(new Script(example), registry(), new DagConfig()).plan("用刚才的价格减去现在的价格", "", "t",
+                e -> {}, null, FOLLOWUP_CTX, seedContext(store, "conv-1"));
+        assertTrue(result.plan().isPresent(), result.lastError());
+        var calc = result.plan().orElseThrow().logicalPlan().calculations().get(0);
+        assertEquals("difference", calc.operator());
+        assertEquals("{{m1.binance.value}}", calc.input().path("left").asText());
+        assertEquals("{{m2.binance.value}}", calc.input().path("right").asText());
+        assertNotNull(result.bindings().reuseFor("metric_0"));
+        assertNull(result.bindings().reuseFor("metric_1"));
+    }
+
+    @Test void 多历史输入不能只保留其中一个pinned() throws Exception {
+        var store = new com.cexpilot.evidence.EvidenceStore(new com.cexpilot.evidence.InMemoryEvidenceRepository());
+        var evidence = seedContext(store, "conv-1");
+        var first = pinnedSnapshotGroup("fact_1");
+        var second = pinnedSnapshotGroup("fact_9"); second.put("id", "m2");
+        var bad = plan(first, second);
+        calculation(bad, "c1", "difference", "{\"left\":\"{{m1.binance.value}}\",\"right\":\"{{m2.binance.value}}\"}");
+        var repaired = bad.deepCopy();
+        ((ObjectNode) repaired.at("/metrics/1")).remove(List.of("reference_mode", "evidence_ref"));
+        var result = planner(new Script(envelope(bad), envelope(repaired)), registry(), new DagConfig())
+                .plan("刚才两次价格的差值", "", "t", e -> {}, null, FOLLOWUP_CTX, evidence);
+        assertTrue(result.needsClarification());
+        assertTrue(result.plan().isEmpty(), "一个 pinned 不能替代另一个历史输入");
+    }
+
+    @Test void 修复改名和重排节点仍可保留全部历史输入() throws Exception {
+        var store = new com.cexpilot.evidence.EvidenceStore(new com.cexpilot.evidence.InMemoryEvidenceRepository());
+        var evidence = seedContext(store, "conv-1");
+        var old1 = pinnedSnapshotGroup("fact_1");
+        var old2 = pinnedSnapshotGroup("fact_9"); old2.put("id", "m2");
+        var bad = plan(old1, old2);
+        calculation(bad, "c1", "difference", "{\"left\":\"{{m1.binance.value}}\",\"right\":\"{{m2.binance.value}}\"}");
+        var renamed1 = pinnedSnapshotGroup("fact_1"); renamed1.put("id", "old_left");
+        var renamed2 = pinnedSnapshotGroup("fact_1"); renamed2.put("id", "old_right");
+        var repaired = plan(renamed2, renamed1);
+        calculation(repaired, "delta", "difference", "{\"left\":\"{{old_left.binance.value}}\",\"right\":\"{{old_right.binance.value}}\"}");
+        var result = planner(new Script(envelope(bad), envelope(repaired)), registry(), new DagConfig())
+                .plan("刚才两次价格的差值", "", "t", e -> {}, null, FOLLOWUP_CTX, evidence);
+        assertTrue(result.plan().isPresent(), result.lastError());
+        assertFalse(result.needsClarification(), "节点 ID 与顺序不构成历史身份");
+        assertEquals(2, result.bindings().reusedByNode().size());
+    }
+
+    @Test void 修复不能把历史基准转移成无关pinned节点() throws Exception {
+        var store = new com.cexpilot.evidence.EvidenceStore(new com.cexpilot.evidence.InMemoryEvidenceRepository());
+        var evidence = seedContext(store, "conv-1");
+        var old = pinnedSnapshotGroup("fact_9");
+        var now = pinnedSnapshotGroup(null); now.put("id", "m2");
+        var bad = plan(old, now);
+        calculation(bad, "c1", "relative_change", "{\"current\":\"{{m2.binance.value}}\",\"baseline\":\"{{m1.binance.value}}\"}");
+        var dummy = pinnedSnapshotGroup("fact_1"); dummy.put("id", "kept_old");
+        var fresh1 = pinnedSnapshotGroup(null); fresh1.put("id", "fresh1");
+        var fresh2 = pinnedSnapshotGroup(null); fresh2.put("id", "fresh2");
+        var repaired = plan(dummy, fresh1, fresh2);
+        calculation(repaired, "delta", "relative_change", "{\"current\":\"{{fresh1.binance.value}}\",\"baseline\":\"{{fresh2.binance.value}}\"}");
+        var result = planner(new Script(envelope(bad), envelope(repaired)), registry(), new DagConfig())
+                .plan("比刚才涨了多少", "", "t", e -> {}, null, FOLLOWUP_CTX, evidence);
+        assertTrue(result.needsClarification());
+        assertTrue(result.plan().isEmpty(), "保留无关历史节点不能让比较基准变成最新值");
+    }
+
+    @Test void 改名但保持多层计算历史输入时允许修复() throws Exception {
+        var store = new com.cexpilot.evidence.EvidenceStore(new com.cexpilot.evidence.InMemoryEvidenceRepository());
+        var evidence = seedContext(store, "conv-1");
+        var bad = plan(pinnedSnapshotGroup("fact_9"));
+        calculation(bad, "c1", "difference", "{\"left\":\"{{m1.binance.value}}\",\"right\":100}");
+        calculation(bad, "c2", "ratio", "{\"left\":\"{{c1.value}}\",\"right\":2}");
+        var renamed = pinnedSnapshotGroup("fact_1"); renamed.put("id", "old");
+        var repaired = plan(renamed);
+        calculation(repaired, "half", "ratio", "{\"left\":\"{{delta.value}}\",\"right\":2}");
+        calculation(repaired, "delta", "difference", "{\"left\":\"{{old.binance.value}}\",\"right\":100}");
+        var result = planner(new Script(envelope(bad), envelope(repaired)), registry(), new DagConfig())
+                .plan("原价格减100再除以2", "", "t", e -> {}, null, FOLLOWUP_CTX, evidence);
+        assertTrue(result.plan().isPresent(), result.lastError());
+        assertFalse(result.needsClarification());
+    }
+
     @Test void 无证据上下文时pinned字段不触发绑定() {
         // 单轮/老链路：没有证据上下文，pinned 字段只作协议解析，不做绑定（保持旧行为兼容）
         var llm = new Script(envelope(plan(pinnedSnapshotGroup("fact_1"))));
@@ -569,6 +657,85 @@ class DagPlannerTest {
         assertFalse(result.needsClarification());
     }
 
+    @Test void NEW不继承当前任务且任务选择随结果返回() {
+        var env = JSON.createObjectNode().put("in_domain", true).put("task_action", "NEW");
+        env.set("plan", scalarPlan());
+        var config = new DagConfig(); config.setPlannerMaxRetries(0);
+        var result = planner(new Script(env.toString()), registry(), config).plan("换话题查成交额", "", "t",
+                e -> {}, activeEthFrame(), FOLLOWUP_CTX, null, List.of());
+        assertTrue(result.plan().isPresent(), result.lastError());
+        assertEquals(com.cexpilot.conversation.TaskScope.Action.NEW, result.taskScope().action());
+        assertNull(result.taskScope().base());
+    }
+
+    private static com.cexpilot.conversation.TaskState firstTaskState() {
+        return com.cexpilot.conversation.TaskState.legacy(priceHighFrame(), 1, "昨天币安BTC最高价");
+    }
+
+    private static com.cexpilot.conversation.TaskState secondTaskState() {
+        var compiled = new MetricPlanCompiler(new MetricCatalog(LOADER), registry(), catalogProviders())
+                .compileFull(plan(metric("m1", "price.low", "range_statistic", "binance")), 8);
+        return com.cexpilot.conversation.TaskState.complete("f1", "c1", 2, firstTaskState(),
+                new com.cexpilot.conversation.ConversationService.TurnHandle(2, "turn-2", 2), "最低价呢", "SUCCEEDED",
+                null, compiled, null, FOLLOWUP_CTX.requestTime(), FOLLOWUP_CTX.userZone());
+    }
+
+    @Test void RESUME可精确选择同任务最初版本而非最新版本() {
+        var first = firstTaskState(); var second = secondTaskState();
+        var tasks = List.of(com.cexpilot.conversation.TaskSnapshot.candidate(first, "task_1"),
+                com.cexpilot.conversation.TaskSnapshot.candidate(second, "task_1"));
+        var env = (ObjectNode) json(resumeEnvelope("task_1")); env.put("state_ref", "task_1_v1");
+        var config = new DagConfig(); config.setPlannerMaxRetries(0);
+        var result = planner(new Script(env.toString()), registry(), config).plan("回到第一轮换成OKX", "", "t",
+                e -> {}, activeEthFrame(), FOLLOWUP_CTX, null, tasks);
+        assertTrue(result.plan().isPresent(), result.lastError());
+        assertEquals(first, result.taskScope().base());
+        assertEquals(1, result.taskScope().baseVersion());
+    }
+
+    @Test void RESUME不指定版本时选择该任务最新版本() {
+        var first = firstTaskState(); var second = secondTaskState();
+        var tasks = List.of(com.cexpilot.conversation.TaskSnapshot.candidate(first, "task_1"),
+                com.cexpilot.conversation.TaskSnapshot.candidate(second, "task_1"));
+        var env = (ObjectNode) json(resumeEnvelope("task_1"));
+        ((ObjectNode)env.at("/plan/metrics/0")).put("metric", "price.low");
+        var config = new DagConfig(); config.setPlannerMaxRetries(0);
+        var result = planner(new Script(env.toString()), registry(), config).plan("回到之前任务换成OKX", "", "t",
+                e -> {}, activeEthFrame(), FOLLOWUP_CTX, null, tasks);
+        assertTrue(result.plan().isPresent(), result.lastError());
+        assertEquals(second, result.taskScope().base());
+    }
+
+    @Test void 历史任务与版本必须属于同一个候选任务() {
+        var tasks = List.of(com.cexpilot.conversation.TaskSnapshot.candidate(firstTaskState(), "task_1"),
+                com.cexpilot.conversation.TaskSnapshot.candidate(com.cexpilot.conversation.TaskState.legacy(activeEthFrame(), 3, "ETH现价"), "task_2"));
+        var env = (ObjectNode) json(resumeEnvelope("task_1")); env.put("state_ref", "task_2_v1");
+        var result = planner(new Script(env.toString()), registry(), new DagConfig()).plan("回到之前任务", "", "t",
+                e -> {}, activeEthFrame(), FOLLOWUP_CTX, null, tasks);
+        assertTrue(result.needsClarification()); assertTrue(result.plan().isEmpty());
+    }
+
+    @Test void 澄清时也返回已选择的任务和来源版本() {
+        var current = firstTaskState();
+        String response = "{\"in_domain\":true,\"task_action\":\"CONTINUE\",\"needs_clarification\":true,\"clarify\":\"哪家交易所？\",\"plan\":null}";
+        var result = planner(new Script(response), registry(), new DagConfig()).plan("币安", "", "t", e -> {},
+                current.frame(), FOLLOWUP_CTX, null, List.of(), current);
+        assertTrue(result.needsClarification()); assertEquals(current, result.taskScope().base());
+        assertEquals(com.cexpilot.conversation.TaskScope.Action.CONTINUE, result.taskScope().action());
+    }
+
+    @Test void 历史选择连续澄清也保留原待补任务() {
+        var pending = com.cexpilot.conversation.TaskState.complete("pending", "c1", 1, null,
+                new com.cexpilot.conversation.ConversationService.TurnHandle(1, "turn-1", 1),
+                "回到之前那个BTC问题", "NEEDS_CLARIFICATION", "您指哪一次查询？", null, null,
+                FOLLOWUP_CTX.requestTime(), FOLLOWUP_CTX.userZone());
+        var result = planner(new Script(resumeEnvelope("missing")), registry(), new DagConfig()).plan("最早那个", "", "t",
+                e -> {}, null, FOLLOWUP_CTX, null, List.of(), pending);
+        assertTrue(result.needsClarification());
+        assertEquals(pending, result.taskScope().base());
+        assertEquals(com.cexpilot.conversation.TaskScope.Action.CONTINUE, result.taskScope().action());
+    }
+
     @Test void RESUME引用不在索引中时打回修复() {
         var config = new DagConfig();
         config.setPlannerMaxRetries(0);
@@ -578,6 +745,7 @@ class DagPlannerTest {
                 e -> {}, activeEthFrame(), FOLLOWUP_CTX, null, List.of());
 
         assertTrue(result.plan().isEmpty(), "索引中不存在的 task_ref 不得执行");
-        assertTrue(result.lastError().contains("task_ref"), result.lastError());
+        assertTrue(result.needsClarification());
+        assertTrue(result.reply().contains("task_ref"), result.reply());
     }
 }

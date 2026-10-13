@@ -8,8 +8,8 @@ import java.util.List;
  * 一次问答的执行结果。
  *
  * @param turnStatus       轮次终态提示；null = SUCCEEDED。NEEDS_CLARIFICATION 表示 Planner 要求澄清，
- *                         由编排层落轮次状态（不执行、不落 frame）
- * @param clarify          澄清问题原文（needsClarification 时有值），供编排层写入 frame 的 pendingClarification
+ *                         由编排层保存所选任务的澄清版本（不执行 DAG）
+ * @param clarify          澄清问题原文（needsClarification 时有值），供编排层追加任务的未完成问答链
  * @param reusedFactCount  本轮 REUSE_FACT 复用并成功播种的历史事实数（阶段二汇总计数）
  * @param plannerLlmCalls  planner 阶段 LLM 调用次数（含修复重试；阶段三计数拆分）
  * @param answerLlmCalls   answer 阶段 LLM 调用次数（0 或 1）
@@ -32,7 +32,22 @@ public record ExecutionResult(String answer,
                               int metricFetchCount,
                               int calculationCount,
                               int httpRequestCount,
-                              List<String> savedFactIds) {
+                              List<String> savedFactIds, com.cexpilot.conversation.TaskScope taskScope) {
+
+    public ExecutionResult(String answer, JsonNode evidence, int toolCallCount, int steps, int promptTokens,
+            int completionTokens, String turnStatus, String clarify, int reusedFactCount, int plannerLlmCalls,
+            int answerLlmCalls, int metricFetchCount, int calculationCount, int httpRequestCount,
+            List<String> savedFactIds) {
+        this(answer, evidence, toolCallCount, steps, promptTokens, completionTokens, turnStatus, clarify,
+                reusedFactCount, plannerLlmCalls, answerLlmCalls, metricFetchCount, calculationCount,
+                httpRequestCount, savedFactIds, null);
+    }
+
+    public ExecutionResult withTaskScope(com.cexpilot.conversation.TaskScope scope) {
+        return new ExecutionResult(answer, evidence, toolCallCount, steps, promptTokens, completionTokens,
+                turnStatus, clarify, reusedFactCount, plannerLlmCalls, answerLlmCalls, metricFetchCount,
+                calculationCount, httpRequestCount, savedFactIds, scope);
+    }
 
     public ExecutionResult {
         savedFactIds = savedFactIds == null ? List.of() : List.copyOf(savedFactIds);

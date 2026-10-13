@@ -395,6 +395,33 @@ class DagRuntimeTest {
         assertEquals(0, r.reusedFactCount());
     }
 
+    @Test void 回访执行继承所选任务时区但最新价使用本轮时间() {
+        var compiler = new MetricPlanCompiler(new MetricCatalog(LOADER), registry(), catalogProviders());
+        var compiled = compiler.compileFull(plan(snapshotGroup("m1", "binance", null)), 8);
+        var frame = com.cexpilot.conversation.QueryFrame.fromCompiledPlan("conv-1", "old-turn", "BTC 当前价",
+                Instant.parse("2026-10-12T01:00:00Z"), ZoneId.of("America/New_York"), compiled, null);
+        var state = com.cexpilot.conversation.TaskState.legacy(frame, 1, "BTC 当前价");
+        var input = new com.cexpilot.conversation.PlannerInput("", null, List.of(), 0,
+                List.of(com.cexpilot.conversation.TaskSnapshot.candidate(state, "task_1")), null);
+        var env = (ObjectNode)json(envelope(compiled.logicalPlanJson()));
+        env.put("task_action", "RESUME").put("task_ref", "task_1").put("state_ref", "task_1_v1");
+        var captured = new java.util.concurrent.atomic.AtomicReference<RequestContext>();
+        var ticker = namedProvider(TickerMetricProvider.NAME, TickerMetric::valueOf, (q,c) -> {
+            captured.set(c);
+            return new MetricResult.Point(new MetricResult.SnapshotMetadata(c.requestTime(), c.userZone()), new java.math.BigDecimal("90000"));
+        });
+        var runtime = runtimeWithStore(new Script(env.toString(), "答案"), registry(), ticker,
+                new com.cexpilot.evidence.EvidenceStore(new com.cexpilot.evidence.InMemoryEvidenceRepository()));
+        Instant now = Instant.parse("2026-10-12T02:00:00Z");
+        var result = runtime.execute("回到之前的价格任务刷新一下", "", "t", e -> {}, null,
+                new RequestContext(ZoneId.of("Asia/Shanghai"), now), null, null, input,
+                new com.cexpilot.evidence.EvidenceSession("conv-1", "turn-new"));
+        assertEquals(ZoneId.of("America/New_York"), captured.get().userZone());
+        assertEquals(now, captured.get().requestTime());
+        assertEquals(com.cexpilot.conversation.TaskScope.Action.RESUME, result.taskScope().action());
+        assertEquals(1, result.metricFetchCount()); assertEquals(0, result.reusedFactCount());
+    }
+
     @Test void answer失败时ExecutionFailure携带计数与已存事实() throws Exception {
         // 4.3：失败不等于统计归零——Answer 抛异常时，planner/取数计数与失败前已保存的事实
         // 随 ExecutionFailure 带出，编排层失败路径据此落 trace
@@ -427,6 +454,9 @@ class DagRuntimeTest {
         assertEquals(1, ex.counters.metricFetchCount());
         assertEquals(0, ex.counters.calculationCount(), "上游失败未执行的算子不计数");
         assertFalse(ex.counters.savedFactIds().isEmpty(), "失败前已保存的事实随计数带出");
+        assertNotNull(ex.taskScope);
+        assertNotNull(ex.evidence);
+        assertEquals(ex.counters.savedFactIds().get(0), ex.evidence.get(0).path("fact_id").asText());
         // 事实已在失败前落库
         assertEquals(1, store.listReusable("conv-1", Instant.parse("2026-10-12T02:00:01Z")).size());
     }
