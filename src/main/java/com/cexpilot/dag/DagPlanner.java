@@ -135,40 +135,58 @@ public class DagPlanner {
         // "不能重查最新值冒充原快照"的边界，不再接受计划，直接按原快照不可恢复澄清
         Set<String> failedPinnedGroups = new java.util.LinkedHashSet<>();
         int attempts = dagConfig.getPlannerMaxRetries() + 1;
-        for (int attempt = 1; attempt <= attempts; attempt++) {
-            ChatResponse response = callLlm(messages, traceId, sink, attempt, responseFormat);
-            llmCalls++;
-            promptTokens += response.promptTokens() == null ? 0 : response.promptTokens();
-            completionTokens += response.completionTokens() == null ? 0 : response.completionTokens();
+        try {
+            for (int attempt = 1; attempt <= attempts; attempt++) {
+                // 4.3 口径：按尝试次数计——传输失败的调用（欠费/超时）也是已发生的成本
+                llmCalls++;
+                ChatResponse response = callLlm(messages, traceId, sink, attempt, responseFormat);
+                promptTokens += response.promptTokens() == null ? 0 : response.promptTokens();
+                completionTokens += response.completionTokens() == null ? 0 : response.completionTokens();
 
-            PlanDecision decision = evaluateResponse(response.content(), maxToolCalls, traceId, sink,
-                    activeFrame, requestContext, evidenceContext, attempt, failedPinnedGroups, taskIndex);
-            if (decision.error() == null) {
-                if (!failedPinnedGroups.isEmpty() && decision.plan() != null
-                        && java.util.Collections.disjoint(
-                                pinnedGroupIds(decision.plan().logicalPlan()), failedPinnedGroups)) {
-                    sink.record(new TraceEvent(traceId, "PLAN", "dag_planner", null,
-                            MAPPER.createObjectNode().put("note", "pinned_downgrade_blocked").toString(),
-                            null, null, null, null, null, "修复轮删除了 pinned_result 引用，按原快照不可恢复处理"));
-                    return new PlanOutcome(true, BINDING_UNAVAILABLE_CLARIFY, Optional.empty(),
-                            promptTokens, completionTokens, null, true, null, llmCalls);
+                PlanDecision decision = evaluateResponse(response.content(), maxToolCalls, traceId, sink,
+                        activeFrame, requestContext, evidenceContext, attempt, failedPinnedGroups, taskIndex);
+                if (decision.error() == null) {
+                    if (!failedPinnedGroups.isEmpty() && decision.plan() != null
+                            && java.util.Collections.disjoint(
+                                    pinnedGroupIds(decision.plan().logicalPlan()), failedPinnedGroups)) {
+                        sink.record(new TraceEvent(traceId, "PLAN", "dag_planner", null,
+                                MAPPER.createObjectNode().put("note", "pinned_downgrade_blocked").toString(),
+                                null, null, null, null, null, "修复轮删除了 pinned_result 引用，按原快照不可恢复处理"));
+                        return new PlanOutcome(true, BINDING_UNAVAILABLE_CLARIFY, Optional.empty(),
+                                promptTokens, completionTokens, null, true, null, llmCalls);
+                    }
+                    return decision.toOutcome(promptTokens, completionTokens, llmCalls);
                 }
-                return decision.toOutcome(promptTokens, completionTokens, llmCalls);
-            }
-            if (decision.bindingFailure()) {
-                // 绑定失败只修复一次；仍不行则澄清"原快照不可恢复"，禁止重查当前值冒充（F21）
-                if (bindingRetried) {
-                    return new PlanOutcome(true, BINDING_UNAVAILABLE_CLARIFY, Optional.empty(),
-                            promptTokens, completionTokens, null, true, null, llmCalls);
+                if (decision.bindingFailure()) {
+                    // 绑定失败只修复一次；仍不行则澄清"原快照不可恢复"，禁止重查当前值冒充（F21）
+                    if (bindingRetried) {
+                        return new PlanOutcome(true, BINDING_UNAVAILABLE_CLARIFY, Optional.empty(),
+                                promptTokens, completionTokens, null, true, null, llmCalls);
+                    }
+                    bindingRetried = true;
                 }
-                bindingRetried = true;
+                lastError = decision.error();
+                appendRepair(messages, response.content(), lastError);
             }
-            lastError = decision.error();
-            appendRepair(messages, response.content(), lastError);
+        } catch (Exception e) {
+            // 4.3：planner 阶段失败（LLM 欠费/超时等）也要把已发生的 LLM 调用次数带出——
+            // planner 是最常见的失败源，裸抛会让失败 trace 的计数归零
+            throw new PlanningFailure(e, llmCalls);
         }
         // repair 耗尽：runtime 直接返回固定失败话术，禁止继续生成无事实答案。
         return new PlanOutcome(true, null,
                 Optional.empty(), promptTokens, completionTokens, lastError, false, null, llmCalls);
+    }
+
+    /** planner 阶段失败（LLM 传输错误等）携带已发生的调用次数（4.3），由 DagRuntime 转成 ExecutionFailure。 */
+    public static final class PlanningFailure extends RuntimeException {
+
+        public final int llmCalls;
+
+        public PlanningFailure(Throwable cause, int llmCalls) {
+            super(cause.getMessage(), cause);
+            this.llmCalls = llmCalls;
+        }
     }
 
     /** 绑定修复仍失败时的澄清话术：说明原快照不可恢复，把"是否按最新数据重查"的选择权交还用户。 */

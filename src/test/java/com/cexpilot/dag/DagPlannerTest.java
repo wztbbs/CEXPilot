@@ -97,8 +97,10 @@ class DagPlannerTest {
         };
         var config = new DagConfig(); config.setPlannerResponseFormat("json_schema");
         List<TraceEvent> events = new ArrayList<>();
-        assertThrows(IllegalStateException.class,
+        // 4.3：planner 阶段 LLM 失败抛 PlanningFailure 并携带已发生的调用次数（首调用失败=1）
+        var failure = assertThrows(DagPlanner.PlanningFailure.class,
                 () -> planner(llm, registry(), config).plan("问题", "", "test", events::add));
+        assertEquals(1, failure.llmCalls);
         assertEquals(1, events.size());
         assertEquals("simulated transport failure", events.get(0).error());
         assertEquals("json_schema", json(events.get(0).inputJson()).at("/response_format/type").asText());
