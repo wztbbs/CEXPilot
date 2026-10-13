@@ -65,6 +65,9 @@ public class EvidenceBinder {
     /**
      * 协议层校验（不看库存）：pinned_result 的 evidence_ref 必须在候选别名集合内。
      * 模型只能给短别名，factId 永远由服务端解析，不接受模型给的任何 id。
+     *
+     * <p>修复话术不得建议"改用 latest"（R4）：原快照不可用时唯一合法出路是
+     * needs_clarification 交还用户决定，否则模型会顺着提示降级，"刚才那个价格"被偷换成现价。
      */
     public String checkProtocol(LogicalPlan plan, List<EvidenceAssembler.Entry> candidates) {
         Map<String, EvidenceAssembler.Entry> byRef = new LinkedHashMap<>();
@@ -75,7 +78,8 @@ public class EvidenceBinder {
             if (ref == null || !byRef.containsKey(ref)) {
                 return "指标组 " + metric.id() + " 的 evidence_ref \"" + ref + "\" 不在本轮【可引用历史事实】列表"
                         + (byRef.isEmpty() ? "（列表为空，无可绑定快照）" : "（可选: " + String.join(", ", byRef.keySet()) + "）")
-                        + "；请从列表选择 ref，或改用 reference_mode=\"latest\" 重新取数";
+                        + "；请从列表选择正确的 ref。禁止改用 reference_mode=\"latest\" 或删除该组的历史引用来绕过，"
+                        + "原快照确实不可用时必须输出 needs_clarification=true 说明，由用户决定是否按最新数据重查";
             }
         }
         return null;
@@ -123,7 +127,8 @@ public class EvidenceBinder {
                 recordDecision(sink, traceId, metric.id(), physicalId, metric,
                         entry.fact(), "REJECT", reject);
                 return BindResult.error("历史事实 " + metric.evidenceRef() + " 不可复用: " + reject
-                        + "；请修正引用，或改用 reference_mode=\"latest\" 重新取数");
+                        + "；若 ref 选错请修正引用重试。禁止改用 reference_mode=\"latest\" 或删除该组的历史引用来绕过，"
+                        + "原快照确实不可用时必须输出 needs_clarification=true 说明，由用户决定是否按最新数据重查");
             }
             recordDecision(sink, traceId, metric.id(), physicalId, metric, fact, "REUSE", null);
             reused.put(physicalId, new ExecutionBindings.ReuseFact(fact.factId(), fact.sourceTurnId(),
@@ -133,42 +138,29 @@ public class EvidenceBinder {
     }
 
     /**
-     * 比较方向与字面量冒充校验（F05），绑定成功后调用，返回非空即进规划修复：
-     * 1) relative_change/compare/difference/ratio 一侧来自 pinned 复用节点、另一侧来自本轮取数时，
-     *    pinned（旧快照）必须在基准槽位（relative_change 的 baseline，其余算子的 right），接反报错；
-     * 2) 槽位直接填数值字面量、且与会话中某条可绑定历史快照的值一致时，视为用历史文本数字冒充，
-     *    报错引导改用 reference_mode="pinned_result" + evidence_ref 绑定。
-     * 只检查直接引用指标组的输入；经由上游计算节点间接引用的不在此校验。
+     * 比较类算子的来源核对（R5 改造）：只产出非阻断的提示信息，不再做方向校验、不进规划修复。
+     *
+     * <p>方向断言已删除："现在比刚才涨了多少"要求旧值在 baseline，但"用刚才的价格减去现在的价格"
+     * "刚才是现在的几倍"等合法问题的方向由本轮语义决定，不能从快照新旧推导统一方向并强制交换——
+     * 旧值在 current 侧曾被判"方向接反"打回，模型照改后符号/分母就错了。
+     * 比较方向的正确性由 prompt 规则（比较必须明确方向与基准）与 Answer 侧来源标注承担。
+     *
+     * <p>数值字面量恰好等于某条历史快照值只是线索而非证据（用户可能明确给出该数字），
+     * 降级为提示信息：调用方落审计事件，Answer/回放侧可参考，不再拦截计划。
      */
-    public String checkComparisonInputs(CompiledPlan compiled, ExecutionBindings bindings,
-                                        List<EvidenceAssembler.Entry> candidates) {
-        Set<String> pinned = bindings == null ? Set.of() : bindings.reusedByNode().keySet();
+    public List<String> checkComparisonWarnings(CompiledPlan compiled, ExecutionBindings bindings,
+                                                List<EvidenceAssembler.Entry> candidates) {
+        List<String> warnings = new java.util.ArrayList<>();
         for (CalculationRequest calc : compiled.logicalPlan().calculations()) {
             String[] slots = COMPARISON_SLOTS.get(calc.operator());
             if (slots == null) continue;
             JsonNode fresh = calc.input().path(slots[0]);
             JsonNode base = calc.input().path(slots[1]);
-            if (resolvesToPinned(fresh, compiled, pinned) && !resolvesToPinned(base, compiled, pinned)) {
-                return "calculations[" + calc.id() + "] " + calc.operator() + " 比较方向接反："
-                        + slots[1] + "（基准）必须引用 pinned_result 绑定的历史快照节点，"
-                        + slots[0] + " 必须引用本轮新取数节点；请交换两侧引用";
-            }
-            String literalError = literalImpersonation(calc, slots[0], fresh, candidates);
-            if (literalError == null) literalError = literalImpersonation(calc, slots[1], base, candidates);
-            if (literalError != null) return literalError;
+            String literalWarning = literalImpersonation(calc, slots[0], fresh, candidates);
+            if (literalWarning == null) literalWarning = literalImpersonation(calc, slots[1], base, candidates);
+            if (literalWarning != null) warnings.add(literalWarning);
         }
-        return null;
-    }
-
-    /** 形如 {{组.交易所.字段}} 的直接指标引用是否落在 pinned 复用节点上。 */
-    private static boolean resolvesToPinned(JsonNode node, CompiledPlan compiled, Set<String> pinned) {
-        if (pinned.isEmpty() || node == null || !node.isTextual()) return false;
-        String text = node.asText();
-        if (!text.startsWith("{{") || !text.endsWith("}}")) return false;
-        String[] parts = text.substring(2, text.length() - 2).split("\\.");
-        if (parts.length < 3) return false; // 计算节点引用 {{c1.value}} 只有两段，不在此展开
-        String physicalId = compiled.branches().getOrDefault(parts[0], Map.of()).get(parts[1]);
-        return physicalId != null && pinned.contains(physicalId);
+        return warnings;
     }
 
     private static String literalImpersonation(CalculationRequest calc, String slot, JsonNode node,

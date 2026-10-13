@@ -214,27 +214,28 @@ class ExecutionBindingsTest {
     }
 
     @Test
-    void 比较方向正确时放行() {
+    void 比较方向旧值在基准侧时无提示() {
         List<EvidenceAssembler.Entry> candidates = seedSnapshotFact();
         CompiledPlan compiled = compilePlan(relativeChangePlan(false));
         var result = bind(compiled, candidates);
         assertNull(result.error(), result.error());
-        assertNull(binder.checkComparisonInputs(compiled, result.bindings(), candidates));
+        assertTrue(binder.checkComparisonWarnings(compiled, result.bindings(), candidates).isEmpty());
     }
 
     @Test
-    void pinned旧快照放到current侧时判方向接反() {
+    void pinned旧快照放到current侧同样放行_方向由本轮语义决定() {
+        // R5："用刚才的价格减去现在的价格""以现在为基准刚才高了多少"是合法问题，
+        // 程序不再从快照新旧推导方向并强制交换，只依赖 prompt 规则与 Answer 来源标注
         List<EvidenceAssembler.Entry> candidates = seedSnapshotFact();
         CompiledPlan compiled = compilePlan(relativeChangePlan(true));
         var result = bind(compiled, candidates);
         assertNull(result.error(), result.error());
-        String error = binder.checkComparisonInputs(compiled, result.bindings(), candidates);
-        assertNotNull(error);
-        assertTrue(error.contains("方向接反"), error);
+        assertTrue(binder.checkComparisonWarnings(compiled, result.bindings(), candidates).isEmpty(),
+                "反向比较是合法语义，不得拦截");
     }
 
     @Test
-    void 比较输入字面量与候选快照值一致时拦截() {
+    void 比较输入字面量与候选快照值一致时产出非阻断提示() {
         List<EvidenceAssembler.Entry> candidates = seedSnapshotFact(); // 快照 value=83000
         ObjectNode plan = JSON.createObjectNode();
         plan.putArray("metrics").add(metricGroup("m2", "price.last", "snapshot", "binance"));
@@ -244,14 +245,14 @@ class ExecutionBindingsTest {
         CompiledPlan compiled = compilePlan(plan);
         var result = bind(compiled, candidates);
         assertNull(result.error(), result.error());
-        String error = binder.checkComparisonInputs(compiled, result.bindings(), candidates);
-        assertNotNull(error);
-        assertTrue(error.contains("字面量"), error);
-        assertTrue(error.contains("fact_1"), error);
+        var warnings = binder.checkComparisonWarnings(compiled, result.bindings(), candidates);
+        assertEquals(1, warnings.size());
+        assertTrue(warnings.get(0).contains("字面量"), warnings.get(0));
+        assertTrue(warnings.get(0).contains("fact_1"), warnings.get(0));
     }
 
     @Test
-    void 用户明确给出的常量不匹配候选时不误拦() {
+    void 用户明确给出的常量不匹配候选时无提示() {
         List<EvidenceAssembler.Entry> candidates = seedSnapshotFact();
         ObjectNode plan = JSON.createObjectNode();
         plan.putArray("metrics").add(metricGroup("m2", "price.last", "snapshot", "binance"));
@@ -261,7 +262,7 @@ class ExecutionBindingsTest {
         CompiledPlan compiled = compilePlan(plan);
         var result = bind(compiled, candidates);
         assertNull(result.error(), result.error());
-        assertNull(binder.checkComparisonInputs(compiled, result.bindings(), candidates));
+        assertTrue(binder.checkComparisonWarnings(compiled, result.bindings(), candidates).isEmpty());
     }
 
     @Test

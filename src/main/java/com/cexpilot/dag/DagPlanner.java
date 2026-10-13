@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /** 单次 LLM 生成紧凑指标计划；确定性编译为 Tool DAG，再校验和有限次数修复。 */
 @Component
@@ -119,6 +120,9 @@ public class DagPlanner {
         int llmCalls = 0;
         String lastError = null;
         boolean bindingRetried = false;
+        // R4：绑定失败轮的 pinned 指标组集合——修复轮若把这些组删成 latest，视为绕过
+        // "不能重查最新值冒充原快照"的边界，不再接受计划，直接按原快照不可恢复澄清
+        Set<String> failedPinnedGroups = new java.util.LinkedHashSet<>();
         int attempts = dagConfig.getPlannerMaxRetries() + 1;
         for (int attempt = 1; attempt <= attempts; attempt++) {
             ChatResponse response = callLlm(messages, traceId, sink, attempt, responseFormat);
@@ -127,8 +131,17 @@ public class DagPlanner {
             completionTokens += response.completionTokens() == null ? 0 : response.completionTokens();
 
             PlanDecision decision = evaluateResponse(response.content(), maxToolCalls, traceId, sink,
-                    activeFrame, requestContext, evidenceContext, attempt);
+                    activeFrame, requestContext, evidenceContext, attempt, failedPinnedGroups);
             if (decision.error() == null) {
+                if (!failedPinnedGroups.isEmpty() && decision.plan() != null
+                        && java.util.Collections.disjoint(
+                                pinnedGroupIds(decision.plan().logicalPlan()), failedPinnedGroups)) {
+                    sink.record(new TraceEvent(traceId, "PLAN", "dag_planner", null,
+                            MAPPER.createObjectNode().put("note", "pinned_downgrade_blocked").toString(),
+                            null, null, null, null, null, "修复轮删除了 pinned_result 引用，按原快照不可恢复处理"));
+                    return new PlanOutcome(true, BINDING_UNAVAILABLE_CLARIFY, Optional.empty(),
+                            promptTokens, completionTokens, null, true, null, llmCalls);
+                }
                 return decision.toOutcome(promptTokens, completionTokens, llmCalls);
             }
             if (decision.bindingFailure()) {
@@ -184,7 +197,7 @@ public class DagPlanner {
                                           com.cexpilot.conversation.QueryFrame activeFrame,
                                           com.cexpilot.runtime.RequestContext requestContext,
                                           EvidenceBindingContext evidenceContext,
-                                          int attempt) {
+                                          int attempt, Set<String> failedPinnedGroups) {
         JsonNode parsed;
         try {
             parsed = LlmJson.parse(content);
@@ -202,7 +215,7 @@ public class DagPlanner {
             return PlanDecision.accepted(false, textOrNull(parsed.path("reply")), null);
         }
         return evaluateInDomainResponse(parsed, maxToolCalls, traceId, sink, activeFrame, requestContext,
-                evidenceContext, attempt);
+                evidenceContext, attempt, failedPinnedGroups);
     }
 
     private PlanDecision evaluateInDomainResponse(JsonNode parsed, int maxToolCalls,
@@ -210,7 +223,7 @@ public class DagPlanner {
                                                   com.cexpilot.conversation.QueryFrame activeFrame,
                                                   com.cexpilot.runtime.RequestContext requestContext,
                                                   EvidenceBindingContext evidenceContext,
-                                                  int attempt) {
+                                                  int attempt, Set<String> failedPinnedGroups) {
         String reply = textOrNull(parsed.path("reply"));
         // 澄清决策（阶段一 c 协议增量字段，缺省按旧行为 false）：不执行、不落 frame，由程序落 NEEDS_CLARIFICATION
         if (parsed.path("needs_clarification").asBoolean(false)) {
@@ -235,7 +248,7 @@ public class DagPlanner {
             return evaluateReplyWithoutPlan(parsed, reply, traceId, sink);
         }
         return validatePlan(parsed, reply, maxToolCalls, traceId, sink, activeFrame, requestContext,
-                evidenceContext, attempt);
+                evidenceContext, attempt, failedPinnedGroups);
     }
 
     private PlanDecision evaluateReplyWithoutPlan(JsonNode parsed, String reply,
@@ -262,7 +275,7 @@ public class DagPlanner {
                                       com.cexpilot.conversation.QueryFrame activeFrame,
                                       com.cexpilot.runtime.RequestContext requestContext,
                                       EvidenceBindingContext evidenceContext,
-                                      int attempt) {
+                                      int attempt, Set<String> failedPinnedGroups) {
         String error;
         try {
             com.cexpilot.metric.CompiledPlan compiled =
@@ -302,21 +315,27 @@ public class DagPlanner {
                     EvidenceBinder binder = new EvidenceBinder(evidenceContext.store());
                     String protocolError = binder.checkProtocol(compiled.logicalPlan(), evidenceContext.candidates());
                     if (protocolError != null) {
+                        failedPinnedGroups.addAll(pinnedGroupIds(parsed));
                         sink.record(TraceEvent.plan(traceId, parsed.toString(), protocolError));
                         return PlanDecision.bindingError(protocolError);
                     }
                     EvidenceBinder.BindResult bind = binder.bind(compiled, evidenceContext.candidates(),
                             evidenceContext.conversationId(), requestContext, traceId, sink);
                     if (bind.error() != null) {
+                        failedPinnedGroups.addAll(pinnedGroupIds(parsed));
                         sink.record(TraceEvent.plan(traceId, parsed.toString(), bind.error()));
                         return PlanDecision.bindingError(bind.error());
                     }
                     bindings = bind.bindings();
-                    // F05 后置校验：比较类算子的方向（pinned 旧快照必须在基准槽位）与字面量冒充拦截
-                    String comparisonError = binder.checkComparisonInputs(compiled, bindings,
+                    // F05/R5 后置核对：只产出非阻断提示（字面量与历史快照值一致），落审计事件供回放参考；
+                    // 比较方向不再程序校验——方向由本轮语义决定，交给 prompt 规则与 Answer 来源标注
+                    java.util.List<String> comparisonWarnings = binder.checkComparisonWarnings(compiled, bindings,
                             evidenceContext.candidates());
-                    if (comparisonError != null) {
-                        return repairDecision(traceId, sink, parsed.toString(), comparisonError);
+                    if (!comparisonWarnings.isEmpty()) {
+                        var arr = MAPPER.createArrayNode();
+                        comparisonWarnings.forEach(arr::add);
+                        sink.record(new TraceEvent(traceId, "LITERAL_MATCH_NOTICE", "evidence_binder",
+                                null, arr.toString(), null, null, null, null, null, null));
                     }
                 }
                 // plan 已合法时，超长 reply 直接丢弃，不再为 reply 重试。
@@ -336,6 +355,25 @@ public class DagPlanner {
     }
 
     /** 协议增量字段 changes：字符串数组，缺省/非法按空数组（旧行为）处理。 */
+    /** 计划 JSON 里的 pinned 指标组 id 集合（R4 降级拦截用）。 */
+    private static Set<String> pinnedGroupIds(JsonNode parsed) {
+        Set<String> ids = new java.util.LinkedHashSet<>();
+        for (JsonNode m : parsed.path("plan").path("metrics")) {
+            if (m.isObject() && "pinned_result".equals(m.path("reference_mode").asText())) {
+                ids.add(m.path("id").asText());
+            }
+        }
+        return ids;
+    }
+
+    /** 编译产物里的 pinned 指标组 id 集合。 */
+    private static Set<String> pinnedGroupIds(com.cexpilot.metric.LogicalPlan logicalPlan) {
+        return logicalPlan.metrics().stream()
+                .filter(m -> "pinned_result".equals(m.referenceMode()))
+                .map(m -> m.id())
+                .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+    }
+
     private static java.util.Set<String> declaredChanges(JsonNode parsed) {
         java.util.Set<String> changes = new java.util.LinkedHashSet<>();
         JsonNode node = parsed.path("changes");

@@ -444,6 +444,40 @@ class DagPlannerTest {
         assertEquals(2, llm.calls.size(), "绑定失败只修复一次");
     }
 
+    @Test void 绑定失败后修复轮删除pinned引用时拦截降级并澄清() throws Exception {
+        // R4：第一次 ref 选错进修复；第二次模型把 m1 从 pinned 降级成 latest 绕过——
+        // 程序必须识破，按"原快照不可恢复"澄清，不得静默执行偷换成现价
+        var store = new com.cexpilot.evidence.EvidenceStore(new com.cexpilot.evidence.InMemoryEvidenceRepository());
+        var evidenceCtx = seedContext(store, "conv-1");
+        var downgraded = envelope(plan(pinnedSnapshotGroup(null))); // 同组但无 pinned 字段 = latest
+        var llm = new Script(envelope(plan(pinnedSnapshotGroup("fact_9"))), downgraded);
+        List<TraceEvent> events = new ArrayList<>();
+
+        var result = planner(llm, registry(), new DagConfig())
+                .plan("现在比刚才涨了多少？", "", "t", events::add, null, FOLLOWUP_CTX, evidenceCtx);
+
+        assertTrue(result.needsClarification(), "降级 latest 不得被接受: " + result.lastError());
+        assertTrue(result.reply().contains("不可恢复"), result.reply());
+        assertTrue(result.plan().isEmpty());
+        assertTrue(events.stream().anyMatch(e -> e.outputJson() != null
+                && e.outputJson().contains("pinned_downgrade_blocked")), "降级拦截要落审计事件");
+        assertEquals(2, llm.calls.size());
+    }
+
+    @Test void 绑定失败后修复轮修正ref为pinned时正常放行() throws Exception {
+        // R4 不误伤：修复轮保持 pinned、只修正 ref → 正常接受（已有用例覆盖，此处补降级判定的对照）
+        var store = new com.cexpilot.evidence.EvidenceStore(new com.cexpilot.evidence.InMemoryEvidenceRepository());
+        var evidenceCtx = seedContext(store, "conv-1");
+        var llm = new Script(envelope(plan(pinnedSnapshotGroup("fact_9"))),
+                envelope(plan(pinnedSnapshotGroup("fact_1"))));
+
+        var result = planner(llm, registry(), new DagConfig())
+                .plan("现在比刚才涨了多少？", "", "t", e -> {}, null, FOLLOWUP_CTX, evidenceCtx);
+
+        assertTrue(result.plan().isPresent(), result.lastError());
+        assertFalse(result.needsClarification());
+    }
+
     @Test void 无证据上下文时pinned字段不触发绑定() {
         // 单轮/老链路：没有证据上下文，pinned 字段只作协议解析，不做绑定（保持旧行为兼容）
         var llm = new Script(envelope(plan(pinnedSnapshotGroup("fact_1"))));
