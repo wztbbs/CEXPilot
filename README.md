@@ -1,178 +1,192 @@
-# CEXPilot — Crypto / CEX AI Copilot（Phase 1）
+# CEXPilot
 
-当前默认问答流程为 **K 线指标试点**：仅支持 Binance / OKX 的 USDT 报价、USDT 结算永续成交 K 线指标。原 Funding、OI、盘口、ticker 快照和 Ethereum 工具保留代码，暂不进入新 Planner，也不自动回退旧流程。
+CEXPilot 是面向加密货币行情查询的 AI Copilot。用户用自然语言描述查询对象、时间和计算需求；Planner 生成指标逻辑计划，Java 编译并执行有界 DAG，回答模型根据本轮事实组织答案。取数、时间消解、完整性检查和数值计算由代码完成。
 
-- 区间指标：开、高、低、收、涨跌幅、基础币成交量、USDT 成交额。
-- 序列指标：每根 K 线的开、高、低、收、基础币成交量；粒度支持 5m / 15m / 1h。
-- 计算：复用 avg / sum / min / max / compare / difference / ratio / relative_change / annualize。
-- 支持多轮追问、流式回答和 Trace；数据覆盖不完整时不提供区间指标，依赖计算不能补算。
+本文及 `docs/` 描述当前工作树的实现。`importants/` 保存文章、设计过程和实验产物；其中的历史计划、能力表和示例不作为当前接口契约。
 
-## 指标主流程
+## 文档入口
 
-```text
-用户问题 → Planner 输出 {metrics, calculations}
-         → 展开 exchanges、推导依赖、绑定 KlineMetricProvider、校验物理 DAG
-         → KlineQueryService → KlineQueryResult / Candle / SeriesCoverage
-         → Provider 直接生成 MetricResult → 标准指标 JSON → 多层计算 → Answer
-```
+建议先读 Plan，再读上下文管理了解多轮问答；时间、计算和 Trace 按需查阅。
 
-指标定义、核心概念及绑定在 `src/main/resources/metrics/kline.yml`。Planner 不接收底层取数 Tool 目录；同一指标组共享品种、时间和粒度，仅 exchanges 为列表。结果引用如 `{{m1.binance.value}}`、`{{m1.okx.samples}}`，计算结果引用 `{{c1.value}}`；不输出 depends_on。
-
-`range_statistic` 返回 value 与实际 observation_seconds，`time_series` 返回 samples[{time,value}]。两者都保留单位、覆盖情况和来源；同组分支独立失败，失败会阻止依赖计算。第一版没有跨指标请求合并，预算按展开后的节点计数，各查询服务仍有分页预算。
-
-Trace 中 `PLAN` 保留逻辑计划，`PLAN_COMPILED` 记录物理绑定，`METRIC_RESULT` 记录 Provider 的参数、标准指标结果与耗时，计算算子继续记录 `TOOL_CALL`。原有 trace 仍可回放；新增计划不接受旧 nodes/tool 协议。
-
-K 线绑定只配置 `provider: kline` 和类型化 `selector`，不再配置旧 Tool 字段路径或列名。`KlineMetricProvider` 直接复用查询结果和 `MarketCalculator.rangeStats()`；`MetricResultJson` 是唯一的指标输出序列化边界。旧 `GetKlinesTool` / `GetMarketStatisticsTool` 保留供旧调用使用，新主流程不执行它们，也不把旧 JSON 再读回模型。
-
-可试问：“币安 BTC 昨天涨跌多少？”、“昨天币安 BTC 永续成交额比 OKX 高百分之多少？”、“分别求两所 BTC 昨天 1 小时 K 线收盘价的等权平均，再比较差值。”
-
-概念:
-| 概念                    | 解决什么                          |
-| --------------------- | ----------------------------- |
-| Conversation          | 用户前后几轮对话属于同一个上下文吗             |
-| Execution             | 一次 Query 的执行生命周期              |
-| Plan                  | 这次 Execution 准备做哪些事情         |
-| Step                  | Plan 中一个执行单元                  |
-| Checkpoint            | Execution 执行到了哪里              |
-| Trace                 | Execution 实际发生了什么            |
-| Context               | 当前 Execution 从 Conversation 中继承什么信息 |
-| Memory                | 跨 Conversation 保存什么           |
-
-
-包结构与职责对应关系：
-
-| 包 | 职责 |
-|---|---|
-| `runtime` / `dag` | 工具注册、指标规划、参数校验、DAG 执行与事实回答 |
-| `metric` | 指标目录、逻辑计划编译、结果适配与计算来源传播 |
-| `llm` | OpenAI 兼容客户端（function calling） |
-| `market` | Binance / OKX 客户端、数据标准化、确定性计算、8 个行情工具 |
-| `ethereum` | RPC 客户端、ABI 事件解码、交易资金流分析 |
-| `conversation` | 对话最近几轮上下文（不做长期记忆） |
-| `trace` / `feedback` / `eval` | Trace 落库与回放 / 用户反馈 / Smoke Eval |
-
-## 启动
-
-```bash
-# 1. 建库（表结构启动时自动初始化）
-mysql -e "CREATE DATABASE IF NOT EXISTS cexpilot_test DEFAULT CHARSET utf8mb4"
-
-# 2. 配置环境变量（普通模型 Key 必填，公共行情不需要交易所 Key）
-export LLM_NORMAL_API_KEY=sk-xxx    # LLM_NORMAL_BASE_URL 默认 DashScope 兼容模式，LLM_NORMAL_MODEL 默认 qwen-plus
-# 旗舰模型按需配置：LLM_FLAGSHIP_API_KEY / LLM_FLAGSHIP_MODEL（默认 qwen-max）/ LLM_FLAGSHIP_BASE_URL
-export DB_HOST=127.0.0.1 DB_USER=root DB_PASSWORD=xxx
-
-# 3. 运行
-mvn spring-boot:run -Dspring-boot.run.profiles=test   # 测试环境
-java -jar target/cexpilot-0.1.0.jar --spring.profiles.active=prod   # 线上
-```
-
-> Binance / OKX 的 API 在大陆网络不可直连。境内部署时用 `BINANCE_BASE_URL` / `OKX_BASE_URL` 环境变量指向代理或网关。
-
-## 调用示例
-
-```bash
-# 行情问答
-curl -X POST localhost:8080/api/ask -H 'Content-Type: application/json' \
-  -d '{"question": "BTC 最近 1 小时怎么了？"}'
-
-# 流式问答（SSE：meta → delta × N → done / error），前端逐字出答案
-curl -N -X POST localhost:8080/api/ask/stream -H 'Content-Type: application/json' \
-  -d '{"question": "BTC 最近 1 小时怎么了？"}'
-
-# 多轮追问（带上次返回的 conversationId）
-curl -X POST localhost:8080/api/ask -H 'Content-Type: application/json' \
-  -d '{"conversationId": "<conversation_id>", "question": "那 OKX 呢？"}'
-
-# 以太坊交易分析
-curl -X POST localhost:8080/api/ask -H 'Content-Type: application/json' \
-  -d '{"question": "分析这笔交易：0xabad7bc4a2320b6ae713d9c4694540f3c47a4fb5a6bb64e3ccd7d5a16c4224a6"}'
-
-# 👎 反馈 → Trace 回放
-curl -X POST localhost:8080/api/feedback -H 'Content-Type: application/json' \
-  -d '{"traceId": "<trace_id>", "rating": "down", "category": "data_error"}'
-curl localhost:8080/api/trace/<trace_id>
-
-# 按时间窗口批量捞 Trace 排查问题（含每条的 events 和 feedback；窗口最长 24h，beginHour 必须大于 endHour）
-curl 'localhost:8080/api/traces?beginHour=4&endHour=0'     # 最近 4 小时
-curl 'localhost:8080/api/traces?beginHour=12&endHour=8'    # 12 小时前 到 8 小时前
-
-# Smoke Eval（真实调用 LLM 与交易所 API）
-curl -X POST 'localhost:8080/api/eval/run'           # 全部 25 条 case
-curl -X POST 'localhost:8080/api/eval/run?category=market'
-```
-
-## 测试
-
-```bash
-mvn clean test   # 单元与配置集成测试，不调用外部 LLM、交易所或数据库
-```
-
-## 工具配置与提示词
-
-工具元数据的唯一来源是 `src/main/resources/tools/*.yml`。Java `AgentTool` 只提供绑定名称和执行逻辑，不再包含 description 或参数 schema。
-
-| 配置字段 | 用途 | 是否传给 LLM |
-| --- | --- | --- |
-| tool `name` | 绑定同名 Java 执行器；重复、缺失绑定启动报错 | 是 |
-| tool `enabled` | 控制注册与可执行性；false 时不暴露、不执行 | 不直接传入 |
-| tool `description` | 简短能力及关键限制 | 是 |
-| tool `input_schema` | 参数校验及默认值补齐 | 以精简参数说明传入；相同参数定义合并 |
-| tool `output_schema` | `ToolResult.data` 的输出字段契约；规划期引用路径校验 | 以紧凑层级结构传入，含类型、含义及固定列位置 |
-| tool `capabilities` / `limitations` / `scope` | 维护文档；需要模型知道的限制须写入 description | 否 |
-| intent `name` / `description` | 意图归类，仅用于统计 | 是 |
-| intent 其余字段 | 文档参考，不限制工具调用或控制回答策略 | 否 |
-
-`input_schema` 当前支持扁平对象：`type`、`properties`、`required`、`additionalProperties`，以及参数的 `type`（string/integer/number/boolean）、`description`、`enum`、`default`、`minimum`、`maximum`、`pattern`。不支持的 schema 字段或无效默认值会在启动时失败，避免配置被静默忽略。规划时校验具体参数；执行时在上游引用解析后再次校验并补齐默认值。默认值只补缺省字段，不替换显式 null。
-
-配置随应用在启动时加载，修改后需要重新构建并重启，不支持热更新。参数键名须与执行器读取的键一致；修改参数契约时仍需同步执行逻辑。提示词版本包含实际渲染的工具、意图、规划约束和回答模板，便于追踪配置变更。
-
-`output_schema` 使用 JSON Schema 结构子集：`type`、`description`、`properties`、`additionalProperties`、`items`、`prefixItems`。对象显式列出字段并设置 `additionalProperties: false`；数组用 `items` 描述元素，二维表的固定列用 `prefixItems` + `items: false` 描述。契约根对应 `data`，例如 `get_ticker` 的价格引用是 `{{n1.data.last_price}}`；资金费率表第二列引用为 `{{n1.data.rates.0.1}}`。新增或修改工具返回字段时须同步更新契约。
-
-Planner 与 PlanValidator 共用这份契约：错误字段、错误层级、数组列越界在工具执行前报出并进入现有规划修复重试。该校验不判断业务口径或计划是否足以回答问题，也不要求声明最终回答结果。契约列出条件字段的并集，不保证每次都存在或非 null；数组实际行数、覆盖完整性和数据可用性仍在运行时检查。无 `type` 的节点表示形状随输入变化（如 `min/max.item`），其内部路径留给运行时解析，避免误拦合法引用。
-
-计算工具与查询工具共用 YAML 注册、DAG 节点和 Trace 链路，目前启用 `avg`、`relative_change`、`annualize`：
-
-| 工具 | `args.input` | 输出 |
-| --- | --- | --- |
-| `avg` | `{kind: "values", values: [a, b, ...]}`，或 `{kind: "field", collection: 对象数组, field: 字段名}`；二维表还需 `columns` 列名数组 | `value`：等权算术平均，`count`：参与元素数，单位沿用输入 |
-| `relative_change` | `{current: 待比较值, baseline: 正数基准}` | `value`：`(current-baseline)/baseline`，`percent`：已乘 100 的百分数值 |
-| `annualize` | `{basis, method, rate, rate_unit, period: {value, unit}, year_days?}`，结构见下文 | `value`：年化比例，`percent`：年化百分数，附输入口径、周期、年基准、公式与假设 |
-
-行情输入用 `{{node.data.字段}}` 引用，并声明 `depends_on`；只允许用户明确提供的常量，不支持自由表达式。比如平均最近 N 期费率，先查 `get_funding_rate_history(count=N)`，再把 `rates` 和 `rates_columns` 引用到 `avg`，选择 `field=rate`。已有统计工具能直接输出的指标仍优先直接查询。
-
-算子接受数值及无单位十进制字符串，使用 BigDecimal，结果按 34 位有效数字 HALF_EVEN 舍入；结果数值以十进制字符串输出，可继续引用。空集合、缺失字段、null、非数值均失败；`relative_change` 拒绝零和负基准。规划期检查嵌套参数并接入现有 repair，执行期在引用解析后重新校验实际值。
-
-DAG 在提取字段前拦截标明区间/样本不完整或省略统计的引用源，失败会沿依赖传播。单位、比较方向和业务口径的语义匹配仍需规划器判断，两个裸数通过校验不代表比较有效；回答阶段不得补算失败结果。计算参数与结果进入 `TOOL_CALL` trace，原始引用保留在 `PLAN` 中。本地测试使用模拟模型与数据，不代表已评估真实模型的规划准确率。
-
-`annualize` 的设计口径：
-
-| 参数 | 含义与约束 |
+| 文档 | 内容 |
 | --- | --- |
-| `basis` | 必填：`periodic_rate` 单期费率/收益率外推；`cumulative_rate` 历史窗口费率直接求和；`holding_return` 持有期总收益率 |
-| `method` | 必填：`simple` 简单年化，或 `compound` 复利/几何年化；`cumulative_rate` 只允许 `simple` |
-| `rate` / `rate_unit` | 原始值与单位均必填；`ratio` 的 0.0001 和 `percent` 的 0.01 均表示 0.01%，代码统一换算 |
-| `period` | rate 对应的完整时长，`{value, unit}`；单位为 second/minute/hour/day，1 秒至 365250 天，不接受含义不固定的月份或年份 |
-| `year_days` | 可省略，代码默认 365，亦可显式选 360 或 366；固定日数基准，结果披露来源，不自动推断闰年 |
+| [Plan与指标元数据](docs/Plan与指标元数据.md) | 指标目录、查询形态、逻辑计划、物理绑定、引用契约、校验与扩展步骤 |
+| [上下文管理](docs/上下文管理.md) | frame、澄清接续、历史事实、Planner 协议、跨轮执行绑定、存储与当前边界 |
+| [时间窗口](docs/时间窗口.md) | TimeSpec、固定请求时间、时区、网格对齐、分页、覆盖核对与实际统计范围 |
+| [聚合指标](docs/聚合指标.md) | 成品指标与计算节点、九个算子、输入输出、精度、来源传播和年化限制 |
+| [Trace搭建](docs/trace搭建.md) | Trace 生命周期、表结构、事件负载、版本指纹、回放接口与定位步骤 |
 
-令 `r` 为换算后的小数比例，`n = year_days * 86400 / period_seconds`，简单年化为 `r*n`，复利年化为 `(1+r)^n-1`。复利使用 [big-math 2.3.2](https://github.com/eobermuhlner/big-math) 的十进制 log/exp，支持非整数 n，并为极小费率保留额外精度；年化对数增长绝对值超过 200 时失败。复利及持有期收益率输入不可小于 -100%，等于 -100% 的复利结果仍为 -100%。
+大模型评测暂未单独展开。
 
-例如用户明确给出“每 8 小时 0.01%，简单年化”，节点参数为：
+## 当前支持范围
 
-```json
-{"input":{"basis":"periodic_rate","method":"simple","rate":"0.01","rate_unit":"percent","period":{"value":8,"unit":"hour"}}}
+行情主流程只接入 Binance / OKX 的 **USDT 报价、USDT 结算永续合约**。现货、交割合约、币本位或其他报价币不会自动改写为支持的产品。
+
+能力以 [指标目录](src/main/resources/metrics/cex-perpetual.yml) 的 `metric + query_shape + exchange` 绑定为准；底层 Service 或 Tool 存在不等于 Planner 可以调用。
+
+| 指标族 | 已接入形态 | 关键限制 |
+| --- | --- | --- |
+| 成交价格 `price.*` | 最新价快照、官方 24h 涨跌幅、K 线区间 OHLC / 涨跌幅及 OHLC 序列 | 成交 K 线支持 5m / 15m / 1h；区间收盘价不是实时价 |
+| 成交量 / 成交额 `trade.*` | 区间成交量 / 真实成交额、成交量序列、官方 24h 数据 | 官方 24h 成交额仅 Binance；OKX 区间真实成交额可查 |
+| 持仓量 `oi.*` | 当前基础币数量、数量序列、期初 / 期末 / 变化量 / 变化率 / 极值 | 历史缺省 1h；Binance 历史保留期按代码限制为最近 30 天 |
+| 标记价 / 指数价 `mark.*` / `index.*` | 当前快照、区间 OHLC / 涨跌幅及 OHLC 序列 | 5m / 15m / 1h；不提供成交量、成交额 |
+| 盘口 `orderbook.*` | 买一、卖一、价差、不平衡度快照 | depth 默认 20，范围 5～50；不平衡度为最多 10 档买量 / 卖量 |
+| 主动买卖 `taker.*` | 区间买量、卖量、买量占比 | 当前仅 Binance，固定官方 5m 统计，不接受自选粒度 |
+| 已结算费率 `funding.rate_settled` | 最近 N 期样本 | N 必填，1～100；未接入时间窗口、预测费率和下次结算时间 |
+
+计算支持 `avg / sum / min / max / compare / difference / ratio / relative_change / annualize`，也支持用户明确给出的常量。Ethereum 分析代码及 Tool 仍在仓库中，但不在当前指标 Planner 的可规划能力内。
+
+可查询示例：
+
+- “分别列出币安和 OKX 的 BTC 最新成交价。”
+- “昨天币安 BTC 永续成交额比 OKX 高百分之多少？”
+- “币安 BTC 昨天 1 小时 K 线收盘价的等权平均是多少？”
+- “币安 BTC 最近 10 期已结算资金费率的均值是多少？”
+
+## 一次问答如何执行
+
+```mermaid
+flowchart TD
+    Q[POST /api/ask 或 /api/ask/stream] --> S[AskService：固定请求时间、建立 Trace]
+    M[指标目录 + 算子契约] --> P[DagPlanner：领域判断与逻辑规划]
+    S --> P
+    P --> C[MetricPlanCompiler：绑定、展开交易所、推导依赖]
+    C --> V[PlanValidator：参数、引用、环、深度与预算]
+    C -->|编译错误，有限修复| P
+    V -->|校验错误，有限修复| P
+    V --> E[DagExecutor：拓扑分层，同层并行]
+    E --> R[MetricProvider → QueryService / Source / Client]
+    R --> F[标准指标事实 + 确定性计算结果]
+    E --> F
+    F --> A[Answer：FACTS + QUERY_STATUS + TIME_CONTEXT]
+    P -->|无有效计划| D[直接返回范围、缺口或澄清说明]
 ```
 
-结果 `value="0.1095"`、`percent="10.95"`，默认 365 天。方法、对象或周期不明确时提示词要求先澄清；代码只能拦截缺失/非法参数，无法证明模型填写的口径来自用户原意。资金费率保持原始付费方向，不自动当作多头收益；复利外推需要复投假设，结果不是实际或未来收益承诺。
+正常路径通常一次 Planner 调用、一次 Answer 调用。Planner 校验失败会增加修复调用；没有有效计划时不调用 Answer。模型通过 JSON 文本生成计划，当前两阶段 LLM 调用均不传 API `tools` 参数。
 
-历史资金费率简单年化引用 `get_funding_rate_statistics.statistics.sum` 与 `statistics.observation_seconds`，后者由代码按完整查询窗口计算，不能用首末结算点之差。历史价格收益年化引用 `get_market_statistics.statistics.change_pct`（`rate_unit=percent`）及其 `statistics.observation_seconds`，后者按实际参与的 K 线窗口计算。当前费率快照未提供可靠对应周期，不能猜 8 小时；明确查询最近一期已结算费率时，可引用 history(count=1) 的费率及结算周期。
+指标事实统一包含身份、单位和来源；时间查询还包含覆盖状态。区间不完整时 Provider 可返回 `statistics_omitted` 而不返回 `value`，因此 `ok=true` 只表示执行成功。依赖失败或不完整数据的计算不会补算；独立分支可以继续返回结果。Answer 的提示词要求只引用已有指标和算子结果，不能自行补出差值、均值、年化等结论。
 
-第一次调用使用 `prompts/dag_planner.txt`，只规划必要查询。部分可查询时保留可用计划并说明其余缺口；序列和明细由对应工具返回，无需明细保留开关；只需统计指标时优先选择统计工具。近期成交返回 `limit` 范围内实际取得的全部记录（最多 100 笔）。
+## 本地启动
 
-第二次调用统一使用 `prompts/agent_system.txt`，仅根据 query 和本轮 FACTS 回答。历史只用于消解指代。无计划时直接返回缺口说明或追问，不调用回答模型；查询失败和单侧数据缺失同样需要明确说明。工具返回的完整 evidence 直接作为 FACTS，不再按数组长度裁剪明细。各工具自身的查询预算和返回上限仍然适用。
+依赖：JDK 17、Maven、MySQL 8，以及可用的 OpenAI 兼容模型服务。版本和依赖见 [pom.xml](pom.xml)，配置见 [application.yml](src/main/resources/application.yml)。公共行情查询不需要交易所账户 Key。
 
-Answer 的 `TIME_CONTEXT` 与工具共用请求开始时固定的时间基准，包含 UTC 时刻、请求时区及当地日期时间；未提供用户时区时采用 UTC+8，并标注为默认值。单个查询显式指定的时区仍以工具返回区间为准。回答阶段不重新计算“昨天”，也不凭模型记忆判断当前日期；时间合法性、覆盖及未收盘状态依据工具结果说明。Answer trace 同时记录这份时间上下文，便于复查跨时区、跨午夜问题。
+以下命令从仓库根目录执行，使用 `test` profile：
 
-`get_klines`、`get_market_statistics`、`get_mark_price_history`、`get_mark_price_statistics` 共用缺省粒度策略：用户指定 `interval` 时遵守，未指定时省略参数（不填写 `auto`），由 QueryService 在时间解析后选择。按数据源支持的粒度从细到粗检查对齐后的根数，优先选择不超过 1500 根且不超过总预算的粒度；都超过目标时使用最粗可用粒度，仍需通过总预算和保留期校验。结果的 `candle_interval` 是实际粒度，`interval_source` 标注 automatic/explicit；实际截止时间以 `coverage.covered_until` 和统计的 `actual_range` 为准，不能将最近已收盘数据说成实时结果。同范围、同边界的完整 OHLC 聚合不会因较细粒度而更精确，但粒度影响走势细节和边界贴合程度。OI 等瞬时采样工具不套用此规则。
+```bash
+mysql -u root -p -e 'CREATE DATABASE IF NOT EXISTS cexpilot_test DEFAULT CHARSET utf8mb4'
 
-主动买卖成交量（taker）查询中，Source 在计算范围两端各多取一个 5m 周期，并在分页交界保留重叠、按周期起点去重；外扩受请求时间和历史保留期限制。QueryService 使用公共 `SeriesRangeFilter` 裁回 `effectiveRange`，再调用覆盖校验器，区间内的错位、缺口及分页中止仍会抑制统计输出。扩大取数不会扩大统计范围，也不会把余量计入预期条数；分页页数预算不变，重叠会占用部分容量。其他数据源尚未迁移到这套外扩取数流程。
+export DB_HOST=127.0.0.1
+export DB_PORT=3306
+export DB_NAME=cexpilot_test
+export DB_USER=root
+export DB_PASSWORD='<本地数据库密码>'
+export LLM_NORMAL_API_KEY='<模型服务密钥>'
+export LLM_NORMAL_BASE_URL='https://dashscope.aliyuncs.com/compatible-mode/v1'
+export LLM_NORMAL_MODEL='qwen-plus'
+export SERVER_PORT=8082
+
+mvn spring-boot:run -Dspring-boot.run.profiles=test
+```
+
+访问 [本地问答页](http://localhost:8082/)；Trace 页为 `http://localhost:8082/trace.html?id=<traceId>`。
+
+交易所连接必须使用仓库约定的代理：
+
+```yaml
+exchange:
+  binance:
+    base-url: http://43.160.213.63:18080
+  okx:
+    base-url: http://43.160.213.63:18081
+```
+
+`application-test.yml` 已固定上述两个地址。基础配置的默认地址仍是官方域名，`prod` 仅为 Binance 提供代理默认值；使用其他 profile 时必须显式配置两个代理，不能直接沿用官方默认地址。基础配置及 `prod` 可通过以下环境变量配置；`test` 的固定值不会被这两个占位符覆盖：
+
+```bash
+export BINANCE_BASE_URL='http://43.160.213.63:18080'
+export OKX_BASE_URL='http://43.160.213.63:18081'
+```
+
+OKX 请求必须携带 `User-Agent`，否则可能收到 `403 error code: 1010`。当前 OkxClient 未显式设置该头，实际出站头还取决于底层 HTTP 实现及代理；配置连接或新增路径时应显式保证该头，不能把当前 Client 当作请求头保障。历史游标方向与分页细节见 [时间窗口](docs/时间窗口.md)。
+
+新库启动时自动执行 [schema.sql](src/main/resources/db/schema.sql) 建表。**存量库不会自动升级字段**：`CREATE TABLE IF NOT EXISTS` 不执行 ALTER，也没有自动迁移框架；部署前需核对 [migrations](src/main/resources/db/migrations) 并手工执行尚未应用的迁移，不能把所有 ALTER 重复执行。
+
+已有 `next_query_no` 的库需应用 [010_last_query_no.sql](src/main/resources/db/migrations/010_last_query_no.sql)，将计数转换为 `last_query_no = next_query_no - 1`。先停止旧应用并等待在途问答结束，完成迁移后再启动新版本。新库直接使用 `last_query_no`，不执行这条迁移。
+
+构建及运行 JAR：
+
+```bash
+mvn package -DskipTests
+java -jar target/cexpilot-0.1.0.jar --spring.profiles.active=test
+```
+
+`prod` 使用 [application-prod.yml](src/main/resources/application-prod.yml) 的线上数据库配置，密码来自 `MYSQL_PASSWORD`；不要将本地 `DB_*` 变量误认为可以替换该 profile 的固定数据库地址。
+
+## 常用运行配置
+
+| 配置 / 环境变量 | 当前默认值 | 用途 |
+| --- | --- | --- |
+| `server.port` / `SERVER_PORT` | 8082 | HTTP 端口 |
+| `llm.normal.model` / `LLM_NORMAL_MODEL` | qwen-plus | 当前 Planner 与 Answer 使用普通模型客户端 |
+| `LLM_NORMAL_ENABLE_THINKING` | false | 模型思考开关 |
+| `LLM_TEMPERATURE` / `LLM_SEED` | 0 / 不下发 | 采样参数 |
+| `DAG_MAX_NODES` | 8 | 展开后的执行节点上限，还受 `llm.max-tool-calls=8` 限制 |
+| `DAG_MAX_DEPTH` | 3 | 依赖深度上限 |
+| `DAG_EXECUTOR_THREADS` | 4 | DAG 固定线程池大小 |
+| `DAG_NODE_TIMEOUT_MS` | 30000 | 回收单节点 Future 的等待预算，不保证终止底层 HTTP |
+| `DAG_PLANNER_MAX_RETRIES` | 2 | 规划修复次数，含首次最多 3 次调用 |
+| `DAG_PLANNER_RESPONSE_FORMAT` | 空 | 不下发结构化约束；可选 json_object / json_schema，需模型支持 |
+| `LLM_NORMAL_PRICE_INPUT_PER_1K` / `LLM_NORMAL_PRICE_OUTPUT_PER_1K` | 0 / 0 | Trace 成本估算单价，默认 0 不表示实际免费 |
+
+配置和提示词随进程加载，不支持热更新；更改后需要重新构建并重启。
+
+## HTTP 接口
+
+以下请求会真实调用服务，仅作为手工调用示例。
+
+```bash
+curl -sS 'http://localhost:8082/api/ask' \
+  -H 'Content-Type: application/json' \
+  -d '{"question":"昨天币安 BTC 永续成交额是多少？","timezone":"Asia/Shanghai"}'
+
+curl -N 'http://localhost:8082/api/ask/stream' \
+  -H 'Content-Type: application/json' \
+  -d '{"question":"分别列出币安和 OKX 的 BTC 最新成交价。","timezone":"Asia/Shanghai"}'
+```
+
+| 方法与路径 | 输入与输出 |
+| --- | --- |
+| `POST /api/ask` | 基本输入 `question`、可选 IANA `timezone`；返回 answer、evidence、traceId、conversationId、turnId、耗时与计数等，见 [AskResponse](src/main/java/com/cexpilot/api/AskResponse.java) |
+| `POST /api/ask/stream` | 同类请求，SSE 事件为 meta、progress、delta、done、error；done 提供标识与统计，答案由 delta 累积 |
+| `GET /api/trace/{traceId}` | 返回主记录与按 seq 排序的完整事件 |
+| `GET /api/trace_detail/{traceId}` | 当前与单条 trace 接口读取相同完整数据，保留兼容路径 |
+| `GET /api/traces?beginHour=4&endHour=0` | 批量查询最近 4 小时；beginHour > endHour ≥ 0，窗口最长 24 小时，内联事件省略输入输出重字段 |
+| `POST /api/feedback` | `{traceId, rating, category?, comment?}`，rating 取 up/down |
+
+SSE 发起后即返回流，执行异常通过 `error` 事件传递，不能仅凭 HTTP 200 判断成功。前端入口为 [index.html](src/main/resources/static/index.html)，回放入口为 [trace.html](src/main/resources/static/trace.html)。
+
+线上入口：[cex.hrscrm.net](https://cex.hrscrm.net/)。定位问题先看 Trace 中的逻辑计划、绑定、取数与计算，再看最终答案，详见 [Trace搭建](docs/trace搭建.md)。
+
+## 代码导航与开发检查
+
+| 目录 | 职责 |
+| --- | --- |
+| `api` | HTTP、SSE 与一次问答编排 |
+| `metric` | 指标目录、类型化查询、编译器、Provider、统一结果与来源传播 |
+| `dag` | 规划、校验、依赖引用、拓扑执行、事实回答 |
+| `time` | TimeSpec 与确定性时间区间消解 |
+| `market` | 查询策略、分页 Source、交易所 Client、统一模型与成品指标计算 |
+| `calculation` / `runtime` | 九个确定性算子、工具契约、执行结果与 Trace 抽象 |
+| `llm` / `prompt` | 兼容模型客户端、完整调用序列化与提示词加载 |
+| `trace` / `feedback` | 回放落库、查询与反馈 |
+| `conversation` / `evidence` | 结构化会话状态、澄清接续与历史事实引用，见上下文管理文档 |
+| `ethereum` / `eval` | 链上分析与评测代码；分别不在当前指标主链 / 暂不展开文档 |
+
+按变更选择直接相关测试，先编译测试代码，再跑指定测试：
+
+```bash
+mvn test-compile
+mvn test -Dtest=MetricCatalogTest,MetricPlanCompilerRegressionTest,PlanValidatorTest
+```
+
+各专题列出对应测试入口。全量 `mvn test` 仅在明确要求或 CI 场景执行。`scripts/` 下探针和回归会调用线上服务，只在明确收到执行指令时运行；运行前备份上一轮报告及原始 JSON，结束后逐条比较 verdict，并独立复核 FAIL → PASS 的数值。约束见 [AGENTS.md](AGENTS.md)。
