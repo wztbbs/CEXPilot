@@ -111,11 +111,13 @@ public class ConversationService {
      *                        待补澄清任务与历史失败尝试（任务已了结，NEEDS_CLARIFICATION 不清）
      */
     @Transactional
-    public void finishTurn(String conversationId, TurnHandle turn, String status, String answer, String traceId,
-                           String logicalPlanJson, String frameJson, String lastAttemptJson) {
+    public boolean finishTurn(String conversationId, TurnHandle turn, String status, String answer, String traceId,
+                              String logicalPlanJson, String frameJson, String lastAttemptJson) {
         repository.finishTurn(turn.turnId(), status, answer, traceId, logicalPlanJson, frameJson);
+        boolean frameUpdated = false;
         if (frameJson != null) {
-            repository.saveActiveFrame(conversationId, turn.turnId(), turn.fencingToken(), frameJson);
+            // 4.3：用真实写入结果（fencing 不匹配被拒时为 false），CONTEXT_COMMITTED 不再说谎
+            frameUpdated = repository.saveActiveFrame(conversationId, turn.turnId(), turn.fencingToken(), frameJson);
         }
         if ("SUCCEEDED".equals(status)) {
             repository.clearTaskState(conversationId, turn.turnId(), turn.fencingToken());
@@ -125,6 +127,7 @@ public class ConversationService {
         // 返回 false = 租约过期、占用已被新请求接管：正常路径，不覆盖新状态即可
         repository.releaseTurn(conversationId, turn.turnId(), turn.fencingToken());
         repository.touchConversation(conversationId, null);
+        return frameUpdated;
     }
 
     /** 兼容旧调用（无失败任务快照）。 */

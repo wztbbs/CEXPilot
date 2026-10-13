@@ -55,13 +55,17 @@ public class EvidenceRepository {
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 
-    /** 可复用候选：未过期且有缓存 payload，按取数时间倒序（最新的在前，短别名按此顺序稳定分配）。 */
+    /**
+     * 可复用候选：未过期且有缓存 payload，按取数时间倒序（最新的在前，短别名按此顺序稳定分配）。
+     * LIMIT 50（审查 4.4）：防止单会话无限累积把候选全量捞进 Planner prompt——会话预算的第一道闸。
+     */
     public List<EvidenceFact> listReusable(String conversationId, Instant now) {
         return jdbc.query("""
                         SELECT * FROM conversation_artifact
                         WHERE conversation_id = ? AND kind = 'FACT'
                           AND payload_json IS NOT NULL AND retained_until > ?
                         ORDER BY fetched_at DESC, artifact_id DESC
+                        LIMIT 50
                         """,
                 (rs, rowNum) -> map(rs), conversationId, Timestamp.from(now));
     }

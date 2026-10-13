@@ -210,59 +210,90 @@ public class DagRuntime {
             compiledPlanSink.accept(outcome.plan().orElseThrow());
         }
         emit(progress, "执行计划已生成（" + plan.nodes().size() + " 项查询），正在获取数据…");
-        DagExecutor.ExecutionOutcome execution = executor.execute(plan, traceId, sink, effectiveContext, bindings);
-        emit(progress, "数据获取完毕，正在组装答案…");
-        steps = execution.layers();
+        boolean answerAttempted = false;
         Map<String, String> savedFactIds = new java.util.HashMap<>();
         List<String> newFactIds = new ArrayList<>();
         int reusedFactCount = 0;
         int metricFetchCount = 0;
         int calculationCount = 0;
-        for (PlanNode node : plan.nodes()) {
-            ToolResult result = execution.context().get(node.id());
-            if (result == null) {
-                continue;
-            }
-            toolCallCount++;
-            boolean reusedNode = bindings != null && bindings.reuseFor(node.id()) != null;
-            // 计数拆分（阶段三）：REUSE_FACT 节点不算真实取数；tool 节点即算子节点
-            if (node.metric() != null && !reusedNode) {
-                metricFetchCount++;
-            } else if (node.metric() == null) {
-                calculationCount++;
-            }
-            // 事实保存在 Answer 之前：即使 Answer 失败，本轮已取事实也已落库（F13）
-            if (evidenceSession != null && evidenceStore != null) {
-                Map<String, String> saved = saveFacts(outcome.plan().orElseThrow(), node, result, bindings,
-                        savedFactIds, evidenceSession, traceId, effectiveContext.requestTime());
-                savedFactIds.putAll(saved);
-                if (!reusedNode) {
-                    // REUSE_FACT 沿用历史 factId，不算本轮新保存
-                    newFactIds.addAll(saved.values());
+        try {
+            DagExecutor.ExecutionOutcome execution = executor.execute(plan, traceId, sink, effectiveContext, bindings);
+            emit(progress, "数据获取完毕，正在组装答案…");
+            steps = execution.layers();
+            for (PlanNode node : plan.nodes()) {
+                ToolResult result = execution.context().get(node.id());
+                if (result == null) {
+                    continue;
+                }
+                toolCallCount++;
+                boolean reusedNode = bindings != null && bindings.reuseFor(node.id()) != null;
+                // 计数拆分（阶段三）：REUSE_FACT 节点不算真实取数；算子节点只在真正执行时计数
+                // （4.3 口径：上游失败被跳过的节点不计数）
+                if (node.metric() != null && !reusedNode) {
+                    metricFetchCount++;
+                } else if (node.metric() == null && result.ok()) {
+                    calculationCount++;
+                }
+                // 事实保存在 Answer 之前：即使 Answer 失败，本轮已取事实也已落库（F13）
+                if (evidenceSession != null && evidenceStore != null) {
+                    Map<String, String> saved = saveFacts(outcome.plan().orElseThrow(), node, result, bindings,
+                            savedFactIds, evidenceSession, traceId, effectiveContext.requestTime());
+                    savedFactIds.putAll(saved);
+                    if (!reusedNode) {
+                        // REUSE_FACT 沿用历史 factId，不算本轮新保存
+                        newFactIds.addAll(saved.values());
+                    }
+                }
+                appendEvidence(evidence, node, result, bindings, savedFactIds);
+                if (reusedNode && result.ok()) {
+                    reusedFactCount++;
                 }
             }
-            appendEvidence(evidence, node, result, bindings, savedFactIds);
-            if (reusedNode && result.ok()) {
-                reusedFactCount++;
-            }
+            String userContent = question + "\n\n<FACTS>\n" + evidence + "\n</FACTS>\n<QUERY_STATUS>\n"
+                    + queryStatus + "\n</QUERY_STATUS>";
+
+            String systemPrompt = prompts.render(ANSWER_PROMPT_NAME, Map.of(
+                    "time_context", timeContext.toString(),
+                    "conversation_context", conversationContext == null ? "" : conversationContext));
+            List<ChatMessage> messages = new ArrayList<>();
+            messages.add(ChatMessage.system(systemPrompt));
+            messages.add(ChatMessage.user(userContent));
+            answerAttempted = true;
+            ChatResponse answer = callAnswerLlm(messages, traceId, sink, answerDelta, timeContext);
+            totalPromptTokens += answer.promptTokens() == null ? 0 : answer.promptTokens();
+            totalCompletionTokens += answer.completionTokens() == null ? 0 : answer.completionTokens();
+
+            return new ExecutionResult(answer.content(), evidence, toolCallCount, steps,
+                    totalPromptTokens, totalCompletionTokens, null, null, reusedFactCount,
+                    plannerLlmCalls, 1, metricFetchCount, calculationCount, execution.httpRequests(),
+                    newFactIds);
+        } catch (Exception e) {
+            // 4.3：失败不等于统计归零——把已发生的调用计数与已保存事实随异常带出，
+            // 编排层失败路径据此落 trace，耗时/成本分析才有完整口径
+            throw new ExecutionFailure(e, new TurnCounters(plannerLlmCalls, answerAttempted ? 1 : 0,
+                    metricFetchCount, calculationCount, 0, reusedFactCount, List.copyOf(newFactIds)));
         }
-        String userContent = question + "\n\n<FACTS>\n" + evidence + "\n</FACTS>\n<QUERY_STATUS>\n"
-                + queryStatus + "\n</QUERY_STATUS>";
+    }
 
-        String systemPrompt = prompts.render(ANSWER_PROMPT_NAME, Map.of(
-                "time_context", timeContext.toString(),
-                "conversation_context", conversationContext == null ? "" : conversationContext));
-        List<ChatMessage> messages = new ArrayList<>();
-        messages.add(ChatMessage.system(systemPrompt));
-        messages.add(ChatMessage.user(userContent));
-        ChatResponse answer = callAnswerLlm(messages, traceId, sink, answerDelta, timeContext);
-        totalPromptTokens += answer.promptTokens() == null ? 0 : answer.promptTokens();
-        totalCompletionTokens += answer.completionTokens() == null ? 0 : answer.completionTokens();
+    /** 失败路径的调用/事实计数快照（4.3）。answerLlmCalls 为尝试次数（1=已发起）。 */
+    public record TurnCounters(int plannerLlmCalls, int answerLlmCalls, int metricFetchCount,
+                               int calculationCount, int httpRequestCount, int reusedFactCount,
+                               List<String> savedFactIds) {
 
-        return new ExecutionResult(answer.content(), evidence, toolCallCount, steps,
-                totalPromptTokens, totalCompletionTokens, null, null, reusedFactCount,
-                plannerLlmCalls, 1, metricFetchCount, calculationCount, execution.httpRequests(),
-                newFactIds);
+        public TurnCounters {
+            savedFactIds = savedFactIds == null ? List.of() : List.copyOf(savedFactIds);
+        }
+    }
+
+    /** 包装执行期异常并携带 {@link TurnCounters}；编排层解包后用原始异常落 trace。 */
+    public static final class ExecutionFailure extends RuntimeException {
+
+        public final TurnCounters counters;
+
+        public ExecutionFailure(Throwable cause, TurnCounters counters) {
+            super(cause.getMessage(), cause);
+            this.counters = counters;
+        }
     }
 
     /**

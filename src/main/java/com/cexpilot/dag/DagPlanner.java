@@ -330,9 +330,14 @@ public class DagPlanner {
                         if (attempt <= 1) {
                             return repairDecision(traceId, sink, parsed.toString(), reconciliation);
                         }
+                        // §5 结构化：actual_diff（真实差异明细）/ declared_changes / attempt 分开记录，
+                        // 漏报率与逐 case 抽样复核才有可统计口径，而不是只靠 detail 文案
                         sink.record(new TraceEvent(traceId, "INHERIT_SHADOW", "inheritance_validator",
                                 MAPPER.createObjectNode()
                                         .put("declared_changes", declaredChanges(parsed).toString())
+                                        .put("actual_diff", inheritanceValidator
+                                                .diffKeys(activeFrame, compiled, requestContext).toString())
+                                        .put("attempt", attempt)
                                         .put("detail", reconciliation).toString(),
                                 parsed.toString(), null, null, null, null, null, null));
                     }

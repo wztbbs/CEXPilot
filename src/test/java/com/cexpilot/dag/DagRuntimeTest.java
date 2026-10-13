@@ -395,4 +395,40 @@ class DagRuntimeTest {
         assertEquals(0, r.reusedFactCount());
     }
 
+    @Test void answer失败时ExecutionFailure携带计数与已存事实() throws Exception {
+        // 4.3：失败不等于统计归零——Answer 抛异常时，planner/取数计数与失败前已保存的事实
+        // 随 ExecutionFailure 带出，编排层失败路径据此落 trace
+        var store = new com.cexpilot.evidence.EvidenceStore(new com.cexpilot.evidence.InMemoryEvidenceRepository());
+        var plannerInput = new com.cexpilot.conversation.PlannerInput("", null, List.of());
+        var llm = new Script(envelope(plan(snapshotGroup("m1", "binance", null)))) {
+            @Override public com.cexpilot.llm.ChatResponse chat(List<com.cexpilot.llm.ChatMessage> messages,
+                    List<com.cexpilot.llm.ToolSpec> tools) {
+                // planner 消费掉唯一输出后，Answer 调用时队列已空 → 抛异常模拟 Answer 失败
+                if (outputs.isEmpty()) {
+                    throw new IllegalStateException("answer 超时");
+                }
+                return super.chat(messages, tools);
+            }
+        };
+        var ticker = namedProvider(TickerMetricProvider.NAME, TickerMetric::valueOf, (q, c) ->
+                new MetricResult.Point(new MetricResult.SnapshotMetadata(
+                        Instant.parse("2026-10-12T02:00:00Z"), ZoneId.of("Asia/Shanghai")),
+                        new java.math.BigDecimal("90000")));
+        var runtime = runtimeWithStore(llm, registry(), ticker, store);
+
+        var ex = assertThrows(DagRuntime.ExecutionFailure.class, () -> runtime.execute("BTC 现价", "", "t",
+                e -> {}, null,
+                new RequestContext(ZoneId.of("Asia/Shanghai"), Instant.parse("2026-10-12T02:00:00Z")),
+                null, null, plannerInput, new com.cexpilot.evidence.EvidenceSession("conv-1", "turn-9")));
+
+        assertEquals("answer 超时", ex.getMessage(), "异常消息保留原始原因，编排层据此落 trace");
+        assertEquals(1, ex.counters.plannerLlmCalls());
+        assertEquals(1, ex.counters.answerLlmCalls(), "Answer 已发起，尝试计数为 1");
+        assertEquals(1, ex.counters.metricFetchCount());
+        assertEquals(0, ex.counters.calculationCount(), "上游失败未执行的算子不计数");
+        assertFalse(ex.counters.savedFactIds().isEmpty(), "失败前已保存的事实随计数带出");
+        // 事实已在失败前落库
+        assertEquals(1, store.listReusable("conv-1", Instant.parse("2026-10-12T02:00:01Z")).size());
+    }
+
 }

@@ -124,7 +124,8 @@ class AskServiceTest {
                 () -> service.ask("conv-1", "ETH 昨日收盘价", "v1", null, null, null));
 
         verify(traceRepository).finishTrace(anyString(), eq("FAILED"), isNull(), anyInt(), anyInt(),
-                isNull(), isNull(), isNull(), anyLong(), eq("LLM 超时"));
+                isNull(), isNull(), isNull(), anyLong(), eq("LLM 超时"),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull());
         var captor = org.mockito.ArgumentCaptor.forClass(String.class);
         verify(conversation).finishTurn(eq("conv-1"), eq(turn), eq("FAILED"), isNull(), anyString(),
                 isNull(), isNull(), captor.capture());

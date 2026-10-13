@@ -192,12 +192,12 @@ public class AskService {
             if ("NEEDS_CLARIFICATION".equals(turnStatus) && result.clarify() != null) {
                 conversation.recordPendingTask(resolvedConversationId, turn, question, result.clarify());
             }
-            conversation.finishTurn(resolvedConversationId, turn, turnStatus, result.answer(), traceId,
-                    logicalPlanJson, frameJson, null);
+            boolean frameUpdated = conversation.finishTurn(resolvedConversationId, turn, turnStatus,
+                    result.answer(), traceId, logicalPlanJson, frameJson, null);
             turnFinished = true;
-            // CONTEXT_COMMITTED（阶段三观测）：轮次状态提交后的最终状态摘要
+            // CONTEXT_COMMITTED（阶段三观测）：轮次状态提交后的最终状态摘要（frame_updated 为真实写入结果）
             traceSink.record(new com.cexpilot.runtime.TraceEvent(traceId, "CONTEXT_COMMITTED", "ask_service",
-                    null, contextCommittedSummary(turnStatus, result.savedFactIds(), frameJson != null),
+                    null, contextCommittedSummary(turnStatus, result.savedFactIds(), frameUpdated),
                     null, null, null, null, null, null));
 
             // 7. evidence（工具产出的事实集）随答案一起返回，前端可展示"答案引用了哪些数据"。
@@ -217,16 +217,30 @@ public class AskService {
         } catch (Exception e) {
             // 失败同样要落 trace 与轮次：失败的现场数据正是后续定位问题、固化评测 case 的原料。
             long durationMs = System.currentTimeMillis() - start;
-            log.warn("问答失败 traceId={}: {}", traceId, e.getMessage());
+            // 4.3：DagRuntime 的 ExecutionFailure 携带已发生的调用计数与已保存事实——失败不统计归零
+            Exception failure = e;
+            DagRuntime.TurnCounters counters = null;
+            if (e instanceof DagRuntime.ExecutionFailure f) {
+                failure = f.getCause() instanceof Exception ex ? ex : e;
+                counters = f.counters;
+            }
+            log.warn("问答失败 traceId={}: {}", traceId, failure.getMessage());
             if (traceStarted && !traceFinished) {
                 traceRepository.finishTrace(traceId, "FAILED", null, 0, 0,
-                        null, null, null, durationMs, e.getMessage());
+                        null, null, null, durationMs, failure.getMessage(),
+                        counters == null ? null : counters.reusedFactCount(),
+                        counters == null ? null : counters.plannerLlmCalls(),
+                        counters == null ? null : counters.answerLlmCalls(),
+                        counters == null ? null : counters.metricFetchCount(),
+                        counters == null ? null : counters.calculationCount(),
+                        counters == null ? null : counters.httpRequestCount());
             }
             if (!turnFinished) {
                 com.cexpilot.metric.CompiledPlan compiledPlan = compiledPlanRef.get();
                 turnFinished = failTurnQuietly(resolvedConversationId, turn, question, traceId,
                         compiledPlan != null ? compiledPlan.logicalPlanJson().toString() : null,
-                        traceStarted);
+                        traceStarted,
+                        counters == null ? java.util.List.of() : counters.savedFactIds());
             }
             throw e;
         } finally {
@@ -235,24 +249,25 @@ public class AskService {
                 com.cexpilot.metric.CompiledPlan compiledPlan = compiledPlanRef.get();
                 failTurnQuietly(resolvedConversationId, turn, question, traceId,
                         compiledPlan != null ? compiledPlan.logicalPlanJson().toString() : null,
-                        traceStarted);
+                        traceStarted, java.util.List.of());
             }
         }
     }
 
     /**
      * 失败收尾：轮次置 FAILED（带失败任务快照 lastAttempt，R2）并释放占用（frame 传 null，不覆盖活动 frame）；
-     * 自身再失败只记日志，不掩盖原始异常。返回是否完成收尾。
+     * CONTEXT_COMMITTED 记录失败前已保存的事实（4.3）；自身再失败只记日志，不掩盖原始异常。返回是否完成收尾。
      */
     private boolean failTurnQuietly(String conversationId, ConversationService.TurnHandle turn, String question,
-                                    String traceId, String logicalPlanJson, boolean traceStarted) {
+                                    String traceId, String logicalPlanJson, boolean traceStarted,
+                                    java.util.List<String> savedFactIds) {
         try {
             String lastAttemptJson = lastAttemptSummary(turn.turnId(), question, traceId, logicalPlanJson);
             conversation.finishTurn(conversationId, turn, "FAILED", null, traceId, logicalPlanJson, null,
                     lastAttemptJson);
             if (traceStarted) {
                 traceSink.record(new com.cexpilot.runtime.TraceEvent(traceId, "CONTEXT_COMMITTED", "ask_service",
-                        null, contextCommittedSummary("FAILED", java.util.List.of(), false),
+                        null, contextCommittedSummary("FAILED", savedFactIds, false),
                         null, null, null, null, null, null));
             }
             return true;

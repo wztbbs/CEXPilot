@@ -27,6 +27,8 @@ public class ConversationContextService {
     private static final int HISTORY_ANSWER_MAX_CHARS = 500;
     // 任务索引容量（R3 一期）：可回访任务的有限保留，超出范围澄清不硬猜
     private static final int TASK_INDEX_LIMIT = 5;
+    // 可引用事实候选上限（审查 4.4）：焦点事实排最前后截断，控制 prompt 预算
+    private static final int EVIDENCE_CANDIDATE_LIMIT = 10;
     private static final DateTimeFormatter HISTORY_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
     private final ConversationRepository repository;
@@ -104,8 +106,12 @@ public class ConversationContextService {
             return List.of();
         }
         try {
-            return com.cexpilot.evidence.EvidenceAssembler.assignRefs(
-                    evidenceStore.listReusable(conversationId, java.time.Instant.now()), focusFactIds);
+            List<com.cexpilot.evidence.EvidenceAssembler.Entry> entries =
+                    com.cexpilot.evidence.EvidenceAssembler.assignRefs(
+                            evidenceStore.listReusable(conversationId, java.time.Instant.now()), focusFactIds);
+            // 候选预算（4.4）：焦点事实已在最前，超出上限截断尾部的旧候选
+            return entries.size() > EVIDENCE_CANDIDATE_LIMIT
+                    ? entries.subList(0, EVIDENCE_CANDIDATE_LIMIT) : entries;
         } catch (Exception e) {
             log.warn("历史事实读取失败，本轮按无可引用事实处理 conversationId={}: {}", conversationId, e.getMessage());
             return List.of();
