@@ -205,6 +205,24 @@
       ],
       "description": "指代不明或缺条件时置 true 并在 clarify 写澄清问题"
     },
+    "task_action": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "CONTINUE",
+        "RESUME"
+      ],
+      "description": "RESUME=回访【近期任务索引】中的历史任务（须同时给 task_ref=该任务轮次 ID），普通延续省略"
+    },
+    "task_ref": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "task_action=RESUME 时必填：任务索引中目标任务的轮次 ID"
+    },
     "clarify": {
       "type": [
         "string",

@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS conversation_query (
     finished_at     DATETIME(6)  NULL,
     -- 校验通过的 LogicalPlan 原文 JSON（Planner 草稿不落这里；规划未通过校验时为空）
     logical_plan_json JSON       NULL,
+    -- 当轮提交时的 QueryFrame 快照（审查 R3 一期，成功轮次写入）：历史任务回访的依据，
+    -- Planner 通过【近期任务索引】以 task_action=RESUME + task_ref（轮次 id）回访旧任务
+    frame_json     JSON          NULL,
     created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uk_query_turn (turn_id),
     UNIQUE KEY uk_query_conv_no (conversation_id, query_no),
@@ -86,6 +89,8 @@ CREATE TABLE IF NOT EXISTS conversation_state (
 -- 9. 审查修复 R1/R2（migrations/011_pending_task_and_last_attempt.sql）：conversation_state 加
 --    pending_task_json / last_attempt_json 两列（澄清任务与失败尝试独立于活动 frame 保存）。
 --    停止旧应用并等待在途问答结束后迁移，再启动新版本；新库无需执行该迁移。
+-- 10. 审查修复 R3 一期（migrations/012_turn_frame_snapshot.sql）：conversation_query 加
+--    frame_json 列（轮次级 frame 快照，历史任务回访）。存量行留 NULL，读取方兼容。
 
 -- 一次问答 = 一条 ask_trace（就是 Trace 的主表，👎 之后靠它完整回放）
 CREATE TABLE IF NOT EXISTS ask_trace (

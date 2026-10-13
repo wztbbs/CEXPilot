@@ -63,7 +63,8 @@ class ConversationTurnConcurrencyTest {
         }
 
         @Override
-        public void finishTurn(String turnId, String status, String answer, String traceId, String logicalPlanJson) {
+        public void finishTurn(String turnId, String status, String answer, String traceId,
+                               String logicalPlanJson, String frameJson) {
         }
 
         @Override

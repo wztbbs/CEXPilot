@@ -151,7 +151,8 @@ public class DagRuntime {
                         : null;
         emit(progress, "正在生成执行计划…");
         DagPlanner.PlanOutcome outcome = planner.plan(question, plannerContext, traceId, sink,
-                activeFrame, effectiveContext, evidenceContext);
+                activeFrame, effectiveContext, evidenceContext,
+                plannerInput == null ? List.of() : plannerInput.tasks());
         int totalPromptTokens = outcome.promptTokens();
         int totalCompletionTokens = outcome.completionTokens();
         int plannerLlmCalls = outcome.llmCalls();

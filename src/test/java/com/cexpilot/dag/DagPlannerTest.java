@@ -23,6 +23,12 @@ class DagPlannerTest {
         int examples = 0;
         for (String line : prompt.split("\\R")) {
             if (!line.startsWith("{\"in_domain\"") || !line.contains("\"id\"")) continue;
+            examples++;
+            if (line.contains("\"task_action\":\"RESUME\"")) {
+                // RESUME 示例依赖任务索引，空索引下被 task_ref 校验打回是正确行为；
+                // 其结构与基准切换由专用用例覆盖
+                continue;
+            }
             var envelope = new com.fasterxml.jackson.databind.ObjectMapper()
                     .enable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
                     .readTree(line);
@@ -38,9 +44,8 @@ class DagPlannerTest {
                 assertEquals("100000", envelope.at("/plan/calculations/0/input/current").asText());
                 assertEquals("{{m1.binance.value}}", envelope.at("/plan/calculations/0/input/baseline").asText());
             }
-            examples++;
         }
-        assertEquals(11, examples);
+        assertEquals(12, examples);
     }
 
     @ParameterizedTest @ValueSource(strings={"", "json_object", "json_schema"})
@@ -518,5 +523,59 @@ class DagPlannerTest {
         assertEquals(0, out.at("/calculations").size());
         assertEquals(0, out.path("changes").size(), "单轮无修改声明");
         assertFalse(out.path("new_frame").asBoolean());
+    }
+
+    // ===== 审查 R3 一期：RESUME 回访（task_ref 命中索引 → 对账基准切到所选快照） =====
+
+    /** 与 priceHighFrame 不同的活动任务（ETH 现价快照），用于验证 RESUME 后基准确实切换。 */
+    private static com.cexpilot.conversation.QueryFrame activeEthFrame() {
+        var ethTarget = new com.cexpilot.metric.EffectiveTarget("m9", "metric_9", "binance",
+                com.cexpilot.metric.ConditionOrigin.EXPLICIT,
+                "price.last", "snapshot",
+                json("{\"market_type\":\"perpetual\",\"base\":\"ETH\",\"quote\":\"USDT\"}"),
+                com.cexpilot.metric.ConditionOrigin.DEFAULT,
+                null, null, null, false, com.cexpilot.metric.ConditionOrigin.DEFAULT,
+                null, null, null, "USDT", "ticker", "v1");
+        return new com.cexpilot.conversation.QueryFrame("f2", "c1", 1, "turn-2", "ETH 现价",
+                "2026-10-12T00:10:00Z", "Asia/Shanghai", List.of(ethTarget), null, null, null);
+    }
+
+    private static String resumeEnvelope(String taskRef) {
+        var env = JSON.createObjectNode();
+        env.put("in_domain", true).putNull("reply");
+        env.set("plan", plan(metric("m1", "price.high", "range_statistic", "okx")));
+        env.putArray("changes").add("exchange");
+        env.put("task_action", "RESUME");
+        if (taskRef != null) {
+            env.put("task_ref", taskRef);
+        }
+        return env.toString();
+    }
+
+    @Test void RESUME命中任务索引时对账基准切到所选快照() {
+        // 回访 turn-1（币安 BTC 最高价），当前活动任务是 ETH 现价；计划 okx/BTC/最高价/昨天/1h
+        // 相对 turn-1 快照只换交易所 → 放行。若基准没切换（仍对 ETH 活动任务对账），
+        // base/metric/shape 全是漏报，计划会被打回——本用例同时是基准切换的回归防线
+        var tasks = List.of(new com.cexpilot.conversation.TaskSnapshot(1, "turn-1",
+                "昨天币安 BTC 最高价", priceHighFrame()));
+        var llm = new Script(resumeEnvelope("turn-1"));
+
+        var result = planner(llm, registry(), new DagConfig()).plan("回到最开始那个问题，换成 OKX", "", "t",
+                e -> {}, activeEthFrame(), FOLLOWUP_CTX, null, tasks);
+
+        assertTrue(result.plan().isPresent(), "RESUME 基准应为所选任务快照: " + result.lastError());
+        assertFalse(result.needsClarification());
+    }
+
+    @Test void RESUME引用不在索引中时打回修复() {
+        var config = new DagConfig();
+        config.setPlannerMaxRetries(0);
+        var llm = new Script(resumeEnvelope("turn-99"));
+
+        var result = planner(llm, registry(), config).plan("回到最开始那个问题", "", "t",
+                e -> {}, activeEthFrame(), FOLLOWUP_CTX, null, List.of());
+
+        assertTrue(result.plan().isEmpty(), "索引中不存在的 task_ref 不得执行");
+        assertTrue(result.lastError().contains("task_ref"), result.lastError());
     }
 }

@@ -111,14 +111,43 @@ public class ConversationRepository {
                 conversationId, queryNo, question, turnId, parentTurnId, java.sql.Timestamp.from(requestTime));
     }
 
-    /** 提交轮次结果：状态、答案、trace、校验通过的 LogicalPlan 原文（无则 null）、结束时间。 */
-    public void finishTurn(String turnId, String status, String answer, String traceId, String logicalPlanJson) {
+    /** 提交轮次结果：状态、答案、trace、校验通过的 LogicalPlan 原文（无则 null）、
+     *  当轮 frame 快照（R3 一期，成功轮次传入；历史任务回访的依据）、结束时间。 */
+    public void finishTurn(String turnId, String status, String answer, String traceId,
+                           String logicalPlanJson, String frameJson) {
         jdbc.update("""
                         UPDATE conversation_query
-                        SET turn_status = ?, answer = ?, trace_id = ?, logical_plan_json = ?, finished_at = NOW(6)
+                        SET turn_status = ?, answer = ?, trace_id = ?, logical_plan_json = ?,
+                            frame_json = ?, finished_at = NOW(6)
                         WHERE turn_id = ?
                         """,
-                status, answer, traceId, logicalPlanJson, turnId);
+                status, answer, traceId, logicalPlanJson, frameJson, turnId);
+    }
+
+    /** 最近带 frame 快照的成功轮次（R3 一期任务索引），时间倒序；快照损坏的行跳过。 */
+    public List<TaskSnapshot> recentFrames(String conversationId, int limit) {
+        List<Object[]> rows = jdbc.query("""
+                        SELECT query_no, turn_id, question, frame_json
+                        FROM conversation_query
+                        WHERE conversation_id = ?
+                          AND turn_status = 'SUCCEEDED' AND frame_json IS NOT NULL
+                        ORDER BY query_no DESC
+                        LIMIT ?
+                        """,
+                (rs, rowNum) -> new Object[]{
+                        rs.getLong("query_no"), rs.getString("turn_id"),
+                        rs.getString("question"), rs.getString("frame_json")},
+                conversationId, limit);
+        List<TaskSnapshot> tasks = new java.util.ArrayList<>();
+        for (Object[] row : rows) {
+            try {
+                tasks.add(new TaskSnapshot((Long) row[0], (String) row[1], (String) row[2],
+                        QueryFrame.fromJson((String) row[3])));
+            } catch (Exception e) {
+                // 单条快照损坏不影响其余任务索引
+            }
+        }
+        return tasks;
     }
 
     /**

@@ -96,17 +96,28 @@ public class DagPlanner {
     public PlanOutcome plan(String question, String conversationContext, String traceId, TraceSink sink,
                             com.cexpilot.conversation.QueryFrame activeFrame,
                             com.cexpilot.runtime.RequestContext requestContext) {
-        return plan(question, conversationContext, traceId, sink, activeFrame, requestContext, null);
+        return plan(question, conversationContext, traceId, sink, activeFrame, requestContext, null, List.of());
+    }
+
+    public PlanOutcome plan(String question, String conversationContext, String traceId, TraceSink sink,
+                            com.cexpilot.conversation.QueryFrame activeFrame,
+                            com.cexpilot.runtime.RequestContext requestContext,
+                            EvidenceBindingContext evidenceContext) {
+        return plan(question, conversationContext, traceId, sink, activeFrame, requestContext,
+                evidenceContext, List.of());
     }
 
     /**
      * @param evidenceContext 历史事实绑定上下文（阶段二）：非 null 时校验 pinned_result 的 evidence_ref
      *                        并把通过校验的 ExecutionBindings 挂到 PlanOutcome
+     * @param taskIndex       可回访任务索引（R3 一期）：task_action=RESUME 时按 task_ref 在此定位
+     *                        历史快照，继承对账基准切到所选任务；服务端校验归属，模型只给轮次 id
      */
     public PlanOutcome plan(String question, String conversationContext, String traceId, TraceSink sink,
                             com.cexpilot.conversation.QueryFrame activeFrame,
                             com.cexpilot.runtime.RequestContext requestContext,
-                            EvidenceBindingContext evidenceContext) {
+                            EvidenceBindingContext evidenceContext,
+                            List<com.cexpilot.conversation.TaskSnapshot> taskIndex) {
         int maxToolCalls = llmConfig.getMaxToolCalls();
         String systemPrompt = systemPrompt(conversationContext);
         JsonNode responseFormat = plannerResponseFormat();
@@ -131,7 +142,7 @@ public class DagPlanner {
             completionTokens += response.completionTokens() == null ? 0 : response.completionTokens();
 
             PlanDecision decision = evaluateResponse(response.content(), maxToolCalls, traceId, sink,
-                    activeFrame, requestContext, evidenceContext, attempt, failedPinnedGroups);
+                    activeFrame, requestContext, evidenceContext, attempt, failedPinnedGroups, taskIndex);
             if (decision.error() == null) {
                 if (!failedPinnedGroups.isEmpty() && decision.plan() != null
                         && java.util.Collections.disjoint(
@@ -197,7 +208,8 @@ public class DagPlanner {
                                           com.cexpilot.conversation.QueryFrame activeFrame,
                                           com.cexpilot.runtime.RequestContext requestContext,
                                           EvidenceBindingContext evidenceContext,
-                                          int attempt, Set<String> failedPinnedGroups) {
+                                          int attempt, Set<String> failedPinnedGroups,
+                                          List<com.cexpilot.conversation.TaskSnapshot> taskIndex) {
         JsonNode parsed;
         try {
             parsed = LlmJson.parse(content);
@@ -215,7 +227,7 @@ public class DagPlanner {
             return PlanDecision.accepted(false, textOrNull(parsed.path("reply")), null);
         }
         return evaluateInDomainResponse(parsed, maxToolCalls, traceId, sink, activeFrame, requestContext,
-                evidenceContext, attempt, failedPinnedGroups);
+                evidenceContext, attempt, failedPinnedGroups, taskIndex);
     }
 
     private PlanDecision evaluateInDomainResponse(JsonNode parsed, int maxToolCalls,
@@ -223,7 +235,8 @@ public class DagPlanner {
                                                   com.cexpilot.conversation.QueryFrame activeFrame,
                                                   com.cexpilot.runtime.RequestContext requestContext,
                                                   EvidenceBindingContext evidenceContext,
-                                                  int attempt, Set<String> failedPinnedGroups) {
+                                                  int attempt, Set<String> failedPinnedGroups,
+                                                  List<com.cexpilot.conversation.TaskSnapshot> taskIndex) {
         String reply = textOrNull(parsed.path("reply"));
         // 澄清决策（阶段一 c 协议增量字段，缺省按旧行为 false）：不执行、不落 frame，由程序落 NEEDS_CLARIFICATION
         if (parsed.path("needs_clarification").asBoolean(false)) {
@@ -247,7 +260,27 @@ public class DagPlanner {
         if (!planNode.isObject()) {
             return evaluateReplyWithoutPlan(parsed, reply, traceId, sink);
         }
-        return validatePlan(parsed, reply, maxToolCalls, traceId, sink, activeFrame, requestContext,
+        // R3 一期：RESUME 回访——task_ref 必须命中任务索引；命中后继承对账基准切到所选任务的
+        // 历史快照（而非当前活动任务），"回到最开始那个问题"才有正确的作用域。服务端校验归属，
+        // 模型只给索引里的轮次 id；定位不到就修复/澄清，不得拿当前活动任务顶替。
+        com.cexpilot.conversation.QueryFrame reconciliationBase = activeFrame;
+        if ("RESUME".equalsIgnoreCase(parsed.path("task_action").asText(""))) {
+            String taskRef = textOrNull(parsed.path("task_ref"));
+            com.cexpilot.conversation.TaskSnapshot matched = null;
+            if (taskIndex != null && taskRef != null) {
+                matched = taskIndex.stream()
+                        .filter(t -> t.turnId().equals(taskRef))
+                        .findFirst().orElse(null);
+            }
+            if (matched == null) {
+                return repairDecision(traceId, sink, parsed.toString(),
+                        "task_action=RESUME 时 task_ref 必须是【近期任务索引】中列出的轮次 ID"
+                                + (taskRef == null ? "（当前缺失）" : ("（\"" + taskRef + "\" 不在索引中）"))
+                                + "；索引中没有用户所指任务时输出 needs_clarification=true 澄清，不得拿当前活动任务顶替");
+            }
+            reconciliationBase = matched.frame();
+        }
+        return validatePlan(parsed, reply, maxToolCalls, traceId, sink, reconciliationBase, requestContext,
                 evidenceContext, attempt, failedPinnedGroups);
     }
 

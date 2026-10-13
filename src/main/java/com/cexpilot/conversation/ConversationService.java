@@ -113,7 +113,7 @@ public class ConversationService {
     @Transactional
     public void finishTurn(String conversationId, TurnHandle turn, String status, String answer, String traceId,
                            String logicalPlanJson, String frameJson, String lastAttemptJson) {
-        repository.finishTurn(turn.turnId(), status, answer, traceId, logicalPlanJson);
+        repository.finishTurn(turn.turnId(), status, answer, traceId, logicalPlanJson, frameJson);
         if (frameJson != null) {
             repository.saveActiveFrame(conversationId, turn.turnId(), turn.fencingToken(), frameJson);
         }

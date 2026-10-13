@@ -18,9 +18,21 @@ public final class EvidenceAssembler {
 
     /** 按传入顺序（调用方保证稳定，如 fetchedAt 倒序）分配 fact_1..fact_n。 */
     public static List<Entry> assignRefs(List<EvidenceFact> facts) {
+        return assignRefs(facts, java.util.Set.of());
+    }
+
+    /**
+     * 分配 ref；prioritizedFactIds 中的事实（活动 frame 的焦点，R12）排最前——
+     * "这组/刚才那个结果"应优先绑定焦点事实，短别名每轮可变但本轮映射明确。
+     * 排序稳定：同组内保持调用方顺序（如 fetchedAt 倒序）。
+     */
+    public static List<Entry> assignRefs(List<EvidenceFact> facts, java.util.Set<String> prioritizedFactIds) {
+        List<EvidenceFact> ordered = new ArrayList<>(facts);
+        ordered.sort((a, b) -> Boolean.compare(
+                prioritizedFactIds.contains(b.factId()), prioritizedFactIds.contains(a.factId())));
         List<Entry> entries = new ArrayList<>();
-        for (int i = 0; i < facts.size(); i++) {
-            entries.add(new Entry("fact_" + (i + 1), facts.get(i)));
+        for (int i = 0; i < ordered.size(); i++) {
+            entries.add(new Entry("fact_" + (i + 1), ordered.get(i)));
         }
         return entries;
     }

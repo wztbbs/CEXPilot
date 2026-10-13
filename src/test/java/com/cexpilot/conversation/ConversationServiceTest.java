@@ -104,7 +104,7 @@ class ConversationServiceTest {
 
         service.finishTurn("c1", turn, "SUCCEEDED", "答案", "trace-1", null, null);
 
-        verify(repository).finishTurn("t1", "SUCCEEDED", "答案", "trace-1", null);
+        verify(repository).finishTurn("t1", "SUCCEEDED", "答案", "trace-1", null, null);
         verify(repository, never()).saveActiveFrame(anyString(), anyString(), anyLong(), anyString());
         // 成功 = 澄清任务与失败尝试都已了结（R1/R2）
         verify(repository).clearTaskState("c1", "t1", 7);
@@ -118,7 +118,7 @@ class ConversationServiceTest {
 
         service.finishTurn("c1", turn, "SUCCEEDED", "答案", "trace-1", "{\"metrics\":[]}", "{\"frameId\":\"f1\"}");
 
-        verify(repository).finishTurn("t1", "SUCCEEDED", "答案", "trace-1", "{\"metrics\":[]}");
+        verify(repository).finishTurn("t1", "SUCCEEDED", "答案", "trace-1", "{\"metrics\":[]}", "{\"frameId\":\"f1\"}");
         verify(repository).saveActiveFrame("c1", "t1", 7, "{\"frameId\":\"f1\"}");
         verify(repository).clearTaskState("c1", "t1", 7);
     }

@@ -57,33 +57,95 @@ public final class InheritanceValidator {
                 + "否则把上述条件恢复为与活动查询状态一致的值";
     }
 
-    /** frame vs 本轮计划的实际变化条件键集合。 */
+    /**
+     * frame vs 本轮计划的实际变化条件键集合（R10 配对对账）：
+     * 先按目标节点配对（同所同币种 > 同币种 > 双边各只有一个目标时直接配对），再逐对比较节点内条件；
+     * 配不上任何 frame 目标的计划目标视为新增、未被认领的 frame 目标视为删除，其
+     * exchange/base/metric 均计入变化。此前按字段集合比较，"币安BTC+OKX ETH → 币安ETH+OKX BTC"
+     * 这类配对互换两侧集合完全相同，会漏检。
+     */
     Set<String> diffKeys(QueryFrame frame, CompiledPlan plan, RequestContext requestContext) {
-        List<EffectiveTarget> from = frame.targets();
+        List<EffectiveTarget> from = new java.util.ArrayList<>(frame.targets());
         List<EffectiveTarget> to = plan.targets();
+        boolean singlePair = to.size() == 1 && from.size() == 1;
         Set<String> changed = new TreeSet<>();
-        compare(changed, "exchange", from, to, EffectiveTarget::exchange);
-        compare(changed, "base", from, to, t -> t.instrument().path("base").asText());
-        compare(changed, "metric", from, to, EffectiveTarget::metric);
-        compare(changed, "shape", from, to, EffectiveTarget::queryShape);
-        compare(changed, "interval", from, to, t -> t.interval() == null ? "AUTO" : t.interval());
-        compare(changed, "include_unclosed", from, to, t -> String.valueOf(t.includeUnclosed()));
-        compare(changed, "count", from, to, t -> String.valueOf(t.count()));
-        compare(changed, "depth", from, to, t -> String.valueOf(t.depth()));
+        for (EffectiveTarget planTarget : to) {
+            EffectiveTarget match = popMatch(from, planTarget, singlePair);
+            if (match == null) {
+                changed.add("exchange");
+                changed.add("base");
+                changed.add("metric");
+                continue;
+            }
+            comparePair(changed, "exchange", match.exchange(), planTarget.exchange());
+            comparePair(changed, "base", baseOf(match), baseOf(planTarget));
+            comparePair(changed, "metric", match.metric(), planTarget.metric());
+            comparePair(changed, "shape", match.queryShape(), planTarget.queryShape());
+            comparePair(changed, "interval", intervalOf(match), intervalOf(planTarget));
+            comparePair(changed, "include_unclosed",
+                    String.valueOf(match.includeUnclosed()), String.valueOf(planTarget.includeUnclosed()));
+            comparePair(changed, "count", String.valueOf(match.count()), String.valueOf(planTarget.count()));
+            comparePair(changed, "depth", String.valueOf(match.depth()), String.valueOf(planTarget.depth()));
+        }
+        if (!from.isEmpty()) {
+            changed.add("exchange");
+            changed.add("base");
+            changed.add("metric");
+        }
         if (timeChanged(frame, plan, requestContext)) {
             changed.add("time");
         }
         return changed;
     }
 
-    private static void compare(Set<String> changed, String key,
-                                List<EffectiveTarget> from, List<EffectiveTarget> to,
-                                Function<EffectiveTarget, String> value) {
-        Set<String> a = from.stream().map(value).collect(Collectors.toCollection(TreeSet::new));
-        Set<String> b = to.stream().map(value).collect(Collectors.toCollection(TreeSet::new));
-        if (!a.equals(b)) {
+    /**
+     * 配对并从待配列表认领：同所同币种 > 同所（任意币种，R10——配对互换时把变化暴露成 base 漏报，
+     * 同币优先会把互换吸收成 exchange 单键变化，模型声明 exchange 即可蒙混）> 同币种 >
+     * 双边各只有一个目标时直接配对。
+     */
+    private static EffectiveTarget popMatch(List<EffectiveTarget> remaining, EffectiveTarget planTarget,
+                                            boolean singlePair) {
+        EffectiveTarget sameExchangeBase = null;
+        EffectiveTarget sameExchange = null;
+        EffectiveTarget sameBase = null;
+        for (EffectiveTarget candidate : remaining) {
+            if (candidate.exchange().equals(planTarget.exchange())) {
+                if (baseOf(candidate).equals(baseOf(planTarget))) {
+                    sameExchangeBase = candidate;
+                    break;
+                }
+                if (sameExchange == null) {
+                    sameExchange = candidate;
+                }
+                continue;
+            }
+            if (sameBase == null && baseOf(candidate).equals(baseOf(planTarget))) {
+                sameBase = candidate;
+            }
+        }
+        EffectiveTarget match = sameExchangeBase != null ? sameExchangeBase
+                : sameExchange != null ? sameExchange : sameBase;
+        if (match == null && singlePair && remaining.size() == 1) {
+            match = remaining.get(0);
+        }
+        if (match != null) {
+            remaining.remove(match);
+        }
+        return match;
+    }
+
+    private static void comparePair(Set<String> changed, String key, String from, String to) {
+        if (!java.util.Objects.equals(from, to)) {
             changed.add(key);
         }
+    }
+
+    private static String baseOf(EffectiveTarget target) {
+        return target.instrument().path("base").asText();
+    }
+
+    private static String intervalOf(EffectiveTarget target) {
+        return target.interval() == null ? "AUTO" : target.interval();
     }
 
     /**
@@ -129,18 +191,32 @@ public final class InheritanceValidator {
         return false;
     }
 
-    /** 为计划节点找 frame 中可继承的对应节点：优先同交易所同币种，其次同币种，再次 frame 唯一节点。 */
+    /** 为计划节点找 frame 中可继承的对应节点：同所同币种 > 同所 > 同币种 > frame 唯一节点（与 popMatch 同序）。 */
     private static EffectiveTarget matchFrameTarget(List<EffectiveTarget> frameTargets, EffectiveTarget planTarget) {
         String base = planTarget.instrument().path("base").asText();
+        EffectiveTarget sameExchangeBase = null;
+        EffectiveTarget sameExchange = null;
         EffectiveTarget sameBase = null;
         for (EffectiveTarget candidate : frameTargets) {
-            if (candidate.exchange().equals(planTarget.exchange())
-                    && candidate.instrument().path("base").asText().equals(base)) {
-                return candidate;
+            if (candidate.exchange().equals(planTarget.exchange())) {
+                if (sameExchange == null) {
+                    sameExchange = candidate;
+                }
+                if (candidate.instrument().path("base").asText().equals(base)) {
+                    sameExchangeBase = candidate;
+                    break;
+                }
+                continue;
             }
-            if (candidate.instrument().path("base").asText().equals(base)) {
+            if (sameBase == null && candidate.instrument().path("base").asText().equals(base)) {
                 sameBase = candidate;
             }
+        }
+        if (sameExchangeBase != null) {
+            return sameExchangeBase;
+        }
+        if (sameExchange != null) {
+            return sameExchange;
         }
         if (sameBase != null) {
             return sameBase;

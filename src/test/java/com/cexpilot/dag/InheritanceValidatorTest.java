@@ -151,4 +151,45 @@ class InheritanceValidatorTest {
         assertTrue(error.contains("base"), error);
         assertTrue(error.contains("exchange"), error); // okx/ETH 节点消失也算 exchange 变化
     }
+
+    @Test
+    void 配对互换_字段集合完全相同_必须检出() throws Exception {
+        // R10：币安BTC + OKX ETH → 币安ETH + OKX BTC。旧实现按字段集合比较，
+        // exchange/base 集合两侧完全一致会漏检。配对对账（同所优先）下每个节点
+        // base 都变 → 至少要求声明 base，changes=[] 的静默换对象通道被堵死
+        EffectiveTarget binanceBtc = target("binance", "BTC", "price.high", YESTERDAY, "5m");
+        EffectiveTarget okxEth = target("okx", "ETH", "price.high", YESTERDAY, "5m");
+        EffectiveTarget binanceEth = target("binance", "ETH", "price.high", YESTERDAY, "5m");
+        EffectiveTarget okxBtc = target("okx", "BTC", "price.high", YESTERDAY, "5m");
+        String error = validator.check(frame(binanceBtc, okxEth),
+                twoTargetPlan(binanceEth, okxBtc, YESTERDAY), Set.of(), new RequestContext(SH, T1));
+        assertNotNull(error, "配对互换不得漏检");
+        assertTrue(error.contains("base"), error);
+    }
+
+    @Test
+    void 新增目标未声明时检出() throws Exception {
+        // 单目标 frame → 双目标计划（新增 SOL）：新目标的 exchange/base/metric 计入变化
+        EffectiveTarget btc = target("binance", "BTC", "price.high", YESTERDAY, "5m");
+        EffectiveTarget sol = target("binance", "SOL", "price.high", YESTERDAY, "5m");
+        String error = validator.check(frame(btc), twoTargetPlan(btc, sol, YESTERDAY), Set.of(),
+                new RequestContext(SH, T1));
+        assertNotNull(error);
+        assertTrue(error.contains("base"), error);
+    }
+
+    /** 双目标计划（每个目标独立 MetricRequest，供配对对账用例构造）。 */
+    private static CompiledPlan twoTargetPlan(EffectiveTarget t1, EffectiveTarget t2,
+                                              String timeJson) throws Exception {
+        MetricRequest r1 = new MetricRequest(t1.groupId(), t1.metric(),
+                new InstrumentSpec("perpetual", t1.instrument().path("base").asText(), "USDT", "USDT"),
+                QueryShape.RANGE_STATISTIC, List.of(t1.exchange()),
+                new TimeQueryParams(TimeSpecParser.parse(MAPPER.readTree(timeJson)), t1.interval(), false));
+        MetricRequest r2 = new MetricRequest("m2", t2.metric(),
+                new InstrumentSpec("perpetual", t2.instrument().path("base").asText(), "USDT", "USDT"),
+                QueryShape.RANGE_STATISTIC, List.of(t2.exchange()),
+                new TimeQueryParams(TimeSpecParser.parse(MAPPER.readTree(timeJson)), t2.interval(), false));
+        return new CompiledPlan(new LogicalPlan(List.of(r1, r2), List.of()), MAPPER.createObjectNode(),
+                new DagPlan(List.of()), Map.of(), List.of(t1, t2));
+    }
 }

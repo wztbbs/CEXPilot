@@ -134,6 +134,43 @@ class ConversationContextServiceTest {
     }
 
     @Test
+    void 任务索引进prompt且PlannerInput携带快照() throws Exception {
+        // R3 一期：可回访任务渲染成索引，结构化快照随 PlannerInput 供 RESUME 定位
+        when(repository.findActiveFrameJson("conv-1")).thenReturn(null);
+        when(repository.recentQueries("conv-1", 5)).thenReturn(List.of());
+        when(repository.recentFrames("conv-1", 5)).thenReturn(
+                List.of(new TaskSnapshot(1, "turn-1", "昨天币安 BTC 最高价", sampleFrame())));
+
+        PlannerInput input = service.buildPlannerInput("conv-1");
+
+        assertEquals(1, input.tasks().size());
+        assertEquals("turn-1", input.tasks().get(0).turnId());
+        String ctx = input.contextText();
+        assertTrue(ctx.contains("【近期任务索引】"), ctx);
+        assertTrue(ctx.contains("turn-1"), ctx);
+        assertTrue(ctx.contains("RESUME"), ctx);
+        assertTrue(ctx.contains("昨天币安 BTC 最高价"), ctx);
+    }
+
+    @Test
+    void 焦点事实渲染进prompt供指代绑定() throws Exception {
+        // R12：focus 里的 factId 要进 prompt——"这组/刚才那个结果"才有绑定锚点
+        QueryFrame base = sampleFrame();
+        JsonNode focus = MAPPER.readTree("{\"evidence_nodes\":[{\"node_id\":\"metric_0\",\"type\":\"metric\","
+                + "\"ok\":true,\"fact_id\":\"fact-9\",\"identity\":{\"metric\":\"price.high\"}}]}");
+        QueryFrame frame = new QueryFrame(base.frameId(), base.conversationId(), base.version(),
+                base.sourceTurnId(), base.originalQuestion(), base.requestTime(), base.timezone(),
+                base.targets(), focus, null, null);
+        when(repository.findActiveFrameJson("conv-1")).thenReturn(frame.toJson());
+        when(repository.recentQueries("conv-1", 5)).thenReturn(List.of());
+
+        String ctx = service.buildPlannerInput("conv-1").contextText();
+
+        assertTrue(ctx.contains("【当前焦点】"), ctx);
+        assertTrue(ctx.contains("fact-9"), ctx);
+    }
+
+    @Test
     void 答案截断放宽到500且结构化条件不参与截断() throws Exception {
         String longAnswer = "数".repeat(600);
         when(repository.findActiveFrameJson("conv-1")).thenReturn(sampleFrame().toJson());
