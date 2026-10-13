@@ -388,6 +388,15 @@ def md(line=""):
 
 def turn(conv, q, timezone=None, want_ctx=False, tag=""):
     d = ask(q, conv=conv, timezone=timezone)
+    # 4.1 补充：本机网络抖动（DNS/SSL EOF）会让请求没到服务器就失败，空响应会让
+    # 判据空洞通过（F12/2 实测）。请求失败时重试一次；仍失败保留失败响应，
+    # 由各场景按"证据缺失记 SKIP"原则处理，不产生假 PASS
+    if not d.get("ok") and d.get("error") and re.search(r"URLError|SSL|gaierror|timed out", str(d.get("error"))):
+        print("   %s | 请求失败（%s），5s 后重试一次" % (tag, str(d.get("error"))[:60]))
+        time.sleep(5)
+        d2 = ask(q, conv=conv, timezone=timezone)
+        if d2.get("ok"):
+            d = d2
     t = {"q": q, "d": d, "tz_sent": timezone, "rows": rows(d) if d.get("ok") else []}
     if d.get("ok") and want_ctx:
         t["ctx"] = planner_ctx(d.get("traceId"))  # None 表示抽取失败（证据缺失），区别于空上下文
