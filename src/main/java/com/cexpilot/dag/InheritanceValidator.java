@@ -67,6 +67,14 @@ public final class InheritanceValidator {
             EffectiveTarget planTarget = to.get(i);
             EffectiveTarget match = matches.get(i);
             if (match == null) {
+                // 同身份重复组豁免：配不上的目标若与某个已配对目标的查询身份逐字段全等，
+                // 是同一查询的取数模式差异（pinned 旧快照 + latest 新取数的"比刚才涨了多少"
+                // 新旧对比对），不是用户条件变化——glm/deepseek-v4.1/deepseek-0731 三模型
+                // 在该场景全部被误判漏报 changes，每次白烧 57~127s 修复轮（trace 实证）。
+                // 条件不同的真新增对象不受豁免，照旧打回。
+                if (hasMatchedSameIdentity(planTarget, to, matches, i)) {
+                    continue;
+                }
                 changed.add("exchange");
                 changed.add("base");
                 changed.add("metric");
@@ -149,6 +157,25 @@ public final class InheritanceValidator {
         if (!java.util.Objects.equals(from, to)) {
             changed.add(key);
         }
+    }
+
+    /**
+     * 未配对目标是否存在"已配对成功的同身份目标"：exchange/instrument/metric/形态/时间/
+     * interval/includeUnclosed/count/depth 逐字段全等（sameConditions 口径）。
+     * reference_mode（pinned/latest）不在 EffectiveTarget 上，豁免按纯查询身份判定——
+     * 同身份的重复组无论取数模式如何都不构成条件漂移。
+     */
+    private static boolean hasMatchedSameIdentity(EffectiveTarget planTarget, List<EffectiveTarget> to,
+                                                  List<EffectiveTarget> matches, int self) {
+        for (int j = 0; j < to.size(); j++) {
+            if (j == self || matches.get(j) == null) {
+                continue;
+            }
+            if (sameConditions(planTarget, to.get(j))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String baseOf(EffectiveTarget target) {

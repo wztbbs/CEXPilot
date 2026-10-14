@@ -179,6 +179,20 @@ class InheritanceValidatorTest {
     }
 
     @Test
+    void 同身份重复组豁免_新旧对比双组不再误伤() throws Exception {
+        // "比刚才涨了多少"的正确计划 = pinned(旧快照) + latest(新取数) 两组，查询身份完全相同，
+        // 用户未改任何条件。三模型（glm/deepseek-v4.1/deepseek-0731）在此全部被误判漏报
+        // changes=[base,exchange,metric]，每次白烧 57~127s 修复轮（trace 实证）。
+        // 豁免后：changes=[] 应直接放行。
+        EffectiveTarget t = target("binance", "BTC", "price.last", YESTERDAY, "5m");
+        Set<String> diff = validator.diffKeys(frame(t), twoTargetPlan(t, t, YESTERDAY),
+                new RequestContext(SH, T1));
+        assertTrue(diff.isEmpty(), "同身份重复组不得计为条件变化: " + diff);
+        assertNull(validator.check(frame(t), twoTargetPlan(t, t, YESTERDAY), Set.of(),
+                new RequestContext(SH, T1)));
+    }
+
+    @Test
     void 同所同币多指标的不同时间窗口未变时不误报() {
         var original = multiWindowPlan(-2, false);
         var f = new QueryFrame("f", "conv-1", 1, "t1", "两个区间", T1.toString(), SH.getId(),
