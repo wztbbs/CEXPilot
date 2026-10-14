@@ -455,6 +455,11 @@ def attempt_label(attempt):
     return model + (" [" + ", ".join(details) + "]" if details else "")
 
 
+def _is_empty_plan(plan):
+    """空计划对象（metrics 与 calculations 均空）与 plan=null 等价，无执行内容。"""
+    return isinstance(plan, dict) and not plan.get("metrics") and not plan.get("calculations")
+
+
 def protocol_errors(envelope):
     """Small grammar checks only; Java remains the authority on compilation/execution."""
     errors = []
@@ -473,10 +478,10 @@ def protocol_errors(envelope):
     if changes is not None and (not isinstance(changes, list) or any(not isinstance(v, str) for v in changes)):
         errors.append("changes 必须为字符串数组或 null")
     plan = envelope.get("plan")
-    if envelope.get("in_domain") is False and plan is not None:
-        errors.append("in_domain=false 时 plan 必须为 null")
-    if envelope.get("needs_clarification") is True and plan is not None:
-        errors.append("needs_clarification=true 时 plan 必须为 null")
+    if envelope.get("in_domain") is False and plan is not None and not _is_empty_plan(plan):
+        errors.append("in_domain=false 时 plan 必须为空（null 或无取数无计算的空对象）")
+    if envelope.get("needs_clarification") is True and plan is not None and not _is_empty_plan(plan):
+        errors.append("needs_clarification=true 时 plan 必须为空（null 或无取数无计算的空对象）")
     if plan is None:
         text = envelope.get("clarify") or envelope.get("reply")
         if not isinstance(text, str) or not text.strip():

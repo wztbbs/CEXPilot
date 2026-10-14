@@ -312,7 +312,7 @@ public class DagPlanner {
             return repairDecision(traceId, sink, parsed.toString(), error);
         }
         if (!parsed.path("in_domain").asBoolean(false)) {
-            recordPlanDropped(traceId, sink, parsed, "in_domain=false 时 plan 必须为 null，服务端已丢弃");
+            recordPlanDropped(traceId, sink, parsed, "in_domain=false 时 plan 必须为空，服务端已丢弃");
             sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
             return PlanDecision.accepted(false, textOrNull(parsed.path("reply")), null);
         }
@@ -337,7 +337,7 @@ public class DagPlanner {
         String reply = textOrNull(parsed.path("reply"));
         // 澄清决策（阶段一 c 协议增量字段，缺省按旧行为 false）：不执行、不落 frame，由程序落 NEEDS_CLARIFICATION
         if (parsed.path("needs_clarification").asBoolean(false)) {
-            recordPlanDropped(traceId, sink, parsed, "needs_clarification=true 时 plan 必须为 null，服务端已丢弃");
+            recordPlanDropped(traceId, sink, parsed, "needs_clarification=true 时 plan 必须为空，服务端已丢弃");
             String clarify = textOrNull(parsed.path("clarify"));
             String text = clarify != null && !clarify.isBlank() ? clarify : reply;
             if (text == null || text.isBlank()) {
@@ -364,17 +364,26 @@ public class DagPlanner {
     }
 
     /**
-     * 终态分支（出域/澄清）附带 plan 属协议违规：该 plan 不可执行，服务端丢弃并落
+     * 终态分支（出域/澄清）附带可执行 plan 属协议违规：plan 不可执行，服务端丢弃并落
      * PLAN_DROPPED 审计事件供观测违规率（eval 按模型原始输出独立判协议，不受影响）。
+     * 空计划对象（metrics 与 calculations 均空）与 plan=null 等价，不算违规、不落事件。
      */
     private static void recordPlanDropped(String traceId, TraceSink sink, JsonNode parsed, String reason) {
         JsonNode plan = parsed.path("plan");
-        if (plan.isMissingNode() || plan.isNull()) {
+        if (plan.isMissingNode() || plan.isNull() || !hasExecutableContent(plan)) {
             return;
         }
         sink.record(new TraceEvent(traceId, "PLAN_DROPPED", TRACE_NAME,
                 MAPPER.createObjectNode().put("reason", reason).toString(),
                 plan.toString(), null, null, null, null, null, null));
+    }
+
+    /** 空计划对象（metrics 与 calculations 均空）视同 null；非对象 plan 按违规内容处理。 */
+    private static boolean hasExecutableContent(JsonNode plan) {
+        if (!plan.isObject()) {
+            return true;
+        }
+        return plan.path("metrics").size() > 0 || plan.path("calculations").size() > 0;
     }
 
     /** 模型常在引用尾部带出自然语言标点（如 task_2,），匹配前归一；归一后为空按未提供处理。 */

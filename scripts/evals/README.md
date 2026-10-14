@@ -80,7 +80,7 @@ nohup python3 -u scripts/planner_eval.py run --target-url https://cex.hrscrm.net
 
 脚本从 `LLM_CALL/dag_planner` 读取实际 `messages/content/response_format`，不读旧 `plan.nodes`，也不从最终answer或工具调用数猜plan。`first/final` 是首次和最后一次模型输出；单次调用只判一次，不重复付费。服务端PLAN校验结果单独记录，最后一次模型输出判PASS不等于服务端已接受；这种不一致整体记PLANNER_REJECTED，不计整体PASS。
 
-程序检查基础信封、节点ID、查询形态基础参数及完整引用语法/交易所分支；空计划（metrics 与 calculations 均空）与 Java `evaluateReplyWithoutPlan` 同口径，等价于缺 plan，无明确 reply/clarify 即协议违约。Java编译器仍是完整能力约束和执行校验的权威；Python不复制Provider、算子或时间解析实现。
+程序检查基础信封、节点ID、查询形态基础参数及完整引用语法/交易所分支。**空计划对象（metrics 与 calculations 均空）与 plan=null 全面等价**（与服务端口径一致）：出域/澄清分支带空对象不算违规，带真内容 plan 才算协议错误；空计划无明确 reply/clarify 即协议违约（同 Java `evaluateReplyWithoutPlan`）。Java编译器仍是完整能力约束和执行校验的权威；Python不复制Provider、算子或时间解析实现。
 
 评分分两层分别展示：**协议层**（plan=null 口径、空计划、字段类型、引用格式，以及 new_frame/task_action 等声明类 expected_fields 机检）由程序判定；**语义层**（是否该澄清、指标/时间/计算方向是否正确，以及 in_domain/needs_clarification 等决策类 expected_fields 机检）由裁判判定、机检 FAIL 优先于裁判结论。协议失败不免除语义判分，但裁判不能覆盖程序的协议判定：协议 FAIL 即整体 FAIL。输出不是完整 JSON 时协议 FAIL、语义记 NOT_EVALUABLE。服务端的程序兜底（如 CLARIFY_FALLBACK 代写澄清文案）单独列出，不记为模型能力。
 

@@ -311,10 +311,9 @@ class PlannerEvalTests(unittest.TestCase):
         self.assertFalse(ev.protocol_errors(empty))
 
     def test_protocol_failure_and_semantics_are_scored_separately(self):
-        # P018 型：in_domain=false 但输出空计划对象——协议 FAIL、语义由裁判照判、总 FAIL，
-        # 裁判不能覆盖程序协议判定。
+        # 终态分支附带真内容 plan——协议 FAIL、语义由裁判照判、总 FAIL，裁判不能覆盖程序协议判定。
         out = {"in_domain": False, "reply": "本系统只支持加密货币行情指标查询。",
-               "plan": {"metrics": [], "calculations": []}}
+               "plan": plan()["plan"]}
         sample = case()
         sample["expected_fields"] = {"in_domain": False}
         attempt = {**ev.extract_planner(trace([event(1, json.dumps(out))]), case()["question"])["attempts"][0]}
@@ -324,6 +323,16 @@ class PlannerEvalTests(unittest.TestCase):
         self.assertEqual("PASS", result["semantic_verdict"])
         self.assertEqual("FAIL", result["verdict"])
         self.assertEqual(1, len(judge.calls))
+
+    def test_empty_plan_object_tolerated_where_null_required(self):
+        # 空计划对象（metrics/calculations 均空）与 plan=null 等价，出域/澄清分支不算违规；
+        # 有真内容的 plan 仍是协议错误。
+        for branch in ({"in_domain": False, "reply": "超出范围"},
+                       {"in_domain": True, "needs_clarification": True, "clarify": "哪个币种？", "reply": None}):
+            tolerated = {**branch, "plan": {"metrics": [], "calculations": []}}
+            self.assertFalse(ev.protocol_errors(tolerated), tolerated)
+            violated = {**branch, "plan": plan()["plan"]}
+            self.assertTrue(ev.protocol_errors(violated), violated)
 
     def test_unparseable_output_marks_protocol_fail_and_skips_judge(self):
         attempt = ev.extract_planner(trace([event(1, "broken JSON")]), case()["question"])["attempts"][0]
@@ -368,7 +377,7 @@ class PlannerEvalTests(unittest.TestCase):
 
     def test_report_shows_protocol_semantic_split_and_program_fallback(self):
         out = {"in_domain": False, "reply": "本系统只支持加密货币行情指标查询。",
-               "plan": {"metrics": [], "calculations": []}}
+               "plan": plan()["plan"]}
         sample = case()
         sample["expected_fields"] = {"in_domain": False}
         fallback = {"seq": 2, "event_type": "CLARIFY_FALLBACK", "name": "dag_planner", "output_json": out, "error": None}

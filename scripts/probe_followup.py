@@ -33,6 +33,16 @@ CEXPilot 追问链路探针（多轮上下文继承）
   2. 该文本同时注入 dag_planner.txt 的 <CONVERSATION_CONTEXT> 与 agent_system.txt。
   3. DagExecutor 每次 execute 都 new DagContext()，没有跨轮结果可引用。
 
+2026-10-14 判据适配（阶段三结构化上下文上线后）：
+  线上上下文已换成「【当前任务】+【活动查询状态】+【当前焦点】+【可引用历史事实】+
+  【近期任务索引】+【近期问答】」的分层结构，文字历史降级为「仅辅助理解表达，不作为数据来源」，
+  答案截断放宽到 500 并带上每轮发生时间。因此 P 系判据做了四处调整，避免把已修复的行为误判成问题：
+  1. ctx_pairs 兼容「用户（2026-10-14 16:41）：」的新行首格式。
+  2. P1 增加「结构化条件/任务索引中是否仍保留首轮任务」的判定，与文字历史分开统计。
+  3. P2 把「pinned 历史 fact + 新快照 + relative_change 算子」判定为已修复（NOT_REPRODUCED），
+     只有无复用证据却给出匹配旧价的百分数，才算「从文本里抄旧价」。
+  4. P5/P5b 截断阈值改为 500，并在「文字被截断但结构化条件保住窗口」时判 PARTIAL 而非 CONFIRMED。
+
 P 系覆盖的场景：
   C1 会话复用；P1 上下文淘汰；P2 旧快照不可引用；P3 样本未锁定；
   P4 连续改条件；P5/P5b 长答案截断。
@@ -153,16 +163,24 @@ def planner_ctx(tid, stage="dag_planner"):
     return None
 
 
+# 阶段三起，文字历史的问句行带发生时间：「用户（2026-10-14 16:41）：…」
+USER_LINE_RE = re.compile(r"^用户(?:（[^）]*）)?：")
+
+# 阶段三起 planner 侧答案截断放宽到 500（ConversationContextService.HISTORY_ANSWER_MAX_CHARS）。
+# ConversationService 里那份 300 仍存在，但已不是 planner 上下文的取值路径。
+PLANNER_ANSWER_MAX_CHARS = 500
+
+
 def ctx_pairs(ctx):
     """把注入上下文拆成 [(用户问, 助手答)]。"""
     if not ctx:
         return []
     pairs, cur_q, cur_a = [], None, None
     for line in (ctx or "").splitlines():
-        if line.startswith("用户："):
+        if USER_LINE_RE.match(line):
             if cur_q is not None:
                 pairs.append((cur_q, cur_a or ""))
-            cur_q, cur_a = line[3:], None
+            cur_q, cur_a = USER_LINE_RE.sub("", line, count=1), None
         elif line.startswith("助手："):
             cur_a = line[3:]
         elif cur_a is not None:
@@ -305,6 +323,13 @@ def tool_calls(t):
     return (t.get("d") or {}).get("toolCalls") or 0
 
 
+def request_failed(*turns):
+    """本场景是否有轮次请求失败（网络/502/超时）。判据建立在响应上，请求都没到服务器
+    就不能判 FAIL——那是假 FAIL，与假 PASS 同样有害。返回 [(第几轮, 错误)]。"""
+    return [(i + 1, (t["d"] or {}).get("error"))
+            for i, t in enumerate(turns) if not (t["d"] or {}).get("ok")]
+
+
 def fact_ids(t):
     """evidence 上的 factId（阶段二证据；现有 trace 没有该字段时返回 [None,...]，调用方按证据缺失处理）。"""
     out = []
@@ -355,13 +380,62 @@ def planner_reply(tid):
         return has_plan, (m.group(1) if m else "")
 
 
-CLARIFY_RE = re.compile(r"(哪(一|个|家|组|条|种)|请(告诉|说明|补充|指定|确认)|您?是指|需要先确认|澄清一下)")
+# 选择式澄清也要能识别：实测出现过「您想对币安还是 OKX，以及 BTC 还是 ETH 的那组…求均值？」
+# 这种不含「哪一个/请确认」的澄清。原正则漏检，会把正确澄清判成「擅自选了一组」。
+CLARIFY_RE = re.compile(
+    r"(哪(一|个|家|组|条|种)|请(告诉|说明|补充|指定|确认)|您?是指|需要先确认|澄清一下"
+    r"|(是|还是|以及)[^。？]{0,24}(还是|或者)[^。？]{0,24}？"
+    r"|想(要|对|查)[^。？]{0,20}(还是|或者)[^。？]{0,20}？)")
 
 
 def looks_clarify(text):
     """答案 / planner reply 是否是澄清提问（而不是擅自选了一组继续）。"""
     t = text or ""
     return bool(CLARIFY_RE.search(t))
+
+
+def planner_task_ref(tid, stage="dag_planner"):
+    """planner 输出的 (task_ref, state_ref)。trace 读不到时返回 (None, None)。"""
+    c = planner_out(tid, stage) or ""
+    tr = re.search(r'"task_ref"\s*:\s*"([^"]*)"', c)
+    sr = re.search(r'"state_ref"\s*:\s*"([^"]*)"', c)
+    return (tr.group(1) if tr else None, sr.group(1) if sr else None)
+
+
+TASK_REF_RE = re.compile(r"^task_\d+$")
+
+
+def index_tasks(ctx):
+    """从【近期任务索引】解析 [(task_ref, state_ref, first_query_no)]。"""
+    out = []
+    if not ctx or "【近期任务索引】" not in ctx:
+        return out
+    seg = ctx[ctx.find("【近期任务索引】"):]
+    for line in seg.splitlines():
+        if "task_ref=" not in line:
+            continue
+        tr = re.search(r"task_ref=(\S+?)，", line)
+        sr = re.search(r"state_ref=(\S+?)，", line)
+        q = re.search(r"first_query_no=(\d+)", line)
+        if tr:
+            out.append((tr.group(1), sr.group(1) if sr else None,
+                        int(q.group(1)) if q else None))
+    return out
+
+
+def resume_pick(ctx, tid):
+    """「回到最开始那个问题」类追问：模型选中的 ref 是否指向 first_query_no 最小的任务。
+    返回 (chosen, 是否选中真正首轮, ref 是否畸形, 索引摘要)。"""
+    chosen = planner_task_ref(tid)
+    tasks = index_tasks(ctx or "")
+    qs = [t[2] for t in tasks if t[2] is not None]
+    min_q = min(qs) if qs else None
+    first_refs = {t[0] for t in tasks if t[2] == min_q}
+    picked_first = bool(chosen[0]) and chosen[0] in first_refs
+    malformed = bool(chosen[0]) and not TASK_REF_RE.match(chosen[0])
+    desc = "索引=%s；first_query_no 最小=%s（%s）；planner 选了 %s" % (
+        [(t[0], t[2]) for t in tasks], min_q, sorted(first_refs), chosen)
+    return chosen, picked_first, malformed, desc
 
 
 def smoke():
@@ -551,7 +625,22 @@ def scenario_p1():
     md("\n基线（首轮）%s" % base_desc)
     base_right = b_dt == [YESTERDAY_SH] and b_tz == ["Asia/Shanghai"]
 
-    still = ("成交额" in ctx) and ("BTC" in ctx) and ("昨天" in ctx)
+    # 阶段三：条件可能不在文字历史里，而在结构化条件/任务索引里。两者分开统计，
+    # 只用字面「昨天/成交额」判定会把结构化继承误判成「条件已丢失」。
+    ctx_struct = bool(ctx) and ("【近期任务索引】" in ctx or "frame_id=" in ctx
+                                or "【活动查询状态】" in ctx)
+    # still_text 只看【近期问答】的文字历史（问答对），不能搜整段上下文——
+    # 结构化段里本来就带着 userText 原文，搜整段会把「结构化里还有」误报成「文字里还有」。
+    text_only = "\n".join((q or "") + "\n" + (a or "") for q, a in pairs)
+    still_text = ("成交额" in text_only) and ("BTC" in text_only) and ("昨天" in text_only)
+    idx_part = ctx[ctx.find("【近期任务索引】"):] if "【近期任务索引】" in ctx else ctx
+    still_struct = ctx_struct and (
+        ("查币安 BTC-USDT 永续昨天的成交额" in idx_part)
+        or ('"base":"BTC"' in idx_part
+            and ("trade.turnover" in idx_part or "成交额" in idx_part)
+            and "Asia/Shanghai" in idx_part))
+    still = still_text or still_struct
+
     ex, bs, mt, dt, tz = (exchanges(last), bases(last), metrics(last),
                           dates_of(last), tz_of(last))
     c_ex = ex == ["okx"]
@@ -564,27 +653,43 @@ def scenario_p1():
     checks = [
         ("首轮自己用对了上海时区+昨天（基线校验）", base_right,
          "首轮日期=%s 时区=%s，应为 %s / Asia/Shanghai" % (b_dt, b_tz, YESTERDAY_SH)),
-        ("注入上下文只含 5 组问答", (not ctx_missing) and len(pairs) == 5,
+        ("（文字历史）只含 5 组问答", (not ctx_missing) and len(pairs) == 5,
          ("证据缺失：trace 上下文抽取失败" if ctx_missing
           else "实际 %d 组（首轮应已被淘汰）" % len(pairs))),
-        ("首轮条件已掉出上下文", (not ctx_missing) and not still,
+        ("注入的是分层结构化上下文（非纯文本历史）", ctx_struct,
+         "含【活动查询状态】/frame_id/【近期任务索引】：%s" % ctx_struct),
+        ("【近期问答】文字历史中仍含首轮条件（旧机制）", (not ctx_missing) and still_text,
+         "文字段同时出现 BTC+成交额+昨天：%s（文字历史 %d 组）" % ("是" if still_text else "否", len(pairs))),
+        ("结构化条件/任务索引中仍保留首轮任务（新机制）", (not ctx_missing) and still_struct,
+         "任务索引里能定位到首轮 BTC/成交额/Asia/Shanghai：%s" % ("是" if still_struct else "否")),
+        ("首轮条件已完全掉出上下文", (not ctx_missing) and not still,
          ("证据缺失：trace 上下文抽取失败" if ctx_missing
-          else "上下文中同时出现 BTC+成交额+昨天：%s" % ("是" if still else "否"))),
+          else "文字与结构化两条路径都找不到首轮条件：%s" % ("是" if not still else "否"))),
         ("追问继承：交易所=OKX", c_ex, "evidence exchanges=%s" % ex),
         ("追问继承：币种=BTC", c_bs, "evidence base=%s" % bs),
         ("追问继承：指标=成交额", c_mt, "evidence metric=%s" % mt),
         ("追问继承：日期与首轮一致", c_dt, "evidence 日期=%s，首轮=%s" % (dt, b_dt)),
         ("追问继承：时区与首轮一致", c_tz, "evidence timezone=%s，首轮=%s" % (tz, b_tz)),
     ]
+    # 2026-10-14 新增：条件其实还在上下文里，那问题就出在 RESUME 选了哪个任务。
+    chosen, picked_first, malformed, rdesc = resume_pick(ctx, (last["d"] or {}).get("traceId"))
+    checks += [
+        ("RESUME 选中的是 first_query_no 最小的任务（真正的首轮）", picked_first, rdesc),
+        ("task_ref 格式合法（无尾字符污染）", not malformed,
+         "task_ref=%s（畸形会让服务端直接作废整轮计划）" % (chosen[0],)),
+    ]
     if ctx_missing:
         verdict = ("CONFIRMED（追问条件漂移 %d/5；上下文证据缺失，淘汰机制未判定）" % (5 - inherited)
                    if inherited < 5 else "NOT_REPRODUCED（继承全部命中；上下文证据缺失）")
+    elif still and inherited < 5:
+        verdict = ("CONFIRMED（条件仍在上下文，但追问只继承到 %d/5：这是继承/绑定失效，"
+                   "不是窗口淘汰）" % inherited)
     elif not still and inherited < 5:
         verdict = "CONFIRMED（条件丢失 %d/5，追问对象已漂移）" % (5 - inherited)
     elif not still:
         verdict = "PARTIAL（首轮条件已掉出上下文，但本次仍答对）"
     else:
-        verdict = "NOT_REPRODUCED（首轮条件仍在上下文中）"
+        verdict = "NOT_REPRODUCED（首轮条件仍在上下文中，且追问继承正确）"
     notes = [
         "上下文窗口 = HISTORY_QUERY_LIMIT=5，是硬边界；中间轮次若反复复述完整条件，信息仍可能传下来",
         "本轮注入上下文原文（截断展示）：\n\n```\n%s\n```" % (ctx[:700] + ("…" if len(ctx) > 700 else "")),
@@ -624,14 +729,28 @@ def scenario_p2():
     if exp is not None:
         hit_history = any(abs(v - exp) <= max(0.02, abs(exp) * 0.25) for v in vals)
 
-    if used_24h:
+    # 阶段三：正确行为是「旧快照作为 pinned 历史 fact 被复用 + 本轮新快照 + 算子计算」。
+    # 判据必须能识别这条路径，否则会把已修复的行为判成「抄历史文本里的旧价」。
+    reused = (t2["d"] or {}).get("reusedFactCount") or 0
+    price_nodes = [r for r in mrows(t2)
+                   if (r["metric"] or "").startswith("price.") and _num(r["value"]) is not None]
+    rc = [r for r in crows(t2) if r["operator"] == "relative_change"]
+    bound = bool(rc) and len(price_nodes) >= 2 and reused >= 1
+
+    if bound:
+        kind = ("已能引用旧快照：pinned 历史 fact（as_of=%s）+ 本轮新快照（as_of=%s）"
+                " → relative_change 算子，reusedFactCount=%d"
+                % (price_nodes[0].get("as_of"), price_nodes[-1].get("as_of"), reused))
+        verdict = "NOT_REPRODUCED（旧快照可引用已上线：pin 历史事实 + 算子计算）"
+    elif used_24h:
         kind = "用官方 24h 涨跌幅冒充「比刚才」（口径错，且不是用户问的那段间隔）"
         verdict = "CONFIRMED"
     elif refused:
         kind = "拒答 / 要求用户提供旧价（缺少可引用的旧快照，能力缺口暴露）"
         verdict = "CONFIRMED"
     elif hit_history:
-        kind = "算术可对，但基准取自历史回答文本里的旧价（违反「旧价格不得当本轮事实」，且该数字来自被截断的 300 字）"
+        kind = ("算术可对，但基准取自历史回答文本里的旧价（无 fact 复用证据；"
+                "该数字来自被截断的文字历史）")
         verdict = "CONFIRMED"
     elif vals:
         kind = "给了百分数但来源不明（无法与首轮快照对齐）"
@@ -642,11 +761,17 @@ def scenario_p2():
 
     checks = [
         ("首轮拿到可比对的价格", p1 is not None, "price.last=%s" % p1),
-        ("本轮重新取到当前价", p2 is not None, "price.last=%s" % p2),
-        ("本轮走了算子而不是模型自算", bool(ops), "operator=%s（空=没安排计算节点）" % ops),
+        ("本轮取到旧+新两个价格节点", len(price_nodes) >= 2,
+         "price 节点数=%d，as_of=%s" % (len(price_nodes), [r.get("as_of") for r in price_nodes])),
+        ("走了 relative_change 算子而不是模型自算", bool(rc),
+         "operator=%s（relative_change 才是本场景应有的算子；空=没安排计算节点）"
+         % [r["operator"] for r in crows(t2)]),
+        ("复用了已保存的历史事实（reusedFactCount≥1）", reused >= 1,
+         "reusedFactCount=%s（0=本轮没有绑定任何历史 fact）" % reused),
         ("没有用 24h 涨跌幅替代", not used_24h, "metric=%s" % mt2),
-        ("没有把历史旧价当基准", not hit_history,
-         "答案百分数=%s，若等于 (本轮-首轮)/首轮=%.4f%% 即为取自历史" % (vals[:3], exp if exp is not None else float("nan"))),
+        ("没有把历史文本里的旧价当基准（无复用证据却给出匹配值）", not (hit_history and not bound),
+         "答案百分数=%s，若等于 (本轮-首轮)/首轮=%.4f%% 即为取自历史；已走 fact 复用=%s"
+         % (vals[:3], exp if exp is not None else float("nan"), bound)),
     ]
     return finish("P2", "旧快照不可引用",
                   ["系统要么能引用上一轮快照并用算子算，要么明确说明无法回答；不能拿历史文本里的数字当事实"],
@@ -802,14 +927,17 @@ def _p5_case(sid, q1, tag_prefix):
     for q, a in pairs:
         if "收盘价" in q:
             injected = a
-    truncated = len(a1) > 300
-    cut_at_300 = injected.endswith("...") and len(injected) <= 303
+    LIM = PLANNER_ANSWER_MAX_CHARS
+    truncated = len(a1) > LIM
+    cut_at_lim = injected.endswith("...") and len(injected) <= LIM + 3
 
     # 「实际覆盖到几点」这个信息在首轮答案里出现的位置
     m = re.search(r"覆盖", a1)
     cover_pos = m.start() if m else None
-    cover_lost = cover_pos is not None and cover_pos > 300
+    cover_lost = cover_pos is not None and cover_pos > LIM
     cover_in_ctx = ("覆盖" in injected)
+    # 阶段三：区间已由【活动查询状态】结构化携带，文字被截断不再必然导致条件丢失
+    ctx_struct = bool(t2.get("ctx")) and ("【活动查询状态】" in t2["ctx"] or "frame_id=" in t2["ctx"])
 
     ops = [r["operator"] for r in crows(t2)]
     a2 = ans(t2)
@@ -829,13 +957,15 @@ def _p5_case(sid, q1, tag_prefix):
     ops_ok = all(r.get("ok") for r in crows(t2)) and bool(crows(t2))
 
     checks = [
-        ("首轮答案长度 > 300（会被截断）", truncated, "答案 %d 字" % len(a1)),
-        ("注入上下文里的助手答案被截到 300 字", cut_at_300,
+        ("首轮答案长度 > %d（会被截断）" % LIM, truncated, "答案 %d 字" % len(a1)),
+        ("注入上下文里的助手答案被截到 %d 字" % LIM, cut_at_lim,
          "注入文本 %d 字，结尾='...'：%s" % (len(injected), injected.endswith("..."))),
-        ("「实际覆盖」信息落在 300 字之后", bool(cover_lost),
-         "首次出现位置=%s（>300 即被裁掉）" % cover_pos),
-        ("该信息未进入下一轮上下文", not cover_in_ctx,
+        ("「实际覆盖」信息落在 %d 字之后" % LIM, bool(cover_lost),
+         "首次出现位置=%s（>%d 即被裁掉）" % (cover_pos, LIM)),
+        ("该信息未进入下一轮文字历史", not cover_in_ctx,
          "注入文本中是否含「覆盖」：%s" % cover_in_ctx),
+        ("上下文已含结构化条件段（区间不再依赖文字）", ctx_struct,
+         "含【活动查询状态】/frame_id：%s" % ctx_struct),
         ("追问走了 avg 算子（而不是模型自算）", "avg" in ops, "operator=%s" % ops),
         ("avg 算子全部成功", ops_ok,
          "ok=%s（算子失败时答案只能说算不了，用户看到的是「拿不到」而不是「拿错了」）"
@@ -846,18 +976,25 @@ def _p5_case(sid, q1, tag_prefix):
     ]
     if ctx_missing:
         verdict = "ERROR（trace 上下文抽取失败，截断链路无法判定）"
-    elif truncated and cover_lost and not cover_in_ctx:
+    elif truncated and cover_lost and not cover_in_ctx and not (ctx_struct and same_window and ops_ok):
         verdict = "CONFIRMED（答案尾部信息在下一轮前被裁掉）"
+    elif truncated and cover_lost and not cover_in_ctx:
+        # 文字被裁掉了，但结构化条件把窗口保住了，追问结果仍然正确：截断存在、后果未发生
+        verdict = ("PARTIAL（文字历史仍被截断（丢 %.0f%%），但结构化条件保住了窗口，"
+                   "追问结果正确）" % ((1 - len(injected) / len(a1)) * 100 if a1 else 0))
     elif truncated and not same_window:
         verdict = "CONFIRMED（重新取数时窗口漂移，聚合的不是用户看到的那批数据）"
     elif truncated:
-        verdict = "PARTIAL（发生截断，但本次需要的信息恰好在前 300 字内）"
+        verdict = "PARTIAL（发生截断，但本次需要的信息恰好在前 %d 字内）" % LIM
     else:
-        verdict = "NOT_REPRODUCED（首轮答案未超过 300 字）"
+        verdict = "NOT_REPRODUCED（首轮答案未超过 %d 字）" % LIM
     return finish(sid, "助手答案 300 字截断（%s）" % tag_prefix,
                   ["首轮答案尾部的限定条件应能传到下一轮；截断是直接裁尾，不是摘要"],
                   checks, verdict,
-                  ["截断常量：HISTORY_ANSWER_MAX_CHARS=300，abbreviate() 直接 substring(0,300)+'...'",
+                  ["截断常量：阶段三起 planner 侧 ConversationContextService."
+                   "HISTORY_ANSWER_MAX_CHARS=%d（旧实现为 ConversationService 的 300），"
+                   "abbreviate() 直接 substring(0,%d)+'...'；文字历史标注为「仅辅助理解表达，"
+                   "不作为数据来源」" % (LIM, LIM),
                    "本轮答案 %d 字，注入上下文只保留前 %d 字，丢弃 %.0f%%"
                    % (len(a1), len(injected), (1 - len(injected) / len(a1)) * 100 if a1 else 0),
                    "用户问题完整保留，所以「昨天 / 两所 / BTC」这些从问题里还能读到；"
@@ -1149,6 +1286,13 @@ def scenario_f08():
          ex == ["okx"] and bs == ["BTC"] and bool(dt),
          "以上条件联合判定"),
     ]
+    chosen, picked_first, malformed, rdesc = resume_pick(last.get("ctx"),
+                                                         (last["d"] or {}).get("traceId"))
+    checks += [
+        ("RESUME 选中的是 first_query_no 最小的任务（真正的首轮）", picked_first, rdesc),
+        ("task_ref 格式合法（无尾字符污染）", not malformed,
+         "task_ref=%s（畸形会让服务端直接作废整轮计划）" % (chosen[0],)),
+    ]
     return finish("F08", F_TITLES["F08"],
                   ["首问离开文本窗口后，结构化条件仍完整；不退回默认粒度或交易所"],
                   checks, _f_verdict(checks),
@@ -1337,6 +1481,16 @@ def scenario_f16():
     # 用上线初期（2019-09）的日期提高出现 K 线缺口的概率；取不到缺口则降级记录
     t1 = turn(conv, "列出币安 BTC 2019 年 9 月每小时收盘价。", timezone="Asia/Shanghai", tag="F16/1")
     t2 = turn(conv, "这一段的成交量合计呢？", timezone="Asia/Shanghai", tag="F16/2")
+    bad = request_failed(t1, t2)
+    if bad:
+        return finish("F16", F_TITLES["F16"],
+                      ["延续完整性约束；不把部分成交量包装成完整区间成交量"],
+                      [("两轮请求均成功", False,
+                        "第 %s 轮请求失败：%s（判据不成立，记 ERROR 而非 FAIL）"
+                        % ("/".join(str(i) for i, _ in bad), bad[0][1]))],
+                      "ERROR（请求失败，证据缺失，本轮不判定）",
+                      ["隧道/网关 502 会让请求根本没到服务器；此时任何判据都是空的"],
+                      min_phase=2)
     covs = [r.get("coverage") for r in mrows(t1) + mrows(t2) if r.get("coverage") is not None]
     gap = any((isinstance(c, (int, float)) and c < 0.999)
               or (isinstance(c, dict) and not (c.get("range_complete", True)
@@ -1351,8 +1505,18 @@ def scenario_f16():
                         "证据缺失：evidence 无 coverage 字段，无法判断是否存在缺口")],
                       "SKIP（证据缺失：无 coverage 字段）",
                       ["需要带覆盖信息的 evidence 才能判定"], min_phase=2)
+    # 2026-10-14 口径修正：覆盖不完整时「不产出合计」比「走 sum 算子」更严格也更正确
+    # （实测：应含 720 根实际 527 根 → range_complete=false，工具直接省略 statistics，
+    #  答案说「给不出、不能自行用原始 K 线代算」）。只认 sum 算子会把这条正确分支判成 FAIL。
+    # 判据落在证据上：覆盖不完整 且 成交量节点没有 value（statistics_omitted）。
+    incomplete = any(isinstance(c, dict) and not c.get("range_complete", True) for c in covs)
+    vol_rows = [r for r in mrows(t2) if (r["metric"] or "").startswith("trade.volume")]
+    no_value = bool(vol_rows) and all(_num(r["value"]) is None for r in vol_rows)
     checks = [
-        ("走了 sum 算子", bool(sum_rows), "operator=%s" % [r["operator"] for r in crows(t2)]),
+        ("合计由 sum 算子产出，或覆盖不完整时明确不产出（不得伪造）",
+         bool(sum_rows) or (incomplete and no_value),
+         "operator=%s；覆盖不完整=%s；成交量节点无 value=%s（statistics_omitted）"
+         % ([r["operator"] for r in crows(t2)], incomplete, no_value)),
         ("存在缺口时答案声明不完整（不包装成完整区间）", honest,
          "coverage=%s 答案含缺口声明=%s" % (covs[:3], bool(re.search(r"(缺口|不完整|部分|覆盖|缺失|仅为)", ans(t2))))),
     ]
@@ -1445,12 +1609,29 @@ def scenario_f20():
     m2 = metrics(t2)
     has_price = any((m or "").startswith("price.") for m in m2)
     has_oi = any((m or "").startswith("oi.") for m in m2)
-    not_yesterday = dates_of(t2) != [YESTERDAY_SH]
+    # 2026-10-14 口径修正：「别用昨天」要看窗口整体是否还是昨天那个自然日区间，
+    # 不能只看起始日期——滚动 24h 窗口的起点也落在昨天，会被误判成「仍在用昨天」。
+    w1, w2 = windows(t1), windows(t2)
+    not_yesterday = bool(w1) and bool(w2) and w1 != w2
+    # 2026-10-14：本用例的问法里「最近行情」本身没定义窗口，实测两轮出现两种合理行为——
+    # ① 直接按滚动 24h 取数且否定条件生效；② 就「最近」的窗口口径先澄清。
+    # 两条都算达成；但「既没取数也没澄清」就是失败。分支互斥，避免恒真断言。
+    if not m2:
+        clarified = looks_clarify(ans(t2))
+        return finish("F20", F_TITLES["F20"],
+                      ["同时理解交易所、时间和指标变化，不能仅替换交易所"],
+                      [("未取数时给出澄清（用户「最近」未定义窗口，不应臆测）", clarified,
+                        "toolCalls=%s 答案=%s" % (tool_calls(t2),
+                                                 ans(t2)[:120].replace("\n", " ")))],
+                      "PASS（澄清分支：「最近」窗口未定义，先澄清而非臆测）" if clarified
+                      else "FAIL（既没取数也没澄清）",
+                      ["trace：%s%s" % (TRACE, (t2["d"] or {}).get("traceId"))], min_phase=1)
     checks = [
         ("交易所换成 OKX（且只换所）", exchanges(t2) == ["okx"], "exchange=%s" % exchanges(t2)),
         ("含行情类指标", has_price, "metric=%s" % m2),
         ("含持仓类指标", has_oi, "metric=%s" % m2),
-        ("时间不是昨天（否定条件生效）", not_yesterday, "日期=%s" % dates_of(t2)),
+        ("时间窗口不再是昨天的自然日区间（否定条件生效）", not_yesterday,
+         "首轮窗口=%s 本轮窗口=%s" % (sorted(w1), sorted(w2))),
     ]
     return finish("F20", F_TITLES["F20"],
                   ["同时理解交易所、时间和指标变化，不能仅替换交易所"],

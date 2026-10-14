@@ -616,30 +616,35 @@ class DagPlannerTest {
     }
 
     @Test void 出域或澄清附带plan时服务端丢弃并落审计事件() {
-        // P018 型：in_domain=false 但带空计划对象——终态分支的 plan 不可执行，丢弃并落 PLAN_DROPPED
-        var outOfDomain = "{\"in_domain\":false,\"reply\":\"超出范围\",\"plan\":{\"metrics\":[],\"calculations\":[]}}";
+        // 终态分支附带真内容 plan 属协议违规：plan 不可执行，丢弃并落 PLAN_DROPPED
+        ObjectNode outEnv = JSON.createObjectNode();
+        outEnv.put("in_domain", false).put("reply", "超出范围");
+        outEnv.set("plan", scalarPlan());
         List<TraceEvent> events = new ArrayList<>();
-        var rejected = planner(new Script(outOfDomain), registry(), new DagConfig()).plan("介绍亚历山大", "", "t", events::add);
+        var rejected = planner(new Script(outEnv.toString()), registry(), new DagConfig()).plan("介绍亚历山大", "", "t", events::add);
         assertFalse(rejected.inDomain());
         assertEquals("超出范围", rejected.reply());
         assertTrue(rejected.plan().isEmpty());
         assertEquals(1, events.stream().filter(e -> "PLAN_DROPPED".equals(e.eventType())).count());
 
-        // P039 修复轮型：needs_clarification=true 但 plan 非 null——同样丢弃，澄清决策不受影响
-        var clarify = "{\"in_domain\":true,\"needs_clarification\":true,\"clarify\":\"币安还是OKX？\",\"plan\":{\"metrics\":[],\"calculations\":[]}}";
+        ObjectNode clarifyEnv = JSON.createObjectNode();
+        clarifyEnv.put("in_domain", true).put("needs_clarification", true).put("clarify", "币安还是OKX？");
+        clarifyEnv.set("plan", scalarPlan());
         events = new ArrayList<>();
-        var clarified = planner(new Script(clarify), registry(), new DagConfig()).plan("它的均值呢", "", "t", events::add);
+        var clarified = planner(new Script(clarifyEnv.toString()), registry(), new DagConfig()).plan("它的均值呢", "", "t", events::add);
         assertTrue(clarified.needsClarification());
         assertEquals("币安还是OKX？", clarified.reply());
         assertEquals(1, events.stream().filter(e -> "PLAN_DROPPED".equals(e.eventType())).count());
         var dropped = events.stream().filter(e -> "PLAN_DROPPED".equals(e.eventType())).findFirst().orElseThrow();
-        assertTrue(dropped.inputJson().contains("needs_clarification=true 时 plan 必须为 null"));
+        assertTrue(dropped.inputJson().contains("needs_clarification=true 时 plan 必须为空"));
 
-        // plan=null 的合规输出不落事件
-        events = new ArrayList<>();
-        planner(new Script("{\"in_domain\":false,\"reply\":\"超出范围\",\"plan\":null}"), registry(), new DagConfig())
-                .plan("介绍亚历山大", "", "t", events::add);
-        assertTrue(events.stream().noneMatch(e -> "PLAN_DROPPED".equals(e.eventType())));
+        // 空计划对象与 plan=null 等价：不算违规、不落事件，两个分支都是
+        for (String empty : List.of("null", "{\"metrics\":[],\"calculations\":[]}")) {
+            events = new ArrayList<>();
+            planner(new Script("{\"in_domain\":false,\"reply\":\"超出范围\",\"plan\":" + empty + "}"), registry(), new DagConfig())
+                    .plan("介绍亚历山大", "", "t", events::add);
+            assertTrue(events.stream().noneMatch(e -> "PLAN_DROPPED".equals(e.eventType())), empty);
+        }
     }
 
     @Test void task_ref尾部标点归一后正常命中索引() {
