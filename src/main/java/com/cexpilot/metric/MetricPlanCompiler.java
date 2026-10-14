@@ -85,9 +85,9 @@ public final class MetricPlanCompiler {
     }
 
     /**
-     * 每个展开的指标节点的有效查询条件及来源：Planner 明确给的 → EXPLICIT；
+     * 每个展开的指标节点的有效查询条件及来源：Planner 填写的 → PLANNED（尚无用户原文依据）；
      * 代码自动补的（自动粒度、默认 settle、include_unclosed 默认、默认 depth、目录推导 unit/provider）→ DEFAULT。
-     * resolvedRange 在执行期由 Provider 才能确定，编译期不记录（见 QueryFrame focus）。
+     * EXPLICIT/INHERITED 由规划上下文对账产生，实际范围/粒度在 QueryFrame 提交时回填。
      */
     private EffectiveTarget effectiveTarget(ResolvedMetric rm) {
         MetricRequest request = rm.request();
@@ -104,26 +104,37 @@ public final class MetricPlanCompiler {
         if (params instanceof TimeQueryParams p) {
             timeExpression = com.cexpilot.time.TimeSpecJson.write(p.time());
             interval = p.interval();
-            intervalOrigin = interval != null ? ConditionOrigin.EXPLICIT : ConditionOrigin.DEFAULT;
+            intervalOrigin = interval != null ? ConditionOrigin.PLANNED : ConditionOrigin.DEFAULT;
             includeUnclosed = p.includeUnclosed() != null && p.includeUnclosed();
-            includeUnclosedOrigin = p.includeUnclosed() != null ? ConditionOrigin.EXPLICIT : ConditionOrigin.DEFAULT;
+            includeUnclosedOrigin = p.includeUnclosed() != null ? ConditionOrigin.PLANNED : ConditionOrigin.DEFAULT;
         } else if (params instanceof CountQueryParams p) {
             count = p.count();
         } else if (params instanceof SnapshotQueryParams p) {
             depth = p.depth() != null ? p.depth()
                     : (rm.query() instanceof SnapshotQuery q ? q.depth() : null);
-            depthOrigin = p.depth() != null ? ConditionOrigin.EXPLICIT : ConditionOrigin.DEFAULT;
+            depthOrigin = p.depth() != null ? ConditionOrigin.PLANNED : ConditionOrigin.DEFAULT;
         }
-        return new EffectiveTarget(
-                request.id(), rm.physicalId(), rm.exchange(), ConditionOrigin.EXPLICIT,
+        EffectiveTarget target = new EffectiveTarget(
+                request.id(), rm.physicalId(), rm.exchange(), ConditionOrigin.PLANNED,
                 request.metric(), request.shape().code(),
                 binding.instrument().deepCopy(),
-                request.instrument().settle() != null ? ConditionOrigin.EXPLICIT : ConditionOrigin.DEFAULT,
+                request.instrument().settle() != null ? ConditionOrigin.PLANNED : ConditionOrigin.DEFAULT,
                 timeExpression,
                 interval, intervalOrigin,
                 includeUnclosed, includeUnclosedOrigin,
                 count, depth, depthOrigin,
                 binding.unit(), binding.provider(), binding.catalogVersion());
+        Map<String, ConditionSource> sources = new LinkedHashMap<>();
+        for (String field : List.of("exchange", "metric", "query_shape", "market_type", "base", "quote")) {
+            sources.put(field, ConditionSource.of(ConditionOrigin.PLANNED));
+        }
+        sources.put("settle", ConditionSource.of(target.settleOrigin()));
+        if (timeExpression != null) sources.put("time", ConditionSource.of(ConditionOrigin.PLANNED));
+        if (intervalOrigin != null) sources.put("interval", ConditionSource.of(intervalOrigin));
+        if (includeUnclosedOrigin != null) sources.put("include_unclosed", ConditionSource.of(includeUnclosedOrigin));
+        if (count != null) sources.put("count", ConditionSource.of(ConditionOrigin.PLANNED));
+        if (depthOrigin != null) sources.put("depth", ConditionSource.of(depthOrigin));
+        return target.withMetadata(sources, null);
     }
 
     private void validateStructure(LogicalPlan logicalPlan, int maxNodes) {
@@ -161,8 +172,38 @@ public final class MetricPlanCompiler {
                 errors.add("calculations[" + i + "] (" + calc.id() + ", " + calc.operator() + ").input: " + e.getMessage()
                         + "；输入契约: " + tool.planningInputSchema());
             }
+            checkReferenceKindMismatch(calc, i, errors);
         }
         return errors;
+    }
+
+    /**
+     * 引用/形态契约错配检查（算子 schema 之外的跨字段语义，审查批次外的规划质量加固）：
+     * values 里塞 ".samples" 结尾的序列引用、field 的 collection 指 ".value" 结尾的标量——
+     * 两者都能通过算子 schema 校验、执行期才炸（deepseek-v4.1-flash 实测排错后 Answer 只能
+     * 说"无法给出均值"），这里静态打回并给出正确形式，让模型在修复循环里一次学会。
+     */
+    private static void checkReferenceKindMismatch(CalculationRequest calc, int index, List<String> errors) {
+        if ("values".equals(calc.input().path("kind").asText())) {
+            for (JsonNode v : calc.input().path("values")) {
+                if (v.isTextual() && v.asText().matches("\\{\\{.*\\.samples}}")) {
+                    errors.add("calculations[" + index + "] (" + calc.id() + ", " + calc.operator()
+                            + ").input.values 里放了序列引用 " + v.asText()
+                            + "：序列聚合必须用 {\"kind\":\"field\",\"collection\":\"" + v.asText()
+                            + "\",\"field\":\"value\"}，values 只放数值、数值字符串或标量引用（如 {{组.交易所.value}}）");
+                    return;
+                }
+            }
+        }
+        if ("field".equals(calc.input().path("kind").asText())) {
+            String collection = calc.input().path("collection").asText();
+            if (collection.matches("\\{\\{.*\\.value}}")) {
+                errors.add("calculations[" + index + "] (" + calc.id() + ", " + calc.operator()
+                        + ").input.collection 里放了标量引用 " + collection
+                        + "：collection 必须是序列引用（以 .samples 结尾，如 {{组.交易所.samples}}），"
+                        + "对标量做聚合请改用 {\"kind\":\"values\",\"values\":[\"" + collection + "\"]}");
+            }
+        }
     }
 
     private Map<String, Map<String, String>> buildBranches(List<ResolvedMetric> resolvedMetrics) {

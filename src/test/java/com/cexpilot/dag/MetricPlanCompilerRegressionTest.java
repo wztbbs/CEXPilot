@@ -78,7 +78,7 @@ class MetricPlanCompilerRegressionTest {
         assertEquals("m1", binanceHigh.groupId());
         assertEquals("metric_0", binanceHigh.physicalId());
         assertEquals("binance", binanceHigh.exchange());
-        assertEquals(ConditionOrigin.EXPLICIT, binanceHigh.exchangeOrigin());
+        assertEquals(ConditionOrigin.PLANNED, binanceHigh.exchangeOrigin());
         assertEquals("price.high", binanceHigh.metric());
         assertEquals("range_statistic", binanceHigh.queryShape());
         assertEquals("BTC", binanceHigh.instrument().path("base").asText());
@@ -96,9 +96,9 @@ class MetricPlanCompilerRegressionTest {
         EffectiveTarget ethClose = compiled.targets().get(2);
         assertEquals("m2", ethClose.groupId());
         assertEquals("ETH", ethClose.instrument().path("base").asText());
-        assertEquals(ConditionOrigin.EXPLICIT, ethClose.settleOrigin());
+        assertEquals(ConditionOrigin.PLANNED, ethClose.settleOrigin());
         assertEquals("1h", ethClose.interval());
-        assertEquals(ConditionOrigin.EXPLICIT, ethClose.intervalOrigin());
+        assertEquals(ConditionOrigin.PLANNED, ethClose.intervalOrigin());
     }
 
     @Test void compiledPlan快照节点记录depth来源() {
@@ -114,6 +114,35 @@ class MetricPlanCompilerRegressionTest {
         m.put("depth", 10);
         CompiledPlan withExplicit = compiler().compileFull(plan(m), 8);
         assertEquals(10, withExplicit.targets().get(0).depth());
-        assertEquals(ConditionOrigin.EXPLICIT, withExplicit.targets().get(0).depthOrigin());
+        assertEquals(ConditionOrigin.PLANNED, withExplicit.targets().get(0).depthOrigin());
+    }
+
+    @Test void values里塞samples序列引用时静态打回并给出正确形式() {
+        // deepseek-v4.1-flash 线上实错：avg 把 {{m1.binance.samples}} 塞进 values，
+        // schema 校验放行、执行期才炸（第 0 个值必须是数值），Answer 只能说"无法给出均值"
+        var p = scalarPlan();
+        calculation(p, "c1", "avg", "{\"kind\":\"values\",\"values\":[\"{{m1.binance.samples}}\"]}");
+
+        var error = assertThrows(IllegalArgumentException.class, () -> compiler().compile(p, 8)).getMessage();
+        assertTrue(error.contains("序列聚合必须用"), error);
+        assertTrue(error.contains("\"kind\":\"field\""), error);
+        assertTrue(error.contains("{{m1.binance.samples}}"), error);
+    }
+
+    @Test void field的collection指向标量引用时静态打回() {
+        // 镜像错配：对标量做聚合
+        var p = scalarPlan();
+        calculation(p, "c1", "avg", "{\"kind\":\"field\",\"collection\":\"{{m1.binance.value}}\",\"field\":\"value\"}");
+
+        var error = assertThrows(IllegalArgumentException.class, () -> compiler().compile(p, 8)).getMessage();
+        assertTrue(error.contains("collection 必须是序列引用"), error);
+    }
+
+    @Test void values里放标量引用和元素引用仍然合法() throws Exception {
+        // 对照：标量引用 {{m1.binance.value}} 与单元素引用 {{m1.binance.samples.0.value}} 不受影响
+        var p = scalarPlan();
+        calculation(p, "c1", "avg",
+                "{\"kind\":\"values\",\"values\":[\"{{m1.binance.value}}\",\"{{m1.binance.samples.0.value}}\",100]}");
+        assertNotNull(compiler().compile(p, 8));
     }
 }
