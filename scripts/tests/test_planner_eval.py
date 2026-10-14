@@ -176,6 +176,107 @@ class PlannerEvalTests(unittest.TestCase):
         self.assertEqual(1, result["repair_calls"])
         self.assertEqual(1, len(judge.calls))
 
+    def test_attempt_model_identity_distinguishes_thinking_variants(self):
+        # 首排/修复轮同为 deepseek-v4.1-flash、仅思考配置不同时，标签必须可区分；
+        # 旧 trace（无模型字段）标签为 None，报告照常渲染。
+        first = event(1)
+        repair_inputs = {"stage": "dag_planner", "attempt": 2,
+                         "model": "deepseek-v4.1-flash", "model_role": "flagship",
+                         "enable_thinking": True, "reasoning_effort": "low",
+                         "messages": [{"role": "system", "content": "fixture catalog"},
+                                      {"role": "user", "content": case()["question"]}]}
+        final = {"seq": 3, "event_type": "LLM_CALL", "name": "dag_planner",
+                 "input_json": json.dumps(repair_inputs),
+                 "output_json": json.dumps({"content": json.dumps(plan())}), "error": None}
+        observed = ev.extract_planner(trace([first, final]), case()["question"])
+        self.assertIsNone(observed["attempts"][0]["model"])
+        self.assertIsNone(ev.attempt_label(observed["attempts"][0]))
+        self.assertEqual("flagship", observed["attempts"][1]["model_role"])
+        self.assertEqual("deepseek-v4.1-flash [flagship, thinking=on, effort=low]",
+                         ev.attempt_label(observed["attempts"][1]))
+        result = ev.grade_record({"case": case(), "planner": observed}, FakeJudge(), "rubric")
+        self.assertIsNone(result["stages"]["first"]["planner_label"])
+        self.assertEqual("deepseek-v4.1-flash [flagship, thinking=on, effort=low]",
+                         result["stages"]["final"]["planner_label"])
+        with tempfile.TemporaryDirectory() as temp:
+            ev.write_report(Path(temp), [result])
+            report = (Path(temp) / "report.md").read_text()
+            self.assertIn("effort=low", report)
+
+    def test_judge_transport_error_retried_then_success(self):
+        class FlakyJudge(FakeJudge):
+            retries = 2
+
+            def call(self, messages):
+                self.calls.append(messages)
+                if len(self.calls) == 1:
+                    raise ev.TransportError("fixture timeout")
+                return json.dumps(self.reply), {"usage": {}}
+
+        attempt = ev.extract_planner(trace(), case()["question"])["attempts"][0]
+        judge = FlakyJudge()
+        with patch.object(ev.time, "sleep") as sleep:
+            result = ev.grade_attempt(case(), attempt, judge, "rubric")
+        self.assertEqual("PASS", result["verdict"])
+        self.assertEqual(2, len(judge.calls))
+        self.assertEqual(1, result["judge_call"]["transport_retries"])
+        self.assertEqual(1, sleep.call_count)
+
+    def test_judge_transport_retry_exhaustion_is_judge_error(self):
+        class AlwaysDown(FakeJudge):
+            retries = 1
+
+            def call(self, messages):
+                self.calls.append(messages)
+                raise ev.TransportError("fixture down")
+
+        attempt = ev.extract_planner(trace(), case()["question"])["attempts"][0]
+        judge = AlwaysDown()
+        with patch.object(ev.time, "sleep"):
+            result = ev.grade_attempt(case(), attempt, judge, "rubric")
+        self.assertEqual("JUDGE_ERROR", result["verdict"])
+        self.assertIn("已重试 1 次仍失败", result["error"])
+        self.assertEqual(2, len(judge.calls))
+
+    def test_judge_http_error_is_never_retried(self):
+        class HttpErrorJudge(FakeJudge):
+            retries = 3
+
+            def call(self, messages):
+                self.calls.append(messages)
+                raise ev.EvalError("HTTP 500")
+
+        attempt = ev.extract_planner(trace(), case()["question"])["attempts"][0]
+        judge = HttpErrorJudge()
+        result = ev.grade_attempt(case(), attempt, judge, "rubric")
+        self.assertEqual("JUDGE_ERROR", result["verdict"])
+        self.assertEqual(1, len(judge.calls))
+
+    def test_judge_retries_from_env_and_cli_override(self):
+        environment = dict(zip(ev.JUDGE_ENV, ["https://judge.invalid/v1", "private-key", "fixture"]))
+        with patch.dict(os.environ, {**environment, "PLANNER_EVAL_JUDGE_RETRIES": "2"}, clear=True):
+            self.assertEqual(2, ev.JudgeConfig.from_env().retries)
+        with patch.dict(os.environ, {**environment, "PLANNER_EVAL_JUDGE_RETRIES": "x"}, clear=True):
+            with self.assertRaises(ev.EvalError):
+                ev.JudgeConfig.from_env()
+        with tempfile.TemporaryDirectory() as temp, contextlib.redirect_stdout(io.StringIO()):
+            root = Path(temp)
+            source = root / "raw.jsonl"
+            ev.append_jsonl(source, {"format_version": 1, "case": case(), "case_hash": ev.digest(case()),
+                                     "trace": trace(), "source_kind": "imported_trace"})
+            seen = {}
+
+            def fake_grade(record, config, prompt):
+                seen["retries"] = config.retries
+                return {"case_id": "TEST", "title": "fixture", "verdict": "PASS", "stages": {}}
+
+            config = ev.JudgeConfig("https://judge.invalid/v1", "private-key", "fixture")
+            with patch.object(ev.JudgeConfig, "from_env", return_value=config), \
+                    patch.object(ev, "grade_record", side_effect=fake_grade):
+                self.assertEqual(0, ev.main(["judge", str(source), "--output-root",
+                                             str(root / "out"), "--judge-retries", "3"]))
+            self.assertEqual(3, seen["retries"])
+
     def test_single_attempt_judge_is_not_billed_twice(self):
         judge = FakeJudge()
         result = ev.grade_record({"case": case(), "planner": ev.extract_planner(trace(), case()["question"])}, judge, "rubric")
@@ -201,6 +302,100 @@ class PlannerEvalTests(unittest.TestCase):
         sample["expected_fields"]["new_frame"] = True
         attempt = ev.extract_planner(trace(), case()["question"])["attempts"][0]
         self.assertEqual("FAIL", ev.grade_attempt(sample, attempt, FakeJudge(), "rubric")["verdict"])
+
+    def test_empty_plan_is_treated_as_missing_plan(self):
+        # 与 Java evaluateReplyWithoutPlan 同口径：空计划等价于缺 plan，必须有明确话术。
+        empty = {"in_domain": True, "reply": None, "plan": {"metrics": [], "calculations": []}}
+        self.assertTrue(any("空计划" in e for e in ev.protocol_errors(empty)))
+        empty["reply"] = "该问题缺少必要查询对象。"
+        self.assertFalse(ev.protocol_errors(empty))
+
+    def test_protocol_failure_and_semantics_are_scored_separately(self):
+        # P018 型：in_domain=false 但输出空计划对象——协议 FAIL、语义由裁判照判、总 FAIL，
+        # 裁判不能覆盖程序协议判定。
+        out = {"in_domain": False, "reply": "本系统只支持加密货币行情指标查询。",
+               "plan": {"metrics": [], "calculations": []}}
+        sample = case()
+        sample["expected_fields"] = {"in_domain": False}
+        attempt = {**ev.extract_planner(trace([event(1, json.dumps(out))]), case()["question"])["attempts"][0]}
+        judge = FakeJudge()
+        result = ev.grade_attempt(sample, attempt, judge, "rubric")
+        self.assertEqual("FAIL", result["protocol_verdict"])
+        self.assertEqual("PASS", result["semantic_verdict"])
+        self.assertEqual("FAIL", result["verdict"])
+        self.assertEqual(1, len(judge.calls))
+
+    def test_unparseable_output_marks_protocol_fail_and_skips_judge(self):
+        attempt = ev.extract_planner(trace([event(1, "broken JSON")]), case()["question"])["attempts"][0]
+        judge = FakeJudge()
+        result = ev.grade_attempt(case(), attempt, judge, "rubric")
+        self.assertEqual("FAIL", result["protocol_verdict"])
+        self.assertEqual("NOT_EVALUABLE", result["semantic_verdict"])
+        self.assertEqual("FAIL", result["verdict"])
+        self.assertEqual([], judge.calls)
+
+    def test_new_task_action_is_a_valid_expected_label(self):
+        sample = case()
+        sample["expected_fields"] = {"in_domain": True, "task_action": "NEW"}
+        ev.validate_suite({"format_version": 1, "cases": [sample]})
+
+    def test_judge_request_carries_strict_output_schema(self):
+        config = ev.JudgeConfig("https://judge.invalid/v1", "private-key", "fixture")
+        response = {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(judgment())}}]}
+        with patch.object(ev, "request_json", return_value=(response, 1.0)) as transport:
+            config.call([{"role": "user", "content": "fixture"}])
+        body = transport.call_args.args[1]
+        self.assertEqual("json_schema", body["response_format"]["type"])
+        item = body["response_format"]["json_schema"]["schema"]["properties"]["criteria"]["items"]
+        self.assertEqual(["PASS", "FAIL", "UNCERTAIN"], item["properties"]["verdict"]["enum"])
+        self.assertEqual("array", item["properties"]["evidence"]["type"])
+
+    def test_judge_response_format_env_modes(self):
+        environment = dict(zip(ev.JUDGE_ENV, ["https://judge.invalid/v1", "private-key", "fixture"]))
+        with patch.dict(os.environ, environment, clear=True):
+            self.assertEqual("json_schema", ev.JudgeConfig.from_env().response_format)
+        with patch.dict(os.environ, {**environment, "PLANNER_EVAL_JUDGE_RESPONSE_FORMAT": "off"}, clear=True):
+            config = ev.JudgeConfig.from_env()
+            response = {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(judgment())}}]}
+            with patch.object(ev, "request_json", return_value=(response, 1.0)) as transport:
+                config.call([{"role": "user", "content": "fixture"}])
+            self.assertNotIn("response_format", transport.call_args.args[1])
+        for bad in ("xml", {"PLANNER_EVAL_JUDGE_EXTRA_BODY": json.dumps({"response_format": {"type": "json_object"}})}):
+            env = {**environment, **({} if isinstance(bad, dict) else {"PLANNER_EVAL_JUDGE_RESPONSE_FORMAT": bad}), **(bad if isinstance(bad, dict) else {})}
+            with patch.dict(os.environ, env, clear=True):
+                with self.assertRaises(ev.EvalError):
+                    ev.JudgeConfig.from_env()
+
+    def test_report_shows_protocol_semantic_split_and_program_fallback(self):
+        out = {"in_domain": False, "reply": "本系统只支持加密货币行情指标查询。",
+               "plan": {"metrics": [], "calculations": []}}
+        sample = case()
+        sample["expected_fields"] = {"in_domain": False}
+        fallback = {"seq": 2, "event_type": "CLARIFY_FALLBACK", "name": "dag_planner", "output_json": out, "error": None}
+        dropped = {"seq": 3, "event_type": "PLAN_DROPPED", "name": "dag_planner",
+                   "input_json": json.dumps({"reason": "in_domain=false 时 plan 必须为 null，服务端已丢弃"}),
+                   "output_json": json.dumps(out["plan"]), "error": None}
+        observed = ev.extract_planner(trace([event(1, json.dumps(out)), fallback, dropped]), case()["question"])
+        result = ev.grade_record({"case": sample, "planner": observed}, FakeJudge(), "rubric")
+        self.assertEqual("CLARIFY_FALLBACK, PLAN_DROPPED", ev.fallback_events(result))
+        with tempfile.TemporaryDirectory() as temp:
+            ev.write_report(Path(temp), [result])
+            report = (Path(temp) / "report.md").read_text()
+            self.assertIn("协议FAIL/语义PASS", report)
+            self.assertIn("CLARIFY_FALLBACK", report)
+            csv_text = (Path(temp) / "report.csv").read_text(encoding="utf-8-sig")
+            self.assertIn("first_protocol", csv_text)
+
+    def test_decision_field_check_lands_in_semantic_layer_not_protocol(self):
+        # P019 型：该澄清未澄清（needs_clarification 机检 FAIL）——协议 PASS、语义 FAIL、
+        # 总 FAIL；裁判判 PASS 也不能覆盖机检。声明类字段（new_frame）仍归协议层。
+        sample = case()
+        sample["expected_fields"] = {"needs_clarification": True}
+        attempt = ev.extract_planner(trace(), case()["question"])["attempts"][0]
+        result = ev.grade_attempt(sample, attempt, FakeJudge(), "rubric")
+        self.assertEqual("PASS", result["protocol_verdict"])
+        self.assertEqual("FAIL", result["semantic_verdict"])
+        self.assertEqual("FAIL", result["verdict"])
 
     def test_key_redacted_from_judge_text_and_parsed_reasons(self):
         reply = judgment()

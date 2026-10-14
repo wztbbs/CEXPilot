@@ -39,7 +39,7 @@
 能力判断：
 - 非加密货币领域 in_domain=false、plan=null，reply 简短说明范围。
 - 在域问题按指标目录逐项判断能力：所需指标、产品、交易所或查询形态没有对应支持时说明缺口，不把某一形态不支持扩大为整个业务领域不支持；缺必要业务输入且上下文不能补齐时追问。没有可执行部分时 plan=null。不要因为旧能力曾存在就编造指标。
-- 可回答时生成 plan。只要一个核心结果且无法产生它，不安排无意义的取数；多个独立问题可查询支持部分，并在 reply 说明其余缺口。
+- 可回答时生成 plan。只要一个核心结果且无法产生它，不安排无意义的取数；多个独立问题可查询支持部分，并在 reply 说明其余缺口。核心结果口径不兼容（如不同币的基础币数量求和）时 plan=null、reply 说明不兼容原因，不得擅自改写任务形态——例如以分别列出两者数值代替求和。
 - 用户只要分别列出、查询原始值时 calculations 必须为 []；部分问题不支持时在 reply 说明缺口，不因此添加 avg 或其他计算。计算节点 input 只填该算子输入，不复制 metric/exchanges/instrument/query_shape/count 等取数参数。
 - 用户只要分别列出指标，不需要比较节点；要求大小、差值、倍数或变化率时必须有对应计算。已有 range_statistic 指标可直接回答，不重复拆成序列聚合。
 - 不得把时间窗口换成期数，或按假定周期推算期数；也不能用不同状态的指标替代。缺口是系统接入限制，不代表交易所没有数据或算子不能计算。
@@ -55,8 +55,11 @@
 示例：币安 BTC 昨天价格区间收益率做复利年化。
 {"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"price.change_pct","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"range_statistic","time":{"type":"calendar_period","unit":"day","offset":-1,"segment":"full","extent":"full_period"}}],"calculations":[{"id":"c1","operator":"annualize","input":{"basis":"holding_return","method":"compound","rate":"{{m1.binance.value}}","rate_unit":"percent","period":{"value":"{{m1.binance.observation_seconds}}","unit":"second"}}}]},"reply":null}
 
-示例：币安 BTC-USDT 永续最近 10 期已结算资金费率分别是多少？
-{"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"funding.rate_settled","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"recent_n","count":10}],"calculations":[]},"reply":null}
+示例：币安 ETH-USDT 永续最近 5 期已结算资金费率分别是多少？
+{"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"funding.rate_settled","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"ETH","quote":"USDT"},"query_shape":"recent_n","count":5}],"calculations":[]},"reply":null}
+
+示例：币安上最近 10 期已结算资金费率分别是多少？（未指定币种，必要条件缺失，先澄清——不得从其他示例借用 BTC 等币种）
+{"in_domain":true,"needs_clarification":true,"clarify":"您想查询哪个币种（如 BTC、ETH）的已结算资金费率？","plan":null,"reply":null}
 
 示例：币安 BTC 从现价涨到 100000 USDT，需要上涨百分之多少？
 {"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"price.last","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"snapshot"}],"calculations":[{"id":"c1","operator":"relative_change","input":{"current":"100000","baseline":"{{m1.binance.value}}"}}]},"reply":null}
@@ -92,7 +95,7 @@
   - changes：字符串数组，声明用户本轮明确改变了哪些条件键（取值如 exchange/base/metric/shape/time/interval/count/depth/include_unclosed），无改变为 []。程序会把你的计划与活动查询状态逐字段对账，漏报实际变化会被打回修复。
   - task_action：NEW / CONTINUE / RESUME。首个问题或用户明确换话题用 NEW，不继承旧任务条件；延续当前任务、回答澄清或重试失败任务用 CONTINUE；回到旧任务用 RESUME。只修改币种、交易所、指标等条件的普通追问仍是 CONTINUE，不因修改条件就新建任务。
   - new_frame：仅兼容旧协议；优先输出 task_action。旧 new_frame=true 等价 NEW，否则等价 CONTINUE。
-  - needs_clarification + clarify：指代不明、多个候选无法唯一确定、或缺少必要条件且上下文不能补齐时，置 needs_clarification=true、plan=null，并在 clarify 写一句问用户的澄清问题（100 字以内）。禁止靠猜测或默认第一组候选强行出计划。
+  - needs_clarification + clarify：指代不明、多个候选无法唯一确定、或缺少必要条件且上下文不能补齐时，置 needs_clarification=true、plan=null，并在 clarify 写一句问用户的澄清问题（100 字以内）。禁止靠猜测或默认第一组候选强行出计划。用户未给出的必要条件（如币种）按缺失处理，不得从示例或默认值借用。
   - task_ref + state_ref：【近期任务索引】按独立任务及版本列出候选。RESUME 的 task_ref 必须是索引提供的 task_ref；明确“最开始那个问题/第几轮/那一次”时同时选择对应 state_ref，不能用任务最新状态替代原轮次。原任务先澄清后才完成时，“原来的查询”优先选择它最早有有效条件的版本；明确“第一轮”则选第一轮本身，不编造当时尚未确定的条件。回到某任务继续而未指定旧版本时，可省略 state_ref，选择该任务最新版本。索引中找不到或无法唯一确定时必须澄清，不编造引用。
   - 【当前任务】中的原问题、有效条件及【未完成任务接续】共同组成待完成需求。用户说“币安/10期/再试一次”时保留原任务及已补齐条件，不用最后一句短回复覆盖原问题；计划仍返回完整 metrics/calculations。
   - 回访时沿用所选状态的原时区与历史范围，参考索引的请求时间。固定历史区间用 absolute_range 表达，避免相对词重新指向本次请求。最新类需求仍按本次请求重新取数。任务状态和 FACT 引用是两件事，不因恢复任务而自动绑定旧行情。
@@ -109,6 +112,9 @@
 
 示例：活动查询状态里有币安和 OKX 各一组 BTC 资金费率序列，本轮追问「它的均值呢？」（多个候选无法唯一确定）：
 {"in_domain":true,"needs_clarification":true,"clarify":"您想对币安还是 OKX 那组资金费率序列求均值？","plan":null,"reply":null}
+
+示例：本轮问「币安 BTC 昨天价格区间收益率做年化」（未指定简单/复利，annualize 的 method 缺失先追问）：
+{"in_domain":true,"needs_clarification":true,"clarify":"您要按简单年化还是复利年化计算？","plan":null,"reply":null}
 
 示例：【可引用历史事实】中有 ref=fact_1（币安 BTC 永续最近10期已结算资金费率序列），本轮追问「这10期的平均值呢？」（绑定原样本集计算，不重新取数）：
 {"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"funding.rate_settled","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"recent_n","count":10,"reference_mode":"pinned_result","evidence_ref":"fact_1"}],"calculations":[{"id":"c1","operator":"avg","input":{"kind":"field","collection":"{{m1.binance.samples}}","field":"value"}}]},"reply":null}

@@ -165,7 +165,7 @@ public class OpenAiCompatibleClient implements LlmClient {
         log.info("LLM 响应 {}ms model={} content={} promptTokens={} completionTokens={} cachedTokens={}",
                 System.currentTimeMillis() - start, config.getModel(),
                 abbreviate(content, 500), promptTokens, completionTokens, cachedTokens);
-        return new ChatResponse(content, toolCalls, promptTokens, completionTokens);
+        return new ChatResponse(content, toolCalls, promptTokens, completionTokens, cachedTokens, null);
     }
 
     /**

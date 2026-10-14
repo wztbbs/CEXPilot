@@ -1155,12 +1155,12 @@
         {
           "id": "P034.1",
           "dimension": "decision",
-          "expectation": "按当前契约不能把BTC数量和ETH数量直接求和当同单位总数，应说明口径不兼容，单核心无有效结果时plan=null。"
+          "expectation": "按当前契约不能把BTC数量和ETH数量直接求和当同单位总数；应说明口径不兼容后 plan=null 拒答，不得擅自改写任务形态（如以分别列出两者数值代替求和）。"
         },
         {
           "id": "P034.2",
           "dimension": "calculation",
-          "expectation": "不能对trade.volume跨基础币求sum，也不能擅自替换成成交额回答。"
+          "expectation": "calculations 中不得出现对 trade.volume 跨基础币的 sum；也不得把指标擅自替换为 trade.turnover（成交额）来回答。"
         }
       ],
       "expected_fields": {
@@ -1359,7 +1359,7 @@
         {
           "id": "P040.1",
           "dimension": "context",
-          "expectation": "new_frame=true，显式新话题不继承BTC、昨天历史窗口或旧粒度。"
+          "expectation": "task_action=NEW，显式新话题开启新任务，不继承BTC、昨天历史窗口或旧粒度。"
         },
         {
           "id": "P040.2",
@@ -1369,7 +1369,7 @@
       ],
       "expected_fields": {
         "in_domain": true,
-        "new_frame": true
+        "task_action": "NEW"
       }
     },
     {

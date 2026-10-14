@@ -23,7 +23,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from collections import Counter, defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -38,16 +38,52 @@ DIMENSIONS = (
     "decision", "instrument", "metric_shape", "time", "parameters",
     "calculation", "context", "minimality",
 )
+# expected_fields 里的决策类字段："该不该出域/该不该澄清"属语义判断，机检归语义层（不被裁判覆盖）；
+# 其余声明类字段（new_frame/task_action）是对账声明义务，机检归协议层。
+DECISION_FIELDS = {"in_domain", "needs_clarification"}
 JUDGE_ENV = (
     "PLANNER_EVAL_JUDGE_BASE_URL", "PLANNER_EVAL_JUDGE_API_KEY",
     "PLANNER_EVAL_JUDGE_MODEL",
 )
+JUDGE_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "planner_judgment",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "required": ["criteria"],
+            "additionalProperties": False,
+            "properties": {
+                "criteria": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["id", "verdict", "reason", "evidence"],
+                        "additionalProperties": False,
+                        "properties": {
+                            "id": {"type": "string", "minLength": 1},
+                            "verdict": {"type": "string", "enum": ["PASS", "FAIL", "UNCERTAIN"]},
+                            "reason": {"type": "string", "minLength": 1},
+                            "evidence": {"type": "array", "minItems": 1,
+                                          "items": {"type": "string", "minLength": 1}},
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
 ID_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,39}\Z")
 REFERENCE_PATTERN = re.compile(r"\{\{([A-Za-z][A-Za-z0-9_]*)(?:\.([A-Za-z0-9_.]+))?}}\Z")
 
 
 class EvalError(Exception):
     """Safe user-facing configuration, input, or transport error."""
+
+
+class TransportError(EvalError):
+    """网络传输层失败（连接中断/超时）；与 HTTP 错误码区分，供裁判有限重试判断。"""
 
 
 def dumps(value):
@@ -169,7 +205,7 @@ def validate_suite(suite, only=None):
             raise EvalError(f"{case_id}.expected_fields 仅支持声明的信封语义字段")
         for key, value in expected.items():
             if key == "task_action":
-                if value not in ("CONTINUE", "RESUME"):
+                if value not in ("CONTINUE", "RESUME", "NEW"):
                     raise EvalError(f"{case_id}: task_action 预期非法")
             elif type(value) is not bool:
                 raise EvalError(f"{case_id}: {key} 预期必须为 boolean")
@@ -226,7 +262,7 @@ def request_json(url, payload=None, *, timeout=240, api_key=None):
         # Server bodies may echo authorization/payloads; never log them.
         raise EvalError(f"HTTP {exc.code}；请检查地址、权限及服务日志（未打印响应体）") from None
     except (urllib.error.URLError, TimeoutError, OSError):
-        raise EvalError("网络请求失败或超时；未自动重发付费请求") from None
+        raise TransportError("网络请求失败或超时（传输层错误）") from None
     except (ValueError, UnicodeError):
         raise EvalError("接口未返回完整有效 JSON") from None
     if not isinstance(result, dict):
@@ -241,6 +277,10 @@ class JudgeConfig:
     model: str = ""
     extra_body: dict = field(default_factory=dict)
     timeout: float = 240
+    # 传输层失败（连接/超时）的最大重试次数，默认 0；HTTP 错误与裁判协议问题不重试
+    retries: int = 0
+    # 裁判输出结构约束：json_schema（默认，严 Schema）/ json_object / off
+    response_format: str = "json_schema"
 
     @classmethod
     def from_env(cls):
@@ -250,7 +290,7 @@ class JudgeConfig:
         extra = {}
         if os.environ.get("PLANNER_EVAL_JUDGE_EXTRA_BODY", "").strip():
             extra = json_value(os.environ["PLANNER_EVAL_JUDGE_EXTRA_BODY"], "JUDGE_EXTRA_BODY")
-        forbidden = {"model", "messages", "stream", "tools", "tool_choice", "n"} & extra.keys()
+        forbidden = {"model", "messages", "stream", "tools", "tool_choice", "n", "response_format"} & extra.keys()
         if forbidden:
             raise EvalError("JUDGE_EXTRA_BODY 不允许覆盖: " + ", ".join(sorted(forbidden)))
         try:
@@ -259,16 +299,33 @@ class JudgeConfig:
             raise EvalError("JUDGE_TIMEOUT 必须为正数秒") from exc
         if not math.isfinite(timeout) or timeout <= 0:
             raise EvalError("JUDGE_TIMEOUT 必须为正数秒")
+        try:
+            retries = int(os.environ.get("PLANNER_EVAL_JUDGE_RETRIES", "0").strip() or "0")
+        except ValueError:
+            raise EvalError("JUDGE_RETRIES 必须为非负整数") from None
+        if retries < 0:
+            raise EvalError("JUDGE_RETRIES 必须为非负整数")
+        response_format = os.environ.get("PLANNER_EVAL_JUDGE_RESPONSE_FORMAT", "json_schema").strip() or "json_schema"
+        if response_format not in ("json_schema", "json_object", "off"):
+            raise EvalError("JUDGE_RESPONSE_FORMAT 只支持 json_schema / json_object / off")
         return cls(validate_url(os.environ[JUDGE_ENV[0]].strip(), JUDGE_ENV[0]),
-                   os.environ[JUDGE_ENV[1]].strip(), os.environ[JUDGE_ENV[2]].strip(), extra, timeout)
+                   os.environ[JUDGE_ENV[1]].strip(), os.environ[JUDGE_ENV[2]].strip(),
+                   extra, timeout, retries, response_format)
 
     def public(self):
         # EXTRA_BODY values are intentionally not persisted, only their hash.
         return {"base_url": self.base_url, "model": self.model,
-                "extra_body_hash": digest(self.extra_body), "timeout_seconds": self.timeout}
+                "extra_body_hash": digest(self.extra_body), "timeout_seconds": self.timeout,
+                "response_format": self.response_format}
 
     def call(self, messages):
         body = {"model": self.model, "messages": messages, "stream": False}
+        # 严 Schema 约束裁判输出：evidence 必须为字符串数组、verdict 为合法枚举；
+        # 通道不支持时会在首次调用以 HTTP 错误显式暴露，可换 json_object 或 off。
+        if self.response_format == "json_schema":
+            body["response_format"] = JUDGE_RESPONSE_FORMAT
+        elif self.response_format == "json_object":
+            body["response_format"] = {"type": "json_object"}
         body.update(self.extra_body)
         endpoint = self.base_url if self.base_url.endswith("/chat/completions") else self.base_url + "/chat/completions"
         response, duration = request_json(endpoint, body, timeout=self.timeout, api_key=self.api_key)
@@ -285,6 +342,25 @@ class JudgeConfig:
         return content, {"duration_seconds": duration, "usage": response.get("usage", {}),
                          "requested_model": self.model, "returned_model": response.get("model"),
                          "response_id": response.get("id")}
+
+
+def call_with_retries(config, messages):
+    """裁判调用：仅传输层失败按 config.retries 有限重试（指数退避）；
+    HTTP 错误码与裁判协议问题不重试（重试也无意义）。重试次数记入调用元数据。"""
+    retries = getattr(config, "retries", 0) or 0
+    failures = 0
+    while True:
+        try:
+            content, metadata = config.call(messages)
+            metadata["transport_retries"] = failures
+            return content, metadata
+        except TransportError as exc:
+            failures += 1
+            if failures > retries:
+                if retries:
+                    raise TransportError(f"{exc}（已重试 {retries} 次仍失败）") from None
+                raise
+            time.sleep(min(2 ** failures, 8))
 
 
 def ordered_events(trace):
@@ -324,7 +400,13 @@ def extract_planner(trace, question):
             outputs = json_value(event.get("output_json"), "planner.output_json")
             item.update({"attempt": inputs.get("attempt", len(attempts) + 1),
                          "messages": inputs.get("messages"), "response_format": inputs.get("response_format"),
-                         "content": outputs.get("content"), "error": event.get("error")})
+                         "content": outputs.get("content"), "error": event.get("error"),
+                         # 出参模型身份：同模型不同思考配置的首排/修复轮（如 effort=low 的
+                         # 兜底调用）名字相同，只能靠这些字段区分。
+                         "model": inputs.get("model"), "model_role": inputs.get("model_role"),
+                         "enable_thinking": inputs.get("enable_thinking"),
+                         "thinking": inputs.get("thinking"),
+                         "reasoning_effort": inputs.get("reasoning_effort")})
             messages = item["messages"]
             if not isinstance(messages, list) or not messages or any(
                     not isinstance(m, dict) or not isinstance(m.get("content"), str)
@@ -339,7 +421,7 @@ def extract_planner(trace, question):
         attempts.append(item)
     decisions = [{k: event.get(k) for k in ("seq", "event_type", "name", "output_json", "error")}
                  for event in events if event.get("event_type") in
-                 ("PLAN", "PLAN_COMPILED", "INHERIT_SHADOW", "CLARIFY_FALLBACK")]
+                 ("PLAN", "PLAN_COMPILED", "INHERIT_SHADOW", "CLARIFY_FALLBACK", "PLAN_DROPPED")]
     for item in attempts:
         item["request_time_context"] = request_time_context
     plan_events = [e for e in decisions if e["event_type"] == "PLAN"]
@@ -355,6 +437,22 @@ def extract_planner(trace, question):
     return {"attempts": attempts, "decision_events": decisions, "server_accepted": server_accepted,
             "trace_metadata": {k: metadata.get(k) for k in
                                ("trace_id", "model", "prompt_version", "build_commit", "created_at", "status")}}
+
+
+def attempt_label(attempt):
+    """planner 调用身份标签：模型 + 思考开关/档位；旧 trace 没有这些字段时返回 None。"""
+    model = attempt.get("model")
+    if not model:
+        return None
+    details = [attempt["model_role"]] if attempt.get("model_role") else []
+    if attempt.get("enable_thinking") is not None:
+        details.append("thinking=" + ("on" if attempt["enable_thinking"] else "off"))
+    thinking = attempt.get("thinking")
+    if isinstance(thinking, dict) and thinking.get("type"):
+        details.append("thinking=" + str(thinking["type"]))
+    if attempt.get("reasoning_effort"):
+        details.append("effort=" + str(attempt["reasoning_effort"]))
+    return model + (" [" + ", ".join(details) + "]" if details else "")
 
 
 def protocol_errors(envelope):
@@ -392,6 +490,13 @@ def protocol_errors(envelope):
         if not isinstance(plan.get(key), list):
             errors.append("plan." + key + " 必须为数组")
     if errors:
+        return errors
+    if not plan["metrics"] and not plan["calculations"]:
+        # 与 Java evaluateReplyWithoutPlan 同口径：空计划等价于缺 plan，
+        # 可以是"有意不规划"，但必须有明确话术交代；无话术即协议违约。
+        text = envelope.get("clarify") or envelope.get("reply")
+        if not isinstance(text, str) or not text.strip():
+            errors.append("空计划（无指标无计算）必须有明确 reply 或 clarify")
         return errors
     ids = {}
     for kind, nodes in (("metric", plan["metrics"]), ("calculation", plan["calculations"])):
@@ -524,7 +629,8 @@ def validate_judgment(judgment, case):
 
 def grade_attempt(case, attempt, config, prompt):
     result = {"attempt": attempt.get("attempt"), "seq": attempt.get("seq"),
-              "planner_duration_ms": attempt.get("duration_ms"), "criteria": []}
+              "planner_duration_ms": attempt.get("duration_ms"),
+              "planner_label": attempt_label(attempt), "criteria": []}
     if attempt.get("extraction_error"):
         return {**result, "verdict": "NOT_EVALUABLE", "error": attempt["extraction_error"]}
     if attempt.get("error"):
@@ -532,30 +638,43 @@ def grade_attempt(case, attempt, config, prompt):
     try:
         envelope = parse_model_object(attempt.get("content"))
     except EvalError as exc:
-        return {**result, "verdict": "FAIL", "protocol_errors": [str(exc)]}
+        # 输出不是完整 JSON：协议层失败，语义层没有可判对象。
+        return {**result, "verdict": "FAIL", "protocol_verdict": "FAIL",
+                "semantic_verdict": "NOT_EVALUABLE", "protocol_errors": [str(exc)]}
     result["planner_output"] = envelope
+    # 程序层（协议）：envelope 语法、plan=null 口径、空计划、引用格式、声明类字段机检。
     result["field_checks"] = field_checks(case, envelope)
     errors = protocol_errors(envelope)
     result["protocol_errors"] = errors
-    if errors:
-        return {**result, "verdict": "FAIL"}
+    declaration_failed = any(c["verdict"] == "FAIL" for c in result["field_checks"]
+                             if c["field"] not in DECISION_FIELDS)
+    decision_failed = any(c["verdict"] == "FAIL" for c in result["field_checks"]
+                          if c["field"] in DECISION_FIELDS)
+    result["protocol_verdict"] = "FAIL" if errors or declaration_failed else "PASS"
+    # 语义层（裁判 + 决策类字段机检）：是否该澄清、指标/时间/计算方向是否正确。
+    # 协议失败不豁免语义判分，两层结果分别展示；机检 FAIL 与程序协议判定一样不被裁判覆盖。
     judge_content = None
     try:
-        judge_content, call_metadata = config.call(judge_messages(case, attempt, envelope, prompt))
+        judge_content, call_metadata = call_with_retries(config, judge_messages(case, attempt, envelope, prompt))
         if isinstance(judge_content, str):
             judge_content = judge_content.replace(config.api_key, "[REDACTED]")
         result["judge_call"] = call_metadata
         criteria = validate_judgment(parse_model_object(judge_content), case)
         result["criteria"] = criteria
         verdicts = {c["verdict"] for c in criteria}
-        fields_failed = any(c["verdict"] == "FAIL" for c in result["field_checks"])
-        result["verdict"] = "FAIL" if "FAIL" in verdicts or fields_failed else "UNCERTAIN" if "UNCERTAIN" in verdicts else "PASS"
+        result["semantic_verdict"] = "FAIL" if "FAIL" in verdicts or decision_failed else "UNCERTAIN" if "UNCERTAIN" in verdicts else "PASS"
     except EvalError as exc:
-        result.update(verdict="JUDGE_ERROR", error=str(exc))
+        result.update(semantic_verdict="FAIL" if decision_failed else "JUDGE_ERROR", error=str(exc))
     # Keep the returned text for re-auditing, but remove the configured credential
     # even if a broken upstream were to echo it in its response.
     if judge_content is not None:
         result["judge_content"] = judge_content.replace(config.api_key, "[REDACTED]")
+    if result["protocol_verdict"] == "FAIL":
+        result["verdict"] = "FAIL"
+    elif result["semantic_verdict"] == "JUDGE_ERROR":
+        result["verdict"] = "JUDGE_ERROR"
+    else:
+        result["verdict"] = result["semantic_verdict"]
     return result
 
 
@@ -755,11 +874,31 @@ def compare_results(results, previous):
     return changes
 
 
+def stage_cell(stage):
+    """报告单元格：总结果 + 协议/语义分列 + 出参模型身份标签。"""
+    verdict = stage.get("verdict", "—")
+    protocol = stage.get("protocol_verdict")
+    semantic = stage.get("semantic_verdict")
+    if protocol or semantic:
+        verdict += f"（协议{protocol or '—'}/语义{semantic or '—'}）"
+    label = stage.get("planner_label")
+    return verdict + (" (" + label + ")" if label else "")
+
+
+def fallback_events(result):
+    """服务端非例行的兜底/观测事件（CLARIFY_FALLBACK 等）：模型输出不能据此记功。"""
+    routine = {"PLAN", "PLAN_COMPILED"}
+    names = [e.get("event_type") for e in result.get("server_decision_events", [])
+             if e.get("event_type") not in routine]
+    return ", ".join(dict.fromkeys(names)) or "—"
+
+
 def write_report(directory, results, previous=None):
     counts = Counter(r["verdict"] for r in results)
     lines = ["# Planner 评测", "", f"样本数：{len(results)}；结果：{dumps(dict(counts))}", "",
              "仅评 planner；采集路径的执行层/answer 不计入本报告。PASS 表示本批已定义判据全部满足，非全能力证明。",
-             "first/final 分别是首次/最后一次模型原始输出；服务端是否接受独立列出，不将最后一次输出等同于修复成功。",
+             "first/final 分别是首次/最后一次模型原始输出（后缀标注出参模型与思考配置；同模型不同思考档位的首排/修复轮据此区分，旧 trace 无此字段则不标）；括号内协议/语义分列：协议（plan=null 口径、空计划、字段类型、引用格式、声明类字段机检）由程序判定，语义（是否该澄清、指标/时间/计算方向、决策类字段机检）由裁判判定且机检 FAIL 优先，裁判不能覆盖程序协议判定。",
+             "程序兜底列展示服务端非例行事件（如 CLARIFY_FALLBACK 程序代写澄清文案）；兜底结果不能记为模型能力。服务端是否接受独立列出，不将最后一次输出等同于修复成功。",
              "最终模型输出判PASS但服务端拒绝时，整体结果为PLANNER_REJECTED；下表阶段比例仍仅描述模型原始输出。",
              "裁判错误、trace 不完整、调用异常单列，不能视为 PASS，也不能伪装为模型语义 FAIL。", "",
              "| 阶段 | PASS | FAIL | UNCERTAIN | 其他异常 | 总样本 | PASS / 全部样本 |", "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
@@ -776,12 +915,12 @@ def write_report(directory, results, previous=None):
     for name in DIMENSIONS:
         values = dimension[name]
         lines.append(f"| {name} | {values['PASS']} | {values['FAIL']} | {values['UNCERTAIN']} |")
-    lines += ["", "| 用例 | 标题 | 首次 | 最后一次 | 服务端接受 | 修复调用数 | trace | 失败/不确定原因 |",
-              "| --- | --- | --- | --- | --- | ---: | --- | --- |"]
+    lines += ["", "| 用例 | 标题 | 首次 | 最后一次 | 服务端接受 | 程序兜底 | 修复调用数 | trace | 失败/不确定原因 |",
+              "| --- | --- | --- | --- | --- | --- | ---: | --- | --- |"]
     for result in results:
         stages = result.get("stages", {})
-        row = [result["case_id"], result["title"], stages.get("first", {}).get("verdict", "—"),
-               stages.get("final", {}).get("verdict", "—") + " / " + result["verdict"], result.get("server_accepted"), result.get("repair_calls", "—"), result.get("trace_id") or "—",
+        row = [result["case_id"], result["title"], stage_cell(stages.get("first", {})),
+               stage_cell(stages.get("final", {})) + " / " + result["verdict"], result.get("server_accepted"), fallback_events(result), result.get("repair_calls", "—"), result.get("trace_id") or "—",
                "; ".join(failure_reasons(result))]
         lines.append("| " + " | ".join(map(markdown_cell, row)) + " |")
     if previous is not None:
@@ -799,10 +938,13 @@ def write_report(directory, results, previous=None):
     (directory / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     with (directory / "report.csv").open("w", encoding="utf-8-sig", newline="") as stream:
         writer = csv.writer(stream)
-        writer.writerow(["case_id", "title", "first_verdict", "final_output_verdict", "overall_verdict", "server_accepted", "repair_calls", "trace_id", "reason"])
+        writer.writerow(["case_id", "title", "first_verdict", "first_protocol", "first_semantic", "final_verdict", "final_protocol", "final_semantic", "overall_verdict", "server_accepted", "fallback_events", "repair_calls", "trace_id", "reason"])
         for result in results:
-            writer.writerow([result["case_id"], result["title"], result.get("stages", {}).get("first", {}).get("verdict", ""),
-                             result.get("stages", {}).get("final", {}).get("verdict", ""), result["verdict"], result.get("server_accepted"), result.get("repair_calls", ""), result.get("trace_id", ""), "; ".join(failure_reasons(result))])
+            first = result.get("stages", {}).get("first", {})
+            final = result.get("stages", {}).get("final", {})
+            writer.writerow([result["case_id"], result["title"], first.get("verdict", ""), first.get("protocol_verdict", ""), first.get("semantic_verdict", ""),
+                             final.get("verdict", ""), final.get("protocol_verdict", ""), final.get("semantic_verdict", ""),
+                             result["verdict"], result.get("server_accepted"), fallback_events(result), result.get("repair_calls", ""), result.get("trace_id", ""), "; ".join(failure_reasons(result))])
 
 
 def parser():
@@ -824,6 +966,8 @@ def parser():
         command.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT)
         if name == "run":
             command.add_argument("--judge-prompt", type=Path, default=DEFAULT_PROMPT)
+            command.add_argument("--judge-retries", type=int, metavar="N",
+                                 help="裁判传输层失败的最大重试次数；默认取 PLANNER_EVAL_JUDGE_RETRIES 或 0")
             command.add_argument("--compare", type=Path, help="上一轮 scores.jsonl")
     command = common("import-trace", "离线导入一条已下载的完整 trace")
     command.add_argument("trace", type=Path)
@@ -833,6 +977,8 @@ def parser():
     command.add_argument("--cases", type=Path, help="显式改用新标注文件；问题/时区/前置轮必须与采集样本一致")
     command.add_argument("--only")
     command.add_argument("--judge-prompt", type=Path, default=DEFAULT_PROMPT)
+    command.add_argument("--judge-retries", type=int, metavar="N",
+                         help="裁判传输层失败的最大重试次数；默认取 PLANNER_EVAL_JUDGE_RETRIES 或 0")
     command.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT)
     command.add_argument("--compare", type=Path)
     command = sub.add_parser("report", help="离线重建报告及逐条对照")
@@ -888,6 +1034,10 @@ def main(argv=None):
         print(f"报告：{directory / 'report.md'}")
         return 0
     config = JudgeConfig.from_env() if args.command in ("run", "judge") else None
+    if config is not None and getattr(args, "judge_retries", None) is not None:
+        if args.judge_retries < 0:
+            raise EvalError("--judge-retries 必须为非负整数")
+        config = replace(config, retries=args.judge_retries)
     prompt = read_prompt(args.judge_prompt) if config else None
     if args.command == "judge":
         records = read_jsonl(args.raw)

@@ -20,9 +20,11 @@
 | --- | --- |
 | `PLANNER_EVAL_TARGET_URL` | 无默认值；目标 CEXPilot 站点，可被 `--target-url` 覆盖 |
 | `PLANNER_EVAL_JUDGE_TIMEOUT` | `240`，裁判单次 HTTP 超时秒数 |
+| `PLANNER_EVAL_JUDGE_RETRIES` | `0`，裁判传输层失败（连接中断/超时）的最大重试次数，指数退避；HTTP 错误码与裁判协议问题不重试；可被 `--judge-retries` 覆盖 |
+| `PLANNER_EVAL_JUDGE_RESPONSE_FORMAT` | `json_schema`，裁判输出结构约束：严 Schema 强制 criteria 数组、verdict 枚举、reason/evidence 非空且 evidence 为字符串数组；`json_object` 为弱约束，`off` 关闭。通道不支持严 Schema 会在首次调用以 HTTP 错误显式暴露 |
 | `PLANNER_EVAL_JUDGE_EXTRA_BODY` | JSON 对象，例如 `{"reasoning_effort":"high","response_format":{"type":"json_object"}}`；必须符合所选厂商协议，不默认传 temperature 等模型不一定支持的字段 |
 
-密钥只用于 Authorization，不写入 manifest/report；请求失败不打印可能回显凭据的服务端响应体。配置错误在 `run` 采集前检查。无付费 HTTP 自动重试。返回内容必须是完整 JSON，裁判 `finish_reason` 必须为 `stop`，不接受截断后“抢救”JSON。
+密钥只用于 Authorization，不写入 manifest/report；请求失败不打印可能回显凭据的服务端响应体。配置错误在 `run` 采集前检查。目标系统请求不自动重试；裁判传输层失败默认不重试，可用 `PLANNER_EVAL_JUDGE_RETRIES` 或 `--judge-retries` 开启有限重试。返回内容必须是完整 JSON，裁判 `finish_reason` 必须为 `stop`，不接受截断后“抢救”JSON。
 
 上面协议不能直接调用 Anthropic 原生 Messages API；使用支持 Chat Completions 的接入点，或以后单独增加适配器。ChatGPT/Codex 订阅不等于脚本的 API key。
 
@@ -78,7 +80,9 @@ nohup python3 -u scripts/planner_eval.py run --target-url https://cex.hrscrm.net
 
 脚本从 `LLM_CALL/dag_planner` 读取实际 `messages/content/response_format`，不读旧 `plan.nodes`，也不从最终answer或工具调用数猜plan。`first/final` 是首次和最后一次模型输出；单次调用只判一次，不重复付费。服务端PLAN校验结果单独记录，最后一次模型输出判PASS不等于服务端已接受；这种不一致整体记PLANNER_REJECTED，不计整体PASS。
 
-程序检查基础信封、节点ID、查询形态基础参数及完整引用语法/交易所分支。Java编译器仍是完整能力约束和执行校验的权威；Python不复制Provider、算子或时间解析实现。
+程序检查基础信封、节点ID、查询形态基础参数及完整引用语法/交易所分支；空计划（metrics 与 calculations 均空）与 Java `evaluateReplyWithoutPlan` 同口径，等价于缺 plan，无明确 reply/clarify 即协议违约。Java编译器仍是完整能力约束和执行校验的权威；Python不复制Provider、算子或时间解析实现。
+
+评分分两层分别展示：**协议层**（plan=null 口径、空计划、字段类型、引用格式，以及 new_frame/task_action 等声明类 expected_fields 机检）由程序判定；**语义层**（是否该澄清、指标/时间/计算方向是否正确，以及 in_domain/needs_clarification 等决策类 expected_fields 机检）由裁判判定、机检 FAIL 优先于裁判结论。协议失败不免除语义判分，但裁判不能覆盖程序的协议判定：协议 FAIL 即整体 FAIL。输出不是完整 JSON 时协议 FAIL、语义记 NOT_EVALUABLE。服务端的程序兜底（如 CLARIFY_FALLBACK 代写澄清文案）单独列出，不记为模型能力。
 
 裁判收到完整实际planner输入及逐项标注，不收到最终answer、行情FACTS或服务端编译结论。仅提取同trace的固定request_time_context用于核验时间，明确区分它与模型当时可见的信息。忽略示例id/排列/话术差异，核对语义等价、baseline方向、历史ref及任务缺口。
 

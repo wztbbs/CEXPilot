@@ -312,6 +312,7 @@ public class DagPlanner {
             return repairDecision(traceId, sink, parsed.toString(), error);
         }
         if (!parsed.path("in_domain").asBoolean(false)) {
+            recordPlanDropped(traceId, sink, parsed, "in_domain=false 时 plan 必须为 null，服务端已丢弃");
             sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
             return PlanDecision.accepted(false, textOrNull(parsed.path("reply")), null);
         }
@@ -336,6 +337,7 @@ public class DagPlanner {
         String reply = textOrNull(parsed.path("reply"));
         // 澄清决策（阶段一 c 协议增量字段，缺省按旧行为 false）：不执行、不落 frame，由程序落 NEEDS_CLARIFICATION
         if (parsed.path("needs_clarification").asBoolean(false)) {
+            recordPlanDropped(traceId, sink, parsed, "needs_clarification=true 时 plan 必须为 null，服务端已丢弃");
             String clarify = textOrNull(parsed.path("clarify"));
             String text = clarify != null && !clarify.isBlank() ? clarify : reply;
             if (text == null || text.isBlank()) {
@@ -361,6 +363,29 @@ public class DagPlanner {
                 evidenceContext, attempt, pinnedRequirements, question).withScope(selected);
     }
 
+    /**
+     * 终态分支（出域/澄清）附带 plan 属协议违规：该 plan 不可执行，服务端丢弃并落
+     * PLAN_DROPPED 审计事件供观测违规率（eval 按模型原始输出独立判协议，不受影响）。
+     */
+    private static void recordPlanDropped(String traceId, TraceSink sink, JsonNode parsed, String reason) {
+        JsonNode plan = parsed.path("plan");
+        if (plan.isMissingNode() || plan.isNull()) {
+            return;
+        }
+        sink.record(new TraceEvent(traceId, "PLAN_DROPPED", TRACE_NAME,
+                MAPPER.createObjectNode().put("reason", reason).toString(),
+                plan.toString(), null, null, null, null, null, null));
+    }
+
+    /** 模型常在引用尾部带出自然语言标点（如 task_2,），匹配前归一；归一后为空按未提供处理。 */
+    private static String normalizeRef(String ref) {
+        if (ref == null) {
+            return null;
+        }
+        String trimmed = ref.replaceAll("^[\\s,，。、；;:：'\"“”‘’]+|[\\s,，。、；;:：'\"“”‘’]+$", "");
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
     private static TaskScope selectTask(JsonNode parsed, TaskState current,
             List<com.cexpilot.conversation.TaskSnapshot> candidates) {
         String action = textOrNull(parsed.path("task_action"));
@@ -368,8 +393,8 @@ public class DagPlanner {
         TaskScope.Action type;
         try { type = TaskScope.Action.valueOf(action.toUpperCase(java.util.Locale.ROOT)); }
         catch (Exception e) { throw new IllegalArgumentException("请确认您要继续当前任务、开启新任务，还是回到哪个历史任务。"); }
-        String ref = textOrNull(parsed.path("task_ref"));
-        String stateRef = textOrNull(parsed.path("state_ref"));
+        String ref = normalizeRef(textOrNull(parsed.path("task_ref")));
+        String stateRef = normalizeRef(textOrNull(parsed.path("state_ref")));
         if (type == TaskScope.Action.NEW) {
             if (ref != null || stateRef != null) throw new IllegalArgumentException("新任务不能同时引用历史任务，请明确要查询的新问题。");
             return new TaskScope(type, null);

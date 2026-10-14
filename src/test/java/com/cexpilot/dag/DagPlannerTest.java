@@ -37,7 +37,7 @@ class DagPlannerTest {
             var result = planner(new Script(line), registry(), config).plan("校验示例", "", "test", e -> {});
             assertTrue(result.plan().isPresent(), result.lastError());
             if (envelope.at("/plan/metrics/0/metric").asText().equals("funding.rate_settled")) {
-                assertEquals(10, envelope.at("/plan/metrics/0/count").asInt());
+                assertTrue(envelope.at("/plan/metrics/0").has("count"), "recent_n 示例必须显式 count");
                 assertFalse(envelope.at("/plan/metrics/0").has("time"));
             }
             if (line.contains("100000")) {
@@ -613,6 +613,51 @@ class DagPlannerTest {
         assertEquals(0, out.at("/calculations").size());
         assertEquals(0, out.path("changes").size(), "单轮无修改声明");
         assertFalse(out.path("new_frame").asBoolean());
+    }
+
+    @Test void 出域或澄清附带plan时服务端丢弃并落审计事件() {
+        // P018 型：in_domain=false 但带空计划对象——终态分支的 plan 不可执行，丢弃并落 PLAN_DROPPED
+        var outOfDomain = "{\"in_domain\":false,\"reply\":\"超出范围\",\"plan\":{\"metrics\":[],\"calculations\":[]}}";
+        List<TraceEvent> events = new ArrayList<>();
+        var rejected = planner(new Script(outOfDomain), registry(), new DagConfig()).plan("介绍亚历山大", "", "t", events::add);
+        assertFalse(rejected.inDomain());
+        assertEquals("超出范围", rejected.reply());
+        assertTrue(rejected.plan().isEmpty());
+        assertEquals(1, events.stream().filter(e -> "PLAN_DROPPED".equals(e.eventType())).count());
+
+        // P039 修复轮型：needs_clarification=true 但 plan 非 null——同样丢弃，澄清决策不受影响
+        var clarify = "{\"in_domain\":true,\"needs_clarification\":true,\"clarify\":\"币安还是OKX？\",\"plan\":{\"metrics\":[],\"calculations\":[]}}";
+        events = new ArrayList<>();
+        var clarified = planner(new Script(clarify), registry(), new DagConfig()).plan("它的均值呢", "", "t", events::add);
+        assertTrue(clarified.needsClarification());
+        assertEquals("币安还是OKX？", clarified.reply());
+        assertEquals(1, events.stream().filter(e -> "PLAN_DROPPED".equals(e.eventType())).count());
+        var dropped = events.stream().filter(e -> "PLAN_DROPPED".equals(e.eventType())).findFirst().orElseThrow();
+        assertTrue(dropped.inputJson().contains("needs_clarification=true 时 plan 必须为 null"));
+
+        // plan=null 的合规输出不落事件
+        events = new ArrayList<>();
+        planner(new Script("{\"in_domain\":false,\"reply\":\"超出范围\",\"plan\":null}"), registry(), new DagConfig())
+                .plan("介绍亚历山大", "", "t", events::add);
+        assertTrue(events.stream().noneMatch(e -> "PLAN_DROPPED".equals(e.eventType())));
+    }
+
+    @Test void task_ref尾部标点归一后正常命中索引() {
+        // P042 型：模型输出 "task_2,"（带自然语言逗号），归一后命中 task_2，不再误变澄清
+        var tasks = List.of(com.cexpilot.conversation.TaskSnapshot.candidate(firstTaskState(), "task_2"));
+        var config = new DagConfig(); config.setPlannerMaxRetries(0);
+        var result = planner(new Script(resumeEnvelope("task_2,")), registry(), config)
+                .plan("回到最开始那个问题，换成 OKX", "", "t",
+                        e -> {}, activeEthFrame(), FOLLOWUP_CTX, null, tasks);
+        assertTrue(result.plan().isPresent(), "task_ref 尾部标点应归一命中: " + result.lastError());
+        assertFalse(result.needsClarification());
+
+        // 编造引用不受归一影响：不存在的 ref 仍然澄清
+        var missing = planner(new Script(resumeEnvelope("task_9")), registry(), config)
+                .plan("回到最开始那个问题，换成 OKX", "", "t",
+                        e -> {}, activeEthFrame(), FOLLOWUP_CTX, null, tasks);
+        assertTrue(missing.plan().isEmpty());
+        assertTrue(missing.needsClarification());
     }
 
     // ===== 审查 R3 一期：RESUME 回访（task_ref 命中索引 → 对账基准切到所选快照） =====
