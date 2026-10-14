@@ -176,6 +176,10 @@
   var progressBox = document.getElementById('progress');
 
   var conversationId = null;
+  // 每个页面自己维护；不能用共享 localStorage 静默覆盖另一个标签页看到的上下文。
+  var parentTurnId = '';
+  var historyLoading = true;
+  var contextConflict = false;
   var pending = false;
 
   // 执行进度框：请求期间显示在输入框上方，逐行追加阶段文案，结束后隐藏
@@ -199,7 +203,7 @@
   function autoResize() {
     textarea.style.height = 'auto';
     textarea.style.height = Math.min(textarea.scrollHeight, 180) + 'px';
-    sendBtn.disabled = pending || textarea.value.trim() === '';
+    sendBtn.disabled = pending || historyLoading || contextConflict || textarea.value.trim() === '';
   }
 
   function scrollToBottom() {
@@ -230,7 +234,7 @@
 
   function send() {
     var question = textarea.value.trim();
-    if (!question || pending) return;
+    if (!question || pending || historyLoading || contextConflict) return;
 
     app.className = 'chatting';
     pending = true;
@@ -242,6 +246,7 @@
     var loadingEl = addLoading();
     var answerDiv = null;
     var answerBubble = null;
+    var terminalReceived = false;
 
     function appendDelta(text) {
       if (!answerDiv) {
@@ -271,6 +276,8 @@
       } else if (name === 'delta') {
         appendDelta(payload.text);
       } else if (name === 'done') {
+        terminalReceived = true;
+        if (!payload.busy && payload.turnId) parentTurnId = payload.turnId;
         hideProgress();
         if (!answerDiv) {
           loadingEl.remove();
@@ -278,6 +285,10 @@
         }
         appendMeta(answerDiv, payload.toolCalls, payload.durationMs, payload.traceId);
       } else if (name === 'error') {
+        terminalReceived = true;
+        // meta 只是请求开始；只有 done 或已提交失败的 error 才能推进父轮次。
+        if (payload.turnId) parentTurnId = payload.turnId;
+        if (payload.code === 'CONTEXT_CONFLICT' || !payload.turnId) requireHistoryRefresh();
         hideProgress();
         loadingEl.remove();
         addMessage('error', payload.error || '请求失败，请稍后再试');
@@ -288,6 +299,7 @@
       return reader.read().then(function (r) {
         if (r.done) {
           if (buffer.trim()) handleEvent(buffer);
+          if (!terminalReceived) throw new Error('连接中断，结果尚未确认，请刷新历史后继续。');
           return;
         }
         buffer += decoder.decode(r.value, { stream: true });
@@ -305,6 +317,7 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         conversationId: conversationId,
+        parentTurnId: parentTurnId,
         question: question,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || null
       })
@@ -312,12 +325,14 @@
       .then(function (res) {
         if (!res.ok || !res.body) {
           return res.json().then(function (body) {
+            if (body.code === 'CONTEXT_CONFLICT') requireHistoryRefresh();
             throw new Error(body.error || '请求失败，请稍后再试');
           });
         }
         return pump(res.body.getReader(), new TextDecoder('utf-8'), '');
       })
       .catch(function (e) {
+        requireHistoryRefresh();
         hideProgress();
         loadingEl.remove();
         addMessage('error', e.message || '网络异常，请稍后再试');
@@ -327,6 +342,17 @@
         autoResize();
         textarea.focus();
       });
+  }
+
+  function requireHistoryRefresh() {
+    if (contextConflict) return;
+    contextConflict = true;
+    var div = addMessage('error', '请先刷新历史，确认当前对话后再提问。');
+    var button = document.createElement('button');
+    button.textContent = '刷新历史';
+    button.addEventListener('click', function () { window.location.reload(); });
+    div.querySelector('.bubble').appendChild(button);
+    autoResize();
   }
 
   // 回答下方的 meta 行：可选的工具统计 + trace 回放链接
@@ -349,10 +375,14 @@
   // 页面加载时拉取该访客（cexpilot_uid cookie）最近会话的全部问答历史并回显
   function loadHistory() {
     fetch('/api/conversation/latest')
-      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (res) {
+        if (!res.ok) throw new Error('历史读取失败');
+        return res.json();
+      })
       .then(function (data) {
         if (!data || !data.conversationId || !data.messages || data.messages.length === 0) return;
         conversationId = data.conversationId;
+        parentTurnId = data.parentTurnId || '';
         app.className = 'chatting';
         data.messages.forEach(function (m) {
           addMessage('user', m.question);
@@ -362,7 +392,8 @@
           }
         });
       })
-      .catch(function () { /* 历史拉取失败不阻塞提问 */ });
+      .catch(function () { requireHistoryRefresh(); })
+      .finally(function () { historyLoading = false; autoResize(); });
   }
 
   textarea.addEventListener('input', autoResize);

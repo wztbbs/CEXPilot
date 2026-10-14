@@ -1,0 +1,1446 @@
+{
+  "format_version": 1,
+  "suite_id": "planner-v1",
+  "description": "按逻辑计划契约组织的种子用例；label_source=repository_contract，尚未经过人工/旗舰模型实测校准。实际prompt与标注版本冲突必须UNCERTAIN。",
+  "cases": [
+    {
+      "id": "P001",
+      "title": "中文别名与当前成交价",
+      "question": "币安的比特币 USDT 永续现在成交价是多少？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "shape:snapshot",
+        "instrument:alias"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "shape:snapshot",
+        "instrument:alias"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P001.1",
+          "dimension": "decision",
+          "expectation": "in_domain=true，应生成可执行计划。"
+        },
+        {
+          "id": "P001.2",
+          "dimension": "instrument",
+          "expectation": "币安=binance，比特币=BTC，产品为 USDT 报价/结算永续。"
+        },
+        {
+          "id": "P001.3",
+          "dimension": "metric_shape",
+          "expectation": "使用 price.last/snapshot，不能用 mark.price、index.price 或区间 close 替代。"
+        },
+        {
+          "id": "P001.4",
+          "dimension": "minimality",
+          "expectation": "只查询当前成交价；无时间窗口，无计算节点和无关指标。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P002",
+      "title": "标记价和指数价分列",
+      "question": "分别列出 OKX 的 ETH-USDT 永续当前标记价格和指数价格，不用比较。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "shape:snapshot",
+        "metric:mark_index",
+        "minimality:no_calculation"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "shape:snapshot",
+        "metric:mark_index",
+        "minimality:no_calculation"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P002.1",
+          "dimension": "instrument",
+          "expectation": "两项均为 okx 的 ETH/USDT 永续。"
+        },
+        {
+          "id": "P002.2",
+          "dimension": "metric_shape",
+          "expectation": "分别查询 mark.price/snapshot 和 index.price/snapshot。"
+        },
+        {
+          "id": "P002.3",
+          "dimension": "minimality",
+          "expectation": "calculations=[]；不得擅自安排差值、基差、均值或比较。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P003",
+      "title": "官方24h多指标",
+      "question": "币安 BTC-USDT 永续官方24小时涨跌幅和官方24小时成交量分别是多少？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "shape:official_24h",
+        "time:official_vs_calendar"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "shape:official_24h",
+        "time:official_vs_calendar"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P003.1",
+          "dimension": "metric_shape",
+          "expectation": "分别使用 price.change_pct_24h/official_24h 与 trade.volume_24h/official_24h。"
+        },
+        {
+          "id": "P003.2",
+          "dimension": "instrument",
+          "expectation": "binance，BTC，USDT 永续。"
+        },
+        {
+          "id": "P003.3",
+          "dimension": "time",
+          "expectation": "官方窗口不能替换成昨天自然日或程序自算滚动窗口；不应带 time。"
+        },
+        {
+          "id": "P003.4",
+          "dimension": "minimality",
+          "expectation": "分别列值，不安排额外计算。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P004",
+      "title": "昨天成交额成品指标",
+      "question": "币安 BTC-USDT 永续昨天一整天的成交额是多少？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "shape:range_statistic",
+        "time:calendar_period",
+        "time:full_period",
+        "metric:volume_vs_turnover"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "shape:range_statistic",
+        "time:calendar_period",
+        "time:full_period",
+        "metric:volume_vs_turnover"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P004.1",
+          "dimension": "metric_shape",
+          "expectation": "使用 trade.turnover/range_statistic；不能用 trade.volume 或成交量乘现价。"
+        },
+        {
+          "id": "P004.2",
+          "dimension": "time",
+          "expectation": "昨天完整自然日：calendar_period day offset=-1 full/full_period，或同一锚点等价绝对区间。"
+        },
+        {
+          "id": "P004.3",
+          "dimension": "parameters",
+          "expectation": "用户未指定粒度，按契约省略 interval 让程序选；不得主动包含未收盘数据。"
+        },
+        {
+          "id": "P004.4",
+          "dimension": "minimality",
+          "expectation": "成品统计可直接回答，不重复安排 sum 或 unrelated 查询。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P005",
+      "title": "明确按请求时刻回溯24h",
+      "question": "查币安 BTC-USDT 永续从本次请求时刻往前精确回溯24小时的成交额，不要官方24h口径。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "time:rolling_window",
+        "time:official_vs_rolling"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "time:rolling_window",
+        "time:official_vs_rolling"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P005.1",
+          "dimension": "metric_shape",
+          "expectation": "trade.turnover/range_statistic，不使用 trade.turnover_24h/official_24h。"
+        },
+        {
+          "id": "P005.2",
+          "dimension": "time",
+          "expectation": "time 为 rolling_window duration=24 hour（或等价1day），终点为请求时刻；不是自然日。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P006",
+      "title": "今天截至请求时刻",
+      "question": "币安 BTC-USDT 永续今天零点到现在的成交量是多少？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "time:to_request_time",
+        "metric:volume_vs_turnover"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "time:to_request_time",
+        "metric:volume_vs_turnover"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P006.1",
+          "dimension": "metric_shape",
+          "expectation": "trade.volume/range_statistic，不能用官方24h成交量。"
+        },
+        {
+          "id": "P006.2",
+          "dimension": "time",
+          "expectation": "当前自然日开始至请求时刻：calendar_period day offset=0 segment=full extent=to_request_time，或等价区间。"
+        },
+        {
+          "id": "P006.3",
+          "dimension": "parameters",
+          "expectation": "没有要求纳入未收盘数据，不应自动 include_unclosed=true。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P007",
+      "title": "相对日期时段",
+      "question": "币安 BTC-USDT 永续昨天15点到17点最高成交价是多少？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "time:relative_day_range"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "time:relative_day_range"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P007.1",
+          "dimension": "metric_shape",
+          "expectation": "price.high/range_statistic。"
+        },
+        {
+          "id": "P007.2",
+          "dimension": "time",
+          "expectation": "relative_day_range start day_offset=-1 time=15:00:00、end=-1 17:00:00，继承 Asia/Shanghai 或等价绝对区间。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P008",
+      "title": "绝对日期与结束日",
+      "question": "币安 BTC-USDT 永续2026年10月1日到10月3日（包含3日全天）的成交额是多少？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "time:absolute_range",
+        "time:inclusive_date"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "time:absolute_range",
+        "time:inclusive_date"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P008.1",
+          "dimension": "metric_shape",
+          "expectation": "trade.turnover/range_statistic。"
+        },
+        {
+          "id": "P008.2",
+          "dimension": "time",
+          "expectation": "绝对区间开始2026-10-01；结束包含10月3日全天，可 inclusive_date end=2026-10-03，或 exclusive end=2026-10-04零点；不能只到3日零点。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P009",
+      "title": "查询显式时区",
+      "question": "按纽约时区，查币安 BTC-USDT 永续昨天完整自然日的最高成交价。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "time:explicit_timezone"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "time:explicit_timezone"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P009.1",
+          "dimension": "metric_shape",
+          "expectation": "price.high/range_statistic。"
+        },
+        {
+          "id": "P009.2",
+          "dimension": "time",
+          "expectation": "查询 time.timezone=America/New_York；昨天自然日按纽约而不是请求默认上海时区。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P010",
+      "title": "小时序列与未收盘",
+      "question": "列出币安 BTC-USDT 永续最近6小时每根1小时K线的收盘价，把未收盘的也包括进来。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "shape:time_series",
+        "parameters:interval",
+        "parameters:include_unclosed"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "shape:time_series",
+        "parameters:interval",
+        "parameters:include_unclosed"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P010.1",
+          "dimension": "metric_shape",
+          "expectation": "price.close/time_series，而非单个区间 close。"
+        },
+        {
+          "id": "P010.2",
+          "dimension": "time",
+          "expectation": "rolling_window 6 hour 或等价窗口。"
+        },
+        {
+          "id": "P010.3",
+          "dimension": "parameters",
+          "expectation": "interval=1h、include_unclosed=true，不能把6小时窗口当K线周期。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P011",
+      "title": "最近N期",
+      "question": "列出币安 BTC-USDT 永续最近10期已结算资金费率。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "shape:recent_n",
+        "parameters:count"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "shape:recent_n",
+        "parameters:count"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P011.1",
+          "dimension": "metric_shape",
+          "expectation": "funding.rate_settled/recent_n。"
+        },
+        {
+          "id": "P011.2",
+          "dimension": "parameters",
+          "expectation": "count=10；完全省略 time/interval/include_unclosed。"
+        },
+        {
+          "id": "P011.3",
+          "dimension": "minimality",
+          "expectation": "只列费率，不安排 avg/sum 或当前未结算费率查询。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P012",
+      "title": "盘口档位",
+      "question": "查 OKX BTC-USDT 永续当前20档盘口的买卖挂单量不平衡度。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "parameters:depth",
+        "metric:imbalance"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "parameters:depth",
+        "metric:imbalance"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P012.1",
+          "dimension": "metric_shape",
+          "expectation": "orderbook.imbalance/snapshot；不把不平衡度理解成买盘占总量比例。"
+        },
+        {
+          "id": "P012.2",
+          "dimension": "parameters",
+          "expectation": "depth=20；无 time/count/interval。"
+        },
+        {
+          "id": "P012.3",
+          "dimension": "instrument",
+          "expectation": "okx、BTC、USDT 永续。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P013",
+      "title": "未支持的粒度",
+      "question": "列出币安 BTC-USDT 永续昨天每根1分钟K线收盘价，必须是1分钟粒度。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "decision:unsupported",
+        "parameters:unsupported_interval"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "decision:unsupported",
+        "parameters:unsupported_interval"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P013.1",
+          "dimension": "decision",
+          "expectation": "按实际目录判断：若 price.close 不支持1m，应 plan=null 并说明粒度缺口；若目录已经支持1m，标注版本冲突为UNCERTAIN。"
+        },
+        {
+          "id": "P013.2",
+          "dimension": "parameters",
+          "expectation": "不能悄悄把明确要求的1m改成5m/1h或丢弃粒度。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P014",
+      "title": "资金费率时间窗口",
+      "question": "币安 BTC-USDT 永续过去一周已结算资金费率的平均值是多少？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "decision:unsupported",
+        "time:window_vs_count"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "decision:unsupported",
+        "time:window_vs_count"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P014.1",
+          "dimension": "decision",
+          "expectation": "按现有目录资金费率未接入时间窗口形态，应 plan=null、reply明确该缺口；如果实际目录能力变化，标UNCERTAIN。"
+        },
+        {
+          "id": "P014.2",
+          "dimension": "time",
+          "expectation": "不能把一周改为7期、21期或按猜测周期换算count。"
+        },
+        {
+          "id": "P014.3",
+          "dimension": "minimality",
+          "expectation": "核心平均值无法产生时不安排无关当前价格或最近N期取数。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P015",
+      "title": "明确现货产品",
+      "question": "币安 BTC-USDT 现货现在成交价是多少？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "instrument:unsupported_market",
+        "decision:unsupported"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "instrument:unsupported_market",
+        "decision:unsupported"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P015.1",
+          "dimension": "decision",
+          "expectation": "属于加密领域；当前仅永续能力时应 in_domain=true、plan=null，说明现货未接入。"
+        },
+        {
+          "id": "P015.2",
+          "dimension": "instrument",
+          "expectation": "不能把用户明确要求的现货悄悄改成perpetual。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P016",
+      "title": "明确USDC报价",
+      "question": "币安 BTC-USDC 永续昨天成交额是多少？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "instrument:unsupported_quote"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "instrument:unsupported_quote"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P016.1",
+          "dimension": "decision",
+          "expectation": "当前仅USDT报价/结算能力时应 plan=null，说明产品缺口。"
+        },
+        {
+          "id": "P016.2",
+          "dimension": "instrument",
+          "expectation": "不能把USDC改成USDT或把BTC-USDC拆错基础币。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P017",
+      "title": "独立问题部分可答",
+      "question": "币安 BTC-USDT 永续当前未结算资金费率是多少？同时列出最近10期已结算费率。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "decision:partial",
+        "metric:settled_vs_current"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "decision:partial",
+        "metric:settled_vs_current"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P017.1",
+          "dimension": "decision",
+          "expectation": "支持部分生成计划；reply披露当前未结算费率未接入，不要拒绝整个任务。"
+        },
+        {
+          "id": "P017.2",
+          "dimension": "metric_shape",
+          "expectation": "只查询 funding.rate_settled/recent_n/count=10；已结算值不能冒充当前未结算值。"
+        },
+        {
+          "id": "P017.3",
+          "dimension": "minimality",
+          "expectation": "只分别查询费率，不自动加平均、累计等计算。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P018",
+      "title": "出域",
+      "question": "介绍一下亚历山大大帝的生平。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "decision:out_of_domain"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "decision:out_of_domain"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P018.1",
+          "dimension": "decision",
+          "expectation": "in_domain=false、plan=null，简短说明服务范围。"
+        },
+        {
+          "id": "P018.2",
+          "dimension": "minimality",
+          "expectation": "不得安排任何行情查询或以reply凭记忆回答历史传记。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": false
+      }
+    },
+    {
+      "id": "P019",
+      "title": "缺必要查询对象",
+      "question": "币安上最近10期已结算资金费率分别是多少？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "decision:clarification",
+        "instrument:missing_base"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "decision:clarification",
+        "instrument:missing_base"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P019.1",
+          "dimension": "decision",
+          "expectation": "无历史上下文且没有币种，应 needs_clarification=true、plan=null，clarify或reply追问币种。"
+        },
+        {
+          "id": "P019.2",
+          "dimension": "instrument",
+          "expectation": "不得擅自复制示例BTC/ETH作为查询对象。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true,
+        "needs_clarification": true
+      }
+    },
+    {
+      "id": "P020",
+      "title": "大小关系算子",
+      "question": "昨天币安和 OKX 的 BTC-USDT 永续涨跌幅，哪边更高？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "operator:compare",
+        "calculation:cross_exchange"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "operator:compare",
+        "calculation:cross_exchange"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P020.1",
+          "dimension": "metric_shape",
+          "expectation": "两侧同口径 price.change_pct/range_statistic；不能用官方24h或快照。"
+        },
+        {
+          "id": "P020.2",
+          "dimension": "time",
+          "expectation": "两侧同一个昨天自然日。"
+        },
+        {
+          "id": "P020.3",
+          "dimension": "calculation",
+          "expectation": "显式compare两侧value；left/right对象应在计划中可追踪。不仅取两个数留给Answer比较。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P021",
+      "title": "百分点差与方向",
+      "question": "昨天币安 BTC-USDT 永续涨跌幅减去 OKX 的涨跌幅，相差多少个百分点？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "operator:difference",
+        "calculation:direction",
+        "calculation:percentage_points"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "operator:difference",
+        "calculation:direction",
+        "calculation:percentage_points"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P021.1",
+          "dimension": "metric_shape",
+          "expectation": "两侧 price.change_pct/range_statistic，同一昨天自然日。"
+        },
+        {
+          "id": "P021.2",
+          "dimension": "calculation",
+          "expectation": "difference left=币安、right=OKX；不是relative_change或ratio。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P022",
+      "title": "倍数",
+      "question": "昨天币安 BTC-USDT 永续成交额是 OKX 的多少倍？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "operator:ratio",
+        "calculation:direction"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "operator:ratio",
+        "calculation:direction"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P022.1",
+          "dimension": "metric_shape",
+          "expectation": "两侧 trade.turnover/range_statistic，同一窗口与产品。"
+        },
+        {
+          "id": "P022.2",
+          "dimension": "calculation",
+          "expectation": "ratio left=币安、right=OKX；不是relative_change增长率。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P023",
+      "title": "相对变化基准",
+      "question": "昨天 OKX 的 BTC-USDT 永续成交额比币安高百分之多少？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "operator:relative_change",
+        "calculation:baseline"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "operator:relative_change",
+        "calculation:baseline"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P023.1",
+          "dimension": "metric_shape",
+          "expectation": "两侧 trade.turnover/range_statistic。"
+        },
+        {
+          "id": "P023.2",
+          "dimension": "time",
+          "expectation": "同一昨天完整自然日。"
+        },
+        {
+          "id": "P023.3",
+          "dimension": "calculation",
+          "expectation": "relative_change current=OKX.value、baseline=binance.value，不能接反。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P024",
+      "title": "用户常量与现价基准",
+      "question": "币安 BTC-USDT 永续从现价涨到100000 USDT，需要上涨百分之多少？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "operator:relative_change",
+        "calculation:explicit_constant"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "operator:relative_change",
+        "calculation:explicit_constant"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P024.1",
+          "dimension": "metric_shape",
+          "expectation": "price.last/snapshot作为现价来源。"
+        },
+        {
+          "id": "P024.2",
+          "dimension": "calculation",
+          "expectation": "relative_change current为用户给定100000常量，baseline为现价引用；不能用目标价作分母、不能自填猜测现价。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P025",
+      "title": "序列等权平均",
+      "question": "求币安 BTC-USDT 永续昨天1小时K线收盘价的等权算术平均。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "operator:avg",
+        "calculation:series"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "operator:avg",
+        "calculation:series"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P025.1",
+          "dimension": "metric_shape",
+          "expectation": "price.close/time_series，昨天完整自然日。"
+        },
+        {
+          "id": "P025.2",
+          "dimension": "parameters",
+          "expectation": "interval=1h。"
+        },
+        {
+          "id": "P025.3",
+          "dimension": "calculation",
+          "expectation": "avg kind=field、collection引用该序列samples、field=value；不能平均一个区间收盘值或官方24h价格。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P026",
+      "title": "最近N期求和",
+      "question": "币安 BTC-USDT 永续最近10期已结算资金费率加起来是多少？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "operator:sum",
+        "calculation:series",
+        "time:window_vs_count"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "operator:sum",
+        "calculation:series",
+        "time:window_vs_count"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P026.1",
+          "dimension": "metric_shape",
+          "expectation": "funding.rate_settled/recent_n/count=10，无时间窗口。"
+        },
+        {
+          "id": "P026.2",
+          "dimension": "calculation",
+          "expectation": "sum对该序列samples的value求和，不能调用avg或漏掉计算。"
+        },
+        {
+          "id": "P026.3",
+          "dimension": "time",
+          "expectation": "不把10期样本合计称为一天、一周等时间窗口累计值。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P027",
+      "title": "序列最小值",
+      "question": "币安 BTC-USDT 永续最近10期已结算资金费率里最小的一期是多少，什么时候？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "operator:min",
+        "calculation:series"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "operator:min",
+        "calculation:series"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P027.1",
+          "dimension": "metric_shape",
+          "expectation": "funding.rate_settled/recent_n/count=10。"
+        },
+        {
+          "id": "P027.2",
+          "dimension": "calculation",
+          "expectation": "min kind=field、collection引用samples、field=value；通过原item保留对应结算时间，不仅取数留给Answer找最小值。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P028",
+      "title": "序列最大值",
+      "question": "OKX BTC-USDT 永续最近10期已结算资金费率里最大的一期是多少，什么时候？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "operator:max",
+        "calculation:series"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "operator:max",
+        "calculation:series"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P028.1",
+          "dimension": "metric_shape",
+          "expectation": "okx、funding.rate_settled/recent_n/count=10。"
+        },
+        {
+          "id": "P028.2",
+          "dimension": "calculation",
+          "expectation": "max kind=field、collection引用samples、field=value，保留命中item。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P029",
+      "title": "成品收益率简单年化",
+      "question": "币安 BTC-USDT 永续昨天价格区间收益率折算成简单年化是多少？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "operator:annualize",
+        "calculation:annualize_source"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "operator:annualize",
+        "calculation:annualize_source"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P029.1",
+          "dimension": "metric_shape",
+          "expectation": "price.change_pct/range_statistic，昨天自然日。"
+        },
+        {
+          "id": "P029.2",
+          "dimension": "calculation",
+          "expectation": "annualize basis=holding_return、method=simple、rate_unit=percent；rate引用同一指标value，period.value引用同一指标observation_seconds、unit=second。不能猜测实际覆盖时长或引用价格金额。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P030",
+      "title": "年化方法缺失需澄清",
+      "question": "币安 BTC-USDT 永续最近一期已结算资金费率年化是多少？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "decision:clarification",
+        "calculation:annualize_method"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "decision:clarification",
+        "calculation:annualize_method"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P030.1",
+          "dimension": "decision",
+          "expectation": "用户没有指定简单/复利方法，按当前契约需要澄清方法，plan=null，不能擅自默认。"
+        },
+        {
+          "id": "P030.2",
+          "dimension": "calculation",
+          "expectation": "不能猜测结算周期，也不能安排无关价格指标。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true,
+        "needs_clarification": true
+      }
+    },
+    {
+      "id": "P031",
+      "title": "纯显式常量计算",
+      "question": "收益率是2%，持有期30天，用365天年基准按复利折算成年化。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "operator:annualize",
+        "calculation:explicit_constant",
+        "minimality:calculation_only"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "operator:annualize",
+        "calculation:explicit_constant",
+        "minimality:calculation_only"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P031.1",
+          "dimension": "decision",
+          "expectation": "按当前能力可直接计算，in_domain=true。"
+        },
+        {
+          "id": "P031.2",
+          "dimension": "calculation",
+          "expectation": "annualize basis=holding_return method=compound rate=2 rate_unit=percent period.value=30 unit=day year_days=365，或等价明确常量表示。"
+        },
+        {
+          "id": "P031.3",
+          "dimension": "minimality",
+          "expectation": "metrics=[]，不凭空查询币种或交易所，也不在reply里直接算答案。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P032",
+      "title": "多层计算与分支引用",
+      "question": "分别算币安和 OKX BTC-USDT 永续昨天1小时K线收盘价的等权平均，再算币安均值减 OKX 均值。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "operator:avg",
+        "operator:difference",
+        "calculation:multi_layer"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "operator:avg",
+        "operator:difference",
+        "calculation:multi_layer"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P032.1",
+          "dimension": "metric_shape",
+          "expectation": "两侧 price.close/time_series，同一昨天窗口与1h粒度。"
+        },
+        {
+          "id": "P032.2",
+          "dimension": "calculation",
+          "expectation": "两侧各avg(samples.value)，再difference left=币安avg.value、right=OKXavg.value。不能混合两所序列平均、交换方向或漏掉最后差值。"
+        },
+        {
+          "id": "P032.3",
+          "dimension": "minimality",
+          "expectation": "只安排服务于两侧均值及差值的节点；独立组/多交易所组、节点顺序和id可不同。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P033",
+      "title": "成品买方占比",
+      "question": "币安 BTC-USDT 永续最近1小时主动买成交量占总成交量的比例是多少？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "metric:precomputed",
+        "parameters:binding_constraints"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "metric:precomputed",
+        "parameters:binding_constraints"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P033.1",
+          "dimension": "metric_shape",
+          "expectation": "优先 taker.buy_ratio/range_statistic，不用orderbook.imbalance或taker买卖之比替代占总量。"
+        },
+        {
+          "id": "P033.2",
+          "dimension": "time",
+          "expectation": "rolling_window 1 hour。"
+        },
+        {
+          "id": "P033.3",
+          "dimension": "minimality",
+          "expectation": "已有成品指标，不重复拆buy/sell后再安排ratio；不填写目录未开放的interval。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P034",
+      "title": "跨币基础数量不可比",
+      "question": "币安 BTC-USDT 和 ETH-USDT 永续昨天基础币成交量直接相加，总共有多少枚币？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "calculation:unit_compatibility",
+        "decision:unsupported"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "calculation:unit_compatibility",
+        "decision:unsupported"
+      ],
+      "setup_questions": [],
+      "criteria": [
+        {
+          "id": "P034.1",
+          "dimension": "decision",
+          "expectation": "按当前契约不能把BTC数量和ETH数量直接求和当同单位总数，应说明口径不兼容，单核心无有效结果时plan=null。"
+        },
+        {
+          "id": "P034.2",
+          "dimension": "calculation",
+          "expectation": "不能对trade.volume跨基础币求sum，也不能擅自替换成成交额回答。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P035",
+      "title": "更换交易所继承",
+      "question": "那 OKX 呢？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:exchange_change",
+        "context:inheritance"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:exchange_change",
+        "context:inheritance"
+      ],
+      "setup_questions": [
+        "查币安 BTC-USDT 永续昨天1小时K线统计的最高成交价。"
+      ],
+      "criteria": [
+        {
+          "id": "P035.1",
+          "dimension": "context",
+          "expectation": "仅换交易所为okx，保留BTC、price.high、range_statistic、原昨天固定窗口及interval=1h；优先实际活动frame。"
+        },
+        {
+          "id": "P035.2",
+          "dimension": "time",
+          "expectation": "继承原已消解历史区间；不能因跨日重新解释昨天或换成最新快照。"
+        },
+        {
+          "id": "P035.3",
+          "dimension": "context",
+          "expectation": "changes应声明exchange；不是新话题new_frame=true。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P036",
+      "title": "更换币种保持当前类",
+      "question": "那 ETH 呢？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:base_change"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:base_change"
+      ],
+      "setup_questions": [
+        "币安 BTC-USDT 永续现在成交价是多少？"
+      ],
+      "criteria": [
+        {
+          "id": "P036.1",
+          "dimension": "context",
+          "expectation": "继承binance和当前price.last/snapshot，只把base改ETH；changes包含base。"
+        },
+        {
+          "id": "P036.2",
+          "dimension": "metric_shape",
+          "expectation": "仍是当前价，不继承旧观测时间作历史价，不复制旧BTC事实。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P037",
+      "title": "原样本集复用",
+      "question": "刚才那10期的平均值呢？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:pinned_result",
+        "operator:avg"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:pinned_result",
+        "operator:avg"
+      ],
+      "setup_questions": [
+        "列出币安 BTC-USDT 永续最近10期已结算资金费率。"
+      ],
+      "criteria": [
+        {
+          "id": "P037.1",
+          "dimension": "context",
+          "expectation": "若实际prompt有匹配已验证样本候选，应 pinned_result + 对应真实evidence_ref，保留原binance/BTC/settled/count=10；不能重新取最新集合。如果候选缺失，则明确澄清原快照不可恢复，不编造ref；此复用分支缺少前提时标UNCERTAIN。"
+        },
+        {
+          "id": "P037.2",
+          "dimension": "calculation",
+          "expectation": "候选可用时avg对原samples.value，不引用旧answer文字数字作常量。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P038",
+      "title": "显式刷新样本集",
+      "question": "重新取最新10期，算平均值。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:latest",
+        "operator:avg"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:latest",
+        "operator:avg"
+      ],
+      "setup_questions": [
+        "列出币安 BTC-USDT 永续最近10期已结算资金费率。"
+      ],
+      "criteria": [
+        {
+          "id": "P038.1",
+          "dimension": "context",
+          "expectation": "继承binance/BTC和已结算费率，重新取数；reference_mode省略或latest，不能pinned旧事实。"
+        },
+        {
+          "id": "P038.2",
+          "dimension": "metric_shape",
+          "expectation": "funding.rate_settled/recent_n/count=10。"
+        },
+        {
+          "id": "P038.3",
+          "dimension": "calculation",
+          "expectation": "avg该最新samples.value；有明确可执行能力不应拒答。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P039",
+      "title": "多候选指代需澄清",
+      "question": "它的均值呢？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:ambiguous",
+        "decision:clarification"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:ambiguous",
+        "decision:clarification"
+      ],
+      "setup_questions": [
+        "分别列出币安和 OKX BTC-USDT 永续最近10期已结算资金费率。"
+      ],
+      "criteria": [
+        {
+          "id": "P039.1",
+          "dimension": "decision",
+          "expectation": "实际上下文有币安和OKX两组候选，应 needs_clarification=true、plan=null，追问哪组；不能默认第一组或将两所混合平均。"
+        },
+        {
+          "id": "P039.2",
+          "dimension": "context",
+          "expectation": "检查实际焦点和上下文。如果前置轮没建立两组候选，应标UNCERTAIN并指出未满足测试前提。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P040",
+      "title": "新话题不继承历史窗",
+      "question": "换个话题，币安 ETH-USDT 永续现在成交价是多少？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:new_frame"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:new_frame"
+      ],
+      "setup_questions": [
+        "查币安 BTC-USDT 永续昨天1小时K线统计的最高成交价。"
+      ],
+      "criteria": [
+        {
+          "id": "P040.1",
+          "dimension": "context",
+          "expectation": "new_frame=true，显式新话题不继承BTC、昨天历史窗口或旧粒度。"
+        },
+        {
+          "id": "P040.2",
+          "dimension": "metric_shape",
+          "expectation": "binance ETH price.last/snapshot，无time/interval。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true,
+        "new_frame": true
+      }
+    },
+    {
+      "id": "P041",
+      "title": "旧快照作为涨幅基准",
+      "question": "比刚才涨了百分之多少？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:pinned_result",
+        "calculation:baseline"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:pinned_result",
+        "calculation:baseline"
+      ],
+      "setup_questions": [
+        "币安 BTC-USDT 永续现在成交价是多少？"
+      ],
+      "criteria": [
+        {
+          "id": "P041.1",
+          "dimension": "context",
+          "expectation": "实际有可复用旧BTC成交价事实时，旧价 pinned_result + 真实evidence_ref，新价 latest另组；不能把历史answer数字当常量。如果旧快照不可恢复应明确澄清，不伪装成原样比较，复用前提缺失标UNCERTAIN。"
+        },
+        {
+          "id": "P041.2",
+          "dimension": "calculation",
+          "expectation": "relative_change current=新价引用、baseline=旧快照引用；同一产品/交易所，不能接反。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P042",
+      "title": "回访历史任务",
+      "question": "回到最开始那个问题，换成 OKX。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:resume_task"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:resume_task"
+      ],
+      "setup_questions": [
+        "按上海时区，查币安 BTC-USDT 永续昨天完整自然日的成交额。",
+        "币安 ETH-USDT 永续现在成交价是多少？"
+      ],
+      "criteria": [
+        {
+          "id": "P042.1",
+          "dimension": "context",
+          "expectation": "依据实际近期任务索引，task_action=RESUME、task_ref=第一个成交额任务的真实轮次ID；不能编造ID或沿用当前ETH任务。"
+        },
+        {
+          "id": "P042.2",
+          "dimension": "metric_shape",
+          "expectation": "okx BTC trade.turnover/range_statistic，继承第一任务的历史区间；changes声明exchange。"
+        },
+        {
+          "id": "P042.3",
+          "dimension": "context",
+          "expectation": "任务索引缺失或第一轮没有成为可回访任务时，应澄清；回访前提缺失标UNCERTAIN。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    }
+  ]
+}

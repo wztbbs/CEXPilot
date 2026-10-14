@@ -60,6 +60,36 @@ public final class InheritanceValidator {
     Set<String> diffKeys(QueryFrame frame, CompiledPlan plan, RequestContext requestContext) {
         List<EffectiveTarget> from = new java.util.ArrayList<>(frame.targets());
         List<EffectiveTarget> to = plan.targets();
+        List<EffectiveTarget> matches = matchTargets(from, to);
+        for (EffectiveTarget match : matches) if (match != null) from.remove(match);
+        Set<String> changed = new TreeSet<>();
+        for (int i = 0; i < to.size(); i++) {
+            EffectiveTarget planTarget = to.get(i);
+            EffectiveTarget match = matches.get(i);
+            if (match == null) {
+                changed.add("exchange");
+                changed.add("base");
+                changed.add("metric");
+                continue;
+            }
+            comparePair(changed, "exchange", match.exchange(), planTarget.exchange());
+            comparePair(changed, "base", baseOf(match), baseOf(planTarget));
+            comparePair(changed, "metric", match.metric(), planTarget.metric());
+            comparePair(changed, "shape", match.queryShape(), planTarget.queryShape());
+            comparePair(changed, "interval", intervalOf(match), intervalOf(planTarget));
+            comparePair(changed, "include_unclosed",
+                    String.valueOf(match.includeUnclosed()), String.valueOf(planTarget.includeUnclosed()));
+            comparePair(changed, "count", String.valueOf(match.count()), String.valueOf(planTarget.count()));
+            comparePair(changed, "depth", String.valueOf(match.depth()), String.valueOf(planTarget.depth()));
+            if (timeChanged(frame, match, planTarget, requestContext)) changed.add("time");
+        }
+        if (!from.isEmpty()) { changed.add("exchange"); changed.add("base"); changed.add("metric"); }
+        return changed;
+    }
+
+    /** 来源继承与实际 diff 共用同一套目标配对，不按单独字段集合猜测来源对象。 */
+    static List<EffectiveTarget> matchTargets(List<EffectiveTarget> previous, List<EffectiveTarget> to) {
+        List<EffectiveTarget> from = new java.util.ArrayList<>(previous);
         boolean singlePair = to.size() == 1 && from.size() == 1;
         // 先认领完全未变的目标，避免前面的变化节点抢走后面的正确配对。
         EffectiveTarget[] matches = new EffectiveTarget[to.size()];
@@ -77,35 +107,7 @@ public final class InheritanceValidator {
                 matches[i] = popMatch(from, to.get(i), singlePair);
             }
         }
-        Set<String> changed = new TreeSet<>();
-        for (int i = 0; i < to.size(); i++) {
-            EffectiveTarget planTarget = to.get(i);
-            EffectiveTarget match = matches[i];
-            if (match == null) {
-                changed.add("exchange");
-                changed.add("base");
-                changed.add("metric");
-                continue;
-            }
-            comparePair(changed, "exchange", match.exchange(), planTarget.exchange());
-            comparePair(changed, "base", baseOf(match), baseOf(planTarget));
-            comparePair(changed, "metric", match.metric(), planTarget.metric());
-            comparePair(changed, "shape", match.queryShape(), planTarget.queryShape());
-            comparePair(changed, "interval", intervalOf(match), intervalOf(planTarget));
-            comparePair(changed, "include_unclosed",
-                    String.valueOf(match.includeUnclosed()), String.valueOf(planTarget.includeUnclosed()));
-            comparePair(changed, "count", String.valueOf(match.count()), String.valueOf(planTarget.count()));
-            comparePair(changed, "depth", String.valueOf(match.depth()), String.valueOf(planTarget.depth()));
-            if (timeChanged(frame, match, planTarget, requestContext)) {
-                changed.add("time");
-            }
-        }
-        if (!from.isEmpty()) {
-            changed.add("exchange");
-            changed.add("base");
-            changed.add("metric");
-        }
-        return changed;
+        return java.util.Arrays.asList(matches);
     }
 
     /**
@@ -162,8 +164,18 @@ public final class InheritanceValidator {
      * 不是 JSON 逐字比。滚动窗口（recent 6h 这类）时长相同视为同一条件延续——集合随"现在"滚动，
      * 跨轮消解必然得到不同区间，不能算用户修改。
      */
-    private boolean timeChanged(QueryFrame frame, EffectiveTarget from, EffectiveTarget to,
+    boolean timeChanged(QueryFrame frame, EffectiveTarget from, EffectiveTarget to,
                                 RequestContext requestContext) {
+        return timeChanged(frame, from, to, requestContext, false);
+    }
+
+    /** 来源必须有可证明的等价条件；消解失败不能当成继承成立。 */
+    boolean sameTimeRequirement(QueryFrame frame, EffectiveTarget from, EffectiveTarget to, RequestContext context) {
+        return !timeChanged(frame, from, to, context, true);
+    }
+
+    private boolean timeChanged(QueryFrame frame, EffectiveTarget from, EffectiveTarget to,
+                                RequestContext requestContext, boolean changedOnFailure) {
         JsonNode frameTime = from.timeExpression();
         JsonNode planTime = to.timeExpression();
         if (frameTime == null || planTime == null) {
@@ -182,7 +194,7 @@ public final class InheritanceValidator {
                     || !frameRange.endExclusive().equals(planRange.endExclusive());
         } catch (Exception e) {
             // 无法消解时保持现有策略，由执行期时间校验处理。
-            return false;
+            return changedOnFailure;
         }
     }
 

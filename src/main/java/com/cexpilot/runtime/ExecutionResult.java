@@ -17,6 +17,7 @@ import java.util.List;
  * @param calculationCount 算子节点执行次数
  * @param httpRequestCount 本轮真实发出的交易所 HTTP 请求数（一个节点分页/重试会记多次）
  * @param savedFactIds     本轮新保存的事实 factId 列表（不含 REUSE_FACT 沿用的历史 factId）
+ * @param llmUsages        每次调用实际模型及其单价估算；null 仅兼容旧构造，未知 usage 的费用为 null
  */
 public record ExecutionResult(String answer,
                               JsonNode evidence,
@@ -32,7 +33,17 @@ public record ExecutionResult(String answer,
                               int metricFetchCount,
                               int calculationCount,
                               int httpRequestCount,
-                              List<String> savedFactIds, com.cexpilot.conversation.TaskScope taskScope) {
+                              List<String> savedFactIds, com.cexpilot.conversation.TaskScope taskScope,
+                              List<com.cexpilot.llm.LlmUsage> llmUsages) {
+
+    public ExecutionResult(String answer, JsonNode evidence, int toolCallCount, int steps, int promptTokens,
+            int completionTokens, String turnStatus, String clarify, int reusedFactCount, int plannerLlmCalls,
+            int answerLlmCalls, int metricFetchCount, int calculationCount, int httpRequestCount,
+            List<String> savedFactIds, com.cexpilot.conversation.TaskScope taskScope) {
+        this(answer, evidence, toolCallCount, steps, promptTokens, completionTokens, turnStatus, clarify,
+                reusedFactCount, plannerLlmCalls, answerLlmCalls, metricFetchCount, calculationCount,
+                httpRequestCount, savedFactIds, taskScope, null);
+    }
 
     public ExecutionResult(String answer, JsonNode evidence, int toolCallCount, int steps, int promptTokens,
             int completionTokens, String turnStatus, String clarify, int reusedFactCount, int plannerLlmCalls,
@@ -46,11 +57,18 @@ public record ExecutionResult(String answer,
     public ExecutionResult withTaskScope(com.cexpilot.conversation.TaskScope scope) {
         return new ExecutionResult(answer, evidence, toolCallCount, steps, promptTokens, completionTokens,
                 turnStatus, clarify, reusedFactCount, plannerLlmCalls, answerLlmCalls, metricFetchCount,
-                calculationCount, httpRequestCount, savedFactIds, scope);
+                calculationCount, httpRequestCount, savedFactIds, scope, llmUsages);
+    }
+
+    public ExecutionResult withLlmUsages(List<com.cexpilot.llm.LlmUsage> usages) {
+        return new ExecutionResult(answer, evidence, toolCallCount, steps, promptTokens, completionTokens,
+                turnStatus, clarify, reusedFactCount, plannerLlmCalls, answerLlmCalls, metricFetchCount,
+                calculationCount, httpRequestCount, savedFactIds, taskScope, usages);
     }
 
     public ExecutionResult {
         savedFactIds = savedFactIds == null ? List.of() : List.copyOf(savedFactIds);
+        llmUsages = llmUsages == null ? null : List.copyOf(llmUsages);
     }
 
     /** 兼容旧构造：普通完成（SUCCEEDED），无澄清，无复用，无拆分计数。 */

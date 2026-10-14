@@ -4,6 +4,7 @@ import com.cexpilot.llm.ChatMessage;
 import com.cexpilot.llm.ChatResponse;
 import com.cexpilot.llm.LlmClient;
 import com.cexpilot.llm.LlmTraceSerializer;
+import com.cexpilot.llm.LlmUsage;
 import com.cexpilot.prompt.PromptStore;
 import com.cexpilot.runtime.ExecutionResult;
 import com.cexpilot.runtime.RequestContext;
@@ -60,7 +61,8 @@ public class DagRuntime {
     }
 
     @org.springframework.beans.factory.annotation.Autowired
-    public DagRuntime(LlmClient llm, DagPlanner planner, DagExecutor executor, PromptStore prompts,
+    public DagRuntime(@org.springframework.beans.factory.annotation.Qualifier(com.cexpilot.config.LlmClientConfig.NORMAL_LLM_CLIENT) LlmClient llm,
+                      DagPlanner planner, DagExecutor executor, PromptStore prompts,
                       Clock clock, com.cexpilot.evidence.EvidenceStore evidenceStore) {
         this.llm = llm;
         this.planner = planner;
@@ -159,7 +161,8 @@ public class DagRuntime {
                     plannerInput == null ? null : plannerInput.currentTask());
         } catch (DagPlanner.PlanningFailure pf) {
             // 4.3：planner 阶段失败（LLM 欠费/超时）同样带出已发生的调用计数
-            throw new ExecutionFailure(pf, new TurnCounters(pf.llmCalls, 0, 0, 0, 0, 0, List.of()), pf.taskScope);
+            throw new ExecutionFailure(pf, new TurnCounters(pf.llmCalls, 0, 0, 0, 0, 0, List.of())
+                    .withLlmUsages(pf.llmUsages), pf.taskScope);
         }
         if (outcome.taskScope() != null) {
             effectiveContext = outcome.taskScope().executionContext(effectiveContext);
@@ -168,6 +171,7 @@ public class DagRuntime {
         int totalPromptTokens = outcome.promptTokens();
         int totalCompletionTokens = outcome.completionTokens();
         int plannerLlmCalls = outcome.llmCalls();
+        List<LlmUsage> usages = new ArrayList<>(outcome.llmUsages());
 
         if (!outcome.inDomain()) {
             String answer = outcome.reply() == null || outcome.reply().isBlank()
@@ -177,7 +181,7 @@ public class DagRuntime {
             }
             return new ExecutionResult(answer, MAPPER.createArrayNode(), 0, 0,
                     totalPromptTokens, totalCompletionTokens, null, null, 0,
-                    plannerLlmCalls, 0, 0, 0, 0, List.of()).withTaskScope(outcome.inDomain() ? outcome.taskScope() : null);
+                    plannerLlmCalls, 0, 0, 0, 0, List.of()).withTaskScope(outcome.inDomain() ? outcome.taskScope() : null).withLlmUsages(usages);
         }
 
         // 澄清：不执行、不落 frame；编排层把轮次标 NEEDS_CLARIFICATION 并把澄清问题写入 pendingClarification
@@ -189,7 +193,7 @@ public class DagRuntime {
             }
             return new ExecutionResult(answer, MAPPER.createArrayNode(), 0, 0,
                     totalPromptTokens, totalCompletionTokens, "NEEDS_CLARIFICATION", outcome.reply(), 0,
-                    plannerLlmCalls, 0, 0, 0, 0, List.of()).withTaskScope(outcome.inDomain() ? outcome.taskScope() : null);
+                    plannerLlmCalls, 0, 0, 0, 0, List.of()).withTaskScope(outcome.inDomain() ? outcome.taskScope() : null).withLlmUsages(usages);
         }
 
         // 没有获准执行的计划，就没有 Answer 调用；拒答也走同一个 SSE 返回路径。
@@ -203,7 +207,7 @@ public class DagRuntime {
             }
             return new ExecutionResult(answer, MAPPER.createArrayNode(), 0, 0,
                     totalPromptTokens, totalCompletionTokens, outcome.lastError() == null ? null : "FAILED", null, 0,
-                    plannerLlmCalls, 0, 0, 0, 0, List.of()).withTaskScope(outcome.inDomain() ? outcome.taskScope() : null);
+                    plannerLlmCalls, 0, 0, 0, 0, List.of()).withTaskScope(outcome.inDomain() ? outcome.taskScope() : null).withLlmUsages(usages);
         }
 
         ArrayNode evidence = MAPPER.createArrayNode();
@@ -271,29 +275,42 @@ public class DagRuntime {
             messages.add(ChatMessage.system(systemPrompt));
             messages.add(ChatMessage.user(userContent));
             answerAttempted = true;
-            ChatResponse answer = callAnswerLlm(messages, traceId, sink, answerDelta, timeContext);
+            ChatResponse answer = callAnswerLlm(messages, traceId, sink, answerDelta, timeContext, usages);
             totalPromptTokens += answer.promptTokens() == null ? 0 : answer.promptTokens();
             totalCompletionTokens += answer.completionTokens() == null ? 0 : answer.completionTokens();
 
             return new ExecutionResult(answer.content(), evidence, toolCallCount, steps,
                     totalPromptTokens, totalCompletionTokens, null, null, reusedFactCount,
                     plannerLlmCalls, 1, metricFetchCount, calculationCount, execution.httpRequests(),
-                    newFactIds).withTaskScope(outcome.taskScope());
+                    newFactIds).withTaskScope(outcome.taskScope()).withLlmUsages(usages);
         } catch (Exception e) {
             // 4.3：失败不等于统计归零——把已发生的调用计数与已保存事实随异常带出，
             // 编排层失败路径据此落 trace，耗时/成本分析才有完整口径
             throw new ExecutionFailure(e, new TurnCounters(plannerLlmCalls, answerAttempted ? 1 : 0,
-                    metricFetchCount, calculationCount, 0, reusedFactCount, List.copyOf(newFactIds)), outcome.taskScope(), evidence);
+                    metricFetchCount, calculationCount, 0, reusedFactCount, List.copyOf(newFactIds))
+                    .withLlmUsages(usages), outcome.taskScope(), evidence);
         }
     }
 
     /** 失败路径的调用/事实计数快照（4.3）。answerLlmCalls 为尝试次数（1=已发起）。 */
     public record TurnCounters(int plannerLlmCalls, int answerLlmCalls, int metricFetchCount,
                                int calculationCount, int httpRequestCount, int reusedFactCount,
-                               List<String> savedFactIds) {
+                               List<String> savedFactIds, List<LlmUsage> llmUsages) {
+
+        public TurnCounters(int plannerLlmCalls, int answerLlmCalls, int metricFetchCount,
+                int calculationCount, int httpRequestCount, int reusedFactCount, List<String> savedFactIds) {
+            this(plannerLlmCalls, answerLlmCalls, metricFetchCount, calculationCount, httpRequestCount,
+                    reusedFactCount, savedFactIds, null);
+        }
+
+        public TurnCounters withLlmUsages(List<LlmUsage> usages) {
+            return new TurnCounters(plannerLlmCalls, answerLlmCalls, metricFetchCount, calculationCount,
+                    httpRequestCount, reusedFactCount, savedFactIds, usages);
+        }
 
         public TurnCounters {
             savedFactIds = savedFactIds == null ? List.of() : List.copyOf(savedFactIds);
+            llmUsages = llmUsages == null ? null : List.copyOf(llmUsages);
         }
     }
 
@@ -363,19 +380,27 @@ public class DagRuntime {
     }
 
     private ChatResponse callAnswerLlm(List<ChatMessage> messages, String traceId, TraceSink sink,
-                                       Consumer<String> answerDelta, ObjectNode timeContext) {
+                                       Consumer<String> answerDelta, ObjectNode timeContext, List<LlmUsage> usages) {
         long start = System.currentTimeMillis();
+        boolean received = false;
         try {
             ChatResponse response = answerDelta == null
                     ? llm.chat(messages, null)
                     : llm.chatStream(messages, null, answerDelta);
+            LlmUsage usage = planner.answerUsage(response);
+            usages.add(usage);
+            received = true;
+            ObjectNode output = LlmTraceSerializer.responseToObject(response);
+            output.put("model_role", "normal").put("model", usage.model());
+            output.set("estimated_cost", MAPPER.valueToTree(usage.estimatedCost()));
             sink.record(TraceEvent.llmCall(traceId, "answer",
-                    answerEventInput(messages, timeContext), LlmTraceSerializer.responseToJson(response),
+                    answerEventInput(messages, timeContext), output.toString(),
                     System.currentTimeMillis() - start,
                     response.promptTokens(), response.completionTokens(),
                     response.ttftMs(), response.cachedTokens(), null));
             return response;
         } catch (Exception e) {
+            if (!received) usages.add(planner.answerUsage(null));
             sink.record(TraceEvent.llmCall(traceId, "answer",
                     answerEventInput(messages, timeContext), null,
                     System.currentTimeMillis() - start, null, null, null, null, e.getMessage()));
@@ -435,9 +460,12 @@ public class DagRuntime {
         }
     }
 
-    private static String answerEventInput(List<ChatMessage> messages, ObjectNode timeContext) {
+    private String answerEventInput(List<ChatMessage> messages, ObjectNode timeContext) {
         ObjectNode node = MAPPER.createObjectNode();
+        llm.requestParameters(null).fields().forEachRemaining(field -> node.set(field.getKey(), field.getValue()));
         node.put("stage", "answer");
+        node.put("model_role", "normal");
+        if (!node.hasNonNull("model")) node.put("model", planner.answerUsage(null).model());
         node.put("message_count", messages.size());
         node.set("time_context", timeContext);
         node.set("messages", LlmTraceSerializer.messagesToArray(messages));

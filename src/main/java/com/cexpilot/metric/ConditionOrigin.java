@@ -1,11 +1,13 @@
 package com.cexpilot.metric;
 
 /**
- * 查询条件的来源标记：EXPLICIT = 用户/Planner 明确指定；INHERITED = 从上轮 frame 沿用（阶段一(c) 才产生）；
+ * 查询条件的来源标记：EXPLICIT = Planner 给出当前用户原文依据；INHERITED = 从所选任务版本沿用；
  * DEFAULT = 代码自动补齐（自动粒度、默认 settle、默认 include_unclosed、默认 depth 等）。
+ * PLANNED = 模型填写但尚无用户原文依据，不能把它冒充用户的明确要求。
  */
 public enum ConditionOrigin {
     EXPLICIT,
     INHERITED,
-    DEFAULT
+    DEFAULT,
+    PLANNED
 }

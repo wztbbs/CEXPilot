@@ -24,7 +24,11 @@ public class InMemoryTaskRepository extends ConversationRepository {
     }
     @Override public void insertRunningTurn(String conversationId, long no, String turnId, String parent,
             String question, Instant time) {
-        questions.put(turnId, new QueryRecord((int)no, question, null, null, LocalDateTime.ofInstant(time, ZoneOffset.UTC)));
+        questions.put(turnId, new QueryRecord((int)no, question, null, null, LocalDateTime.ofInstant(time, ZoneOffset.UTC), turnId, "RUNNING"));
+    }
+    @Override public String latestCompletedTurnId(String c) {
+        return questions.values().stream().filter(q -> q.turnId() != null && !"RUNNING".equals(q.turnStatus()))
+                .max(Comparator.comparingInt(QueryRecord::queryNo)).map(QueryRecord::turnId).orElse(null);
     }
     @Override public boolean ownsTurnForUpdate(String conversationId, String turnId, long fencing) {
         return acceptCommit && turnId.equals(running) && fencing == token;
@@ -43,9 +47,12 @@ public class InMemoryTaskRepository extends ConversationRepository {
         snapshots.put(t, TaskState.fromJson(state.toJson()));
         scopes.put(t, scope);
         var q = questions.get(t);
-        if (q != null) questions.put(t, new QueryRecord(q.queryNo(), q.question(), answer, trace, q.createdAt()));
+        if (q != null) questions.put(t, new QueryRecord(q.queryNo(), q.question(), answer, trace, q.createdAt(), t, status));
     }
-    @Override public void finishTurn(String t, String status, String answer, String trace, String logical, String frame) {}
+    @Override public void finishTurn(String t, String status, String answer, String trace, String logical, String frame) {
+        var q = questions.get(t);
+        if (q != null) questions.put(t, new QueryRecord(q.queryNo(), q.question(), answer, trace, q.createdAt(), t, status));
+    }
     @Override public List<TaskState> recentTasks(String c, int limit) {
         return tasks.values().stream().sorted(Comparator.comparingLong(TaskState::lastQueryNo).reversed()).limit(limit).toList();
     }

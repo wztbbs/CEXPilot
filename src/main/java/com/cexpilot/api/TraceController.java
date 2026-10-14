@@ -39,9 +39,7 @@ public class TraceController {
         if (trace == null) {
             return ResponseEntity.notFound().build();
         }
-        return ResponseEntity.ok(Map.of(
-                "trace", trace,
-                "events", traceRepository.findEvents(traceId)));
+        return ResponseEntity.ok(detailBody(trace, traceRepository.findEvents(traceId)));
     }
 
     /**
@@ -54,9 +52,7 @@ public class TraceController {
         if (trace == null) {
             return ResponseEntity.notFound().build();
         }
-        return ResponseEntity.ok(Map.of(
-                "trace", trace,
-                "events", traceRepository.findEvents(traceId)));
+        return ResponseEntity.ok(detailBody(trace, traceRepository.findEvents(traceId)));
     }
 
     /**
@@ -88,7 +84,9 @@ public class TraceController {
         Map<String, List<Map<String, Object>>> feedbackByTrace = traceRepository.findFeedbackByTraceIds(traceIds);
         for (Map<String, Object> trace : traces) {
             String traceId = (String) trace.get("trace_id");
-            trace.put("events", stripHeavyFields(eventsByTrace.getOrDefault(traceId, List.of())));
+            List<Map<String, Object>> events = eventsByTrace.getOrDefault(traceId, List.of());
+            trace.put("planner_attempts", com.cexpilot.trace.PlannerTraceView.from(events).attempts());
+            trace.put("events", stripHeavyFields(events));
             trace.put("feedback", feedbackByTrace.getOrDefault(traceId, List.of()));
         }
 
@@ -99,6 +97,17 @@ public class TraceController {
         body.put("count", traces.size());
         body.put("traces", traces);
         return ResponseEntity.ok(body);
+    }
+
+    private static Map<String, Object> detailBody(Map<String, Object> trace, List<Map<String, Object>> events) {
+        var view = com.cexpilot.trace.PlannerTraceView.from(events);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("trace", trace);
+        body.put("events", events);
+        body.put("planner_attempts", view.attempts());
+        body.put("final_plan", view.finalPlan());
+        body.put("final_compiled_plan", view.finalCompiledPlan());
+        return body;
     }
 
     private static List<Map<String, Object>> stripHeavyFields(List<Map<String, Object>> events) {

@@ -76,6 +76,7 @@ class ConversationServiceTest {
 
     @Test
     void 登记轮次成功时写入RUNNING行并返回句柄() {
+        when(repository.latestCompletedTurnId("c1")).thenReturn("parent-1");
         when(repository.acquireTurn(eq("c1"), anyString(), anyLong()))
                 .thenAnswer(inv -> new ConversationRepository.ConversationStateRow(3, inv.getArgument(1), 7));
 
@@ -87,6 +88,48 @@ class ConversationServiceTest {
         // started_at 用应用时钟（requestTime）写入，不依赖 DB 的 NOW()，避免服务器/会话时区错位
         verify(repository).insertRunningTurn(eq("c1"), eq(3L), eq(turn.turnId()), eq("parent-1"),
                 eq("BTC 多少钱"), eq(T0));
+    }
+
+    @Test
+    void 陈旧或其他会话的父轮次被拒绝且不登记查询() {
+        when(repository.acquireTurn(eq("c1"), anyString(), anyLong()))
+                .thenAnswer(inv -> new ConversationRepository.ConversationStateRow(3, inv.getArgument(1), 7));
+        when(repository.latestCompletedTurnId("c1")).thenReturn("eth-turn");
+        for (String parent : new String[]{"btc-turn", "another-conversation-turn", ""}) {
+            var error = org.junit.jupiter.api.Assertions.assertThrows(StaleContextException.class,
+                    () -> service.beginTurn("c1", "它现在呢", parent, T0));
+            assertEquals("CONTEXT_CONFLICT", error.response().get("code"));
+            assertEquals("eth-turn", error.response().get("currentParentTurnId"));
+        }
+        verify(repository, never()).insertRunningTurn(anyString(), anyLong(), anyString(), any(), anyString(), any());
+    }
+
+    @Test
+    void 首次页面空父轮次在无历史时可登记而旧客户端省略时兼容() {
+        when(repository.acquireTurn(eq("c1"), anyString(), anyLong()))
+                .thenAnswer(inv -> new ConversationRepository.ConversationStateRow(1, inv.getArgument(1), 1));
+        assertNotNull(service.beginTurn("c1", "BTC", "", T0));
+        assertNotNull(service.beginTurn("c1", "BTC", null, T0));
+        verify(repository, org.mockito.Mockito.times(1)).latestCompletedTurnId("c1");
+    }
+
+    @Test
+    void 父轮次冲突由事务代理回滚占用与计数() {
+        var manager = mock(org.springframework.transaction.PlatformTransactionManager.class);
+        var status = new org.springframework.transaction.support.SimpleTransactionStatus();
+        when(manager.getTransaction(any())).thenReturn(status);
+        var proxy = new org.springframework.aop.framework.ProxyFactory(service);
+        proxy.addAdvice(new org.springframework.transaction.interceptor.TransactionInterceptor(manager,
+                new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource()));
+        var transactional = (ConversationService) proxy.getProxy();
+        when(repository.acquireTurn(eq("c1"), anyString(), anyLong()))
+                .thenAnswer(inv -> new ConversationRepository.ConversationStateRow(3, inv.getArgument(1), 7));
+        when(repository.latestCompletedTurnId("c1")).thenReturn("new-turn");
+        org.junit.jupiter.api.Assertions.assertThrows(StaleContextException.class,
+                () -> transactional.beginTurn("c1", "它现在呢", "old-turn", T0));
+        verify(manager).rollback(status);
+        verify(manager, never()).commit(any());
+        verify(repository, never()).insertRunningTurn(anyString(), anyLong(), anyString(), any(), anyString(), any());
     }
 
     @Test

@@ -4,7 +4,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * LLM 接入配置。normal（普通模型）与 flagship（旗舰模型）两套并存，
+ * LLM 接入配置。normal（首次规划与回答）与 flagship（校验失败后的修复）两套并存，
  * 各自有独立的 baseUrl/apiKey/model/单价；temperature、步数上限等为全局共享。
  */
 @Configuration

@@ -38,7 +38,7 @@ public class ConversationRepository {
     /** 会话的全部问答，时间正序（历史回显用，不限条数）。 */
     public List<QueryRecord> allQueries(String conversationId) {
         return jdbc.query("""
-                        SELECT query_no, question, answer, trace_id, created_at
+                        SELECT query_no, question, answer, trace_id, created_at, turn_id, turn_status
                         FROM conversation_query
                         WHERE conversation_id = ?
                         ORDER BY query_no ASC
@@ -48,8 +48,19 @@ public class ConversationRepository {
                         rs.getString("question"),
                         rs.getString("answer"),
                         rs.getString("trace_id"),
-                        rs.getTimestamp("created_at").toLocalDateTime()),
+                        rs.getTimestamp("created_at").toLocalDateTime(),
+                        rs.getString("turn_id"), rs.getString("turn_status")),
                 conversationId);
+    }
+
+    /** 已完成轮次包含澄清、失败与普通说明；不把未完成/被接管的 RUNNING 当成页面已看到的父轮次。 */
+    public String latestCompletedTurnId(String conversationId) {
+        List<String> ids = jdbc.query("""
+                SELECT turn_id FROM conversation_query WHERE conversation_id = ?
+                  AND turn_id IS NOT NULL AND turn_status IN ('SUCCEEDED', 'NEEDS_CLARIFICATION', 'FAILED')
+                ORDER BY query_no DESC LIMIT 1
+                """, (rs, n) -> rs.getString("turn_id"), conversationId);
+        return ids.isEmpty() ? null : ids.get(0);
     }
 
     public void touchConversation(String conversationId, String title) {

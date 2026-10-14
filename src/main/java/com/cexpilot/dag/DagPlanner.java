@@ -14,6 +14,7 @@ import com.cexpilot.llm.ChatResponse;
 import com.cexpilot.llm.LlmClient;
 import com.cexpilot.llm.LlmJson;
 import com.cexpilot.llm.LlmTraceSerializer;
+import com.cexpilot.llm.LlmUsage;
 import com.cexpilot.prompt.PromptStore;
 import com.cexpilot.runtime.ToolRegistry;
 import com.cexpilot.runtime.TraceEvent;
@@ -42,6 +43,7 @@ public class DagPlanner {
     private static final String CLARIFY_FALLBACK_TEXT = "这个问题我需要再确认一下，请补充说明您想查询的对象或条件。";
 
     private final LlmClient llm;
+    private final LlmClient repairLlm;
     private final ToolRegistry registry;
     private final LlmConfig llmConfig;
     private final DagConfig dagConfig;
@@ -58,14 +60,25 @@ public class DagPlanner {
                 new MetricCatalog(new DefaultResourceLoader()), metricProviders);
     }
 
-    @Autowired
     public DagPlanner(LlmClient llm, ToolRegistry registry,
                       LlmConfig llmConfig, DagConfig dagConfig, PromptStore prompts,
                       PlanValidator validator, MetricCatalog catalog,
                       com.cexpilot.metric.MetricProviderRegistry metricProviders) {
+        // 兼容测试/显式单客户端调用；生产由下面的双客户端构造注入。
+        this(llm, llm, registry, llmConfig, dagConfig, prompts, validator, catalog, metricProviders);
+    }
+
+    @Autowired
+    public DagPlanner(
+            @org.springframework.beans.factory.annotation.Qualifier(com.cexpilot.config.LlmClientConfig.NORMAL_LLM_CLIENT) LlmClient llm,
+            @org.springframework.beans.factory.annotation.Qualifier(com.cexpilot.config.LlmClientConfig.FLAGSHIP_LLM_CLIENT) LlmClient repairLlm,
+            ToolRegistry registry, LlmConfig llmConfig, DagConfig dagConfig, PromptStore prompts,
+            PlanValidator validator, MetricCatalog catalog,
+            com.cexpilot.metric.MetricProviderRegistry metricProviders) {
         this.catalog = catalog;
         this.compiler = new MetricPlanCompiler(catalog, registry, metricProviders);
         this.llm = llm;
+        this.repairLlm = repairLlm;
         this.registry = registry;
         this.llmConfig = llmConfig;
         this.dagConfig = dagConfig;
@@ -84,7 +97,17 @@ public class DagPlanner {
     public record PlanOutcome(boolean inDomain, String reply,
                               Optional<com.cexpilot.metric.CompiledPlan> plan, int promptTokens, int completionTokens,
                               String lastError, boolean needsClarification,
-                              com.cexpilot.metric.ExecutionBindings bindings, int llmCalls, TaskScope taskScope) {
+                              com.cexpilot.metric.ExecutionBindings bindings, int llmCalls, TaskScope taskScope,
+                              List<LlmUsage> llmUsages) {
+        public PlanOutcome {
+            llmUsages = llmUsages == null ? List.of() : List.copyOf(llmUsages);
+        }
+        public PlanOutcome(boolean inDomain, String reply, Optional<com.cexpilot.metric.CompiledPlan> plan,
+                int promptTokens, int completionTokens, String lastError, boolean needsClarification,
+                com.cexpilot.metric.ExecutionBindings bindings, int llmCalls, TaskScope taskScope) {
+            this(inDomain, reply, plan, promptTokens, completionTokens, lastError, needsClarification,
+                    bindings, llmCalls, taskScope, List.of());
+        }
         public PlanOutcome(boolean inDomain, String reply, Optional<com.cexpilot.metric.CompiledPlan> plan,
                 int promptTokens, int completionTokens, String lastError, boolean needsClarification,
                 com.cexpilot.metric.ExecutionBindings bindings, int llmCalls) {
@@ -146,6 +169,7 @@ public class DagPlanner {
         int promptTokens = 0;
         int completionTokens = 0;
         int llmCalls = 0;
+        List<LlmUsage> usages = new ArrayList<>();
         String lastError = null;
         boolean bindingRetried = false;
         // R4：首次绑定失败后，逐项保留历史输入的条件及计算用途；修复改名不影响约束。
@@ -155,12 +179,19 @@ public class DagPlanner {
             for (int attempt = 1; attempt <= attempts; attempt++) {
                 // 4.3 口径：按尝试次数计——传输失败的调用（欠费/超时）也是已发生的成本
                 llmCalls++;
-                ChatResponse response = callLlm(messages, traceId, sink, attempt, responseFormat);
+                ChatResponse response;
+                try {
+                    response = callLlm(messages, traceId, sink, attempt, responseFormat, usages);
+                } catch (Exception e) {
+                    recordAttempt(traceId, sink, attempt, lastError, "FAILED", "NOT_RUN", "CALL_FAILED",
+                            e.getMessage(), null);
+                    throw e;
+                }
                 promptTokens += response.promptTokens() == null ? 0 : response.promptTokens();
                 completionTokens += response.completionTokens() == null ? 0 : response.completionTokens();
 
                 PlanDecision decision = evaluateResponse(response.content(), maxToolCalls, traceId, sink,
-                        activeFrame, requestContext, evidenceContext, attempt, pinnedRequirements, taskIndex, currentTask);
+                        activeFrame, requestContext, evidenceContext, attempt, pinnedRequirements, taskIndex, currentTask, question);
                 if (decision.taskScope() != null) lastScope = decision.taskScope();
                 if (decision.error() == null) {
                     if (!pinnedRequirements.isEmpty() && decision.plan() != null
@@ -168,30 +199,42 @@ public class DagPlanner {
                         sink.record(new TraceEvent(traceId, "PLAN", "dag_planner", null,
                                 MAPPER.createObjectNode().put("note", "pinned_downgrade_blocked").toString(),
                                 null, null, null, null, null, "修复轮改变或删除了必要的历史输入，按原快照不可恢复处理"));
+                        recordAttempt(traceId, sink, attempt, lastError, "SUCCEEDED", "FAILED", "NEEDS_CLARIFICATION",
+                                "修复轮改变或删除了必要的历史输入，按原快照不可恢复处理", null);
                         return new PlanOutcome(true, BINDING_UNAVAILABLE_CLARIFY, Optional.empty(),
-                                promptTokens, completionTokens, null, true, null, llmCalls, lastScope);
+                                promptTokens, completionTokens, null, true, null, llmCalls, lastScope, usages);
                     }
-                    return decision.toOutcome(promptTokens, completionTokens, llmCalls);
+                    String result = decision.plan() != null ? "EXECUTABLE"
+                            : decision.needsClarification() ? "NEEDS_CLARIFICATION"
+                            : decision.inDomain() ? "NO_PLAN" : "OUT_OF_DOMAIN";
+                    recordAttempt(traceId, sink, attempt, lastError, "SUCCEEDED",
+                            decision.plan() == null ? "NOT_APPLICABLE" : "PASSED", result, null, decision.plan());
+                    return decision.toOutcome(promptTokens, completionTokens, llmCalls, usages);
                 }
                 if (decision.bindingFailure()) {
                     // 绑定失败只修复一次；仍不行则澄清"原快照不可恢复"，禁止重查当前值冒充（F21）
                     if (bindingRetried) {
+                        recordAttempt(traceId, sink, attempt, lastError, "SUCCEEDED", "FAILED", "NEEDS_CLARIFICATION",
+                                decision.error(), null);
                         return new PlanOutcome(true, BINDING_UNAVAILABLE_CLARIFY, Optional.empty(),
-                                promptTokens, completionTokens, null, true, null, llmCalls, lastScope);
+                                promptTokens, completionTokens, null, true, null, llmCalls, lastScope, usages);
                     }
                     bindingRetried = true;
                 }
+                recordAttempt(traceId, sink, attempt, lastError, "SUCCEEDED", "FAILED",
+                        attempt == attempts ? "REPAIR_EXHAUSTED" : "REPAIR_REQUIRED",
+                        decision.error(), null);
                 lastError = decision.error();
                 appendRepair(messages, response.content(), lastError);
             }
         } catch (Exception e) {
             // 4.3：planner 阶段失败（LLM 欠费/超时等）也要把已发生的 LLM 调用次数带出——
             // planner 是最常见的失败源，裸抛会让失败 trace 的计数归零
-            throw new PlanningFailure(e, llmCalls, lastScope);
+            throw new PlanningFailure(e, llmCalls, lastScope, usages);
         }
         // repair 耗尽：runtime 直接返回固定失败话术，禁止继续生成无事实答案。
         return new PlanOutcome(true, null,
-                Optional.empty(), promptTokens, completionTokens, lastError, false, null, llmCalls, lastScope);
+                Optional.empty(), promptTokens, completionTokens, lastError, false, null, llmCalls, lastScope, usages);
     }
 
     /** planner 阶段失败（LLM 传输错误等）携带已发生的调用次数（4.3），由 DagRuntime 转成 ExecutionFailure。 */
@@ -199,12 +242,17 @@ public class DagPlanner {
 
         public final int llmCalls;
         public final TaskScope taskScope;
+        public final List<LlmUsage> llmUsages;
 
         public PlanningFailure(Throwable cause, int llmCalls) { this(cause, llmCalls, null); }
         public PlanningFailure(Throwable cause, int llmCalls, TaskScope taskScope) {
+            this(cause, llmCalls, taskScope, List.of());
+        }
+        public PlanningFailure(Throwable cause, int llmCalls, TaskScope taskScope, List<LlmUsage> usages) {
             super(cause.getMessage(), cause);
             this.llmCalls = llmCalls;
             this.taskScope = taskScope;
+            this.llmUsages = List.copyOf(usages);
         }
     }
 
@@ -238,9 +286,9 @@ public class DagPlanner {
             return new PlanDecision(inDomain, reply, plan, error, needsClarification, bindings, bindingFailure, scope);
         }
 
-        private PlanOutcome toOutcome(int promptTokens, int completionTokens, int llmCalls) {
+        private PlanOutcome toOutcome(int promptTokens, int completionTokens, int llmCalls, List<LlmUsage> usages) {
             return new PlanOutcome(inDomain, reply, Optional.ofNullable(plan),
-                    promptTokens, completionTokens, error, needsClarification, bindings, llmCalls, taskScope);
+                    promptTokens, completionTokens, error, needsClarification, bindings, llmCalls, taskScope, usages);
         }
     }
 
@@ -250,7 +298,7 @@ public class DagPlanner {
                                           com.cexpilot.runtime.RequestContext requestContext,
                                           EvidenceBindingContext evidenceContext,
                                           int attempt, PinnedRequirements pinnedRequirements,
-                                          List<com.cexpilot.conversation.TaskSnapshot> taskIndex, TaskState currentTask) {
+                                          List<com.cexpilot.conversation.TaskSnapshot> taskIndex, TaskState currentTask, String question) {
         JsonNode parsed;
         try {
             parsed = LlmJson.parse(content);
@@ -268,7 +316,7 @@ public class DagPlanner {
             return PlanDecision.accepted(false, textOrNull(parsed.path("reply")), null);
         }
         return evaluateInDomainResponse(parsed, maxToolCalls, traceId, sink, activeFrame, requestContext,
-                evidenceContext, attempt, pinnedRequirements, taskIndex, currentTask);
+                evidenceContext, attempt, pinnedRequirements, taskIndex, currentTask, question);
     }
 
     private PlanDecision evaluateInDomainResponse(JsonNode parsed, int maxToolCalls,
@@ -277,7 +325,7 @@ public class DagPlanner {
                                                   com.cexpilot.runtime.RequestContext requestContext,
                                                   EvidenceBindingContext evidenceContext,
                                                   int attempt, PinnedRequirements pinnedRequirements,
-                                                  List<com.cexpilot.conversation.TaskSnapshot> taskIndex, TaskState currentTask) {
+                                                  List<com.cexpilot.conversation.TaskSnapshot> taskIndex, TaskState currentTask, String question) {
         TaskScope selected;
         try { selected = selectTask(parsed, currentTask, taskIndex); }
         catch (IllegalArgumentException e) {
@@ -310,7 +358,7 @@ public class DagPlanner {
         }
         var context = requestContext == null ? null : selected.executionContext(requestContext);
         return validatePlan(parsed, reply, maxToolCalls, traceId, sink, selected.frame(), context,
-                evidenceContext, attempt, pinnedRequirements).withScope(selected);
+                evidenceContext, attempt, pinnedRequirements, question).withScope(selected);
     }
 
     private static TaskScope selectTask(JsonNode parsed, TaskState current,
@@ -365,11 +413,13 @@ public class DagPlanner {
                                       com.cexpilot.conversation.QueryFrame activeFrame,
                                       com.cexpilot.runtime.RequestContext requestContext,
                                       EvidenceBindingContext evidenceContext,
-                                      int attempt, PinnedRequirements pinnedRequirements) {
+                                      int attempt, PinnedRequirements pinnedRequirements, String question) {
         String error;
         try {
             com.cexpilot.metric.CompiledPlan compiled =
-                    compiler.compileFull(parsed.path("plan"), Math.min(dagConfig.getMaxNodes(), maxToolCalls));
+                    new ConditionProvenanceResolver().resolve(compiler, parsed.path("plan"),
+                            parsed.path("explicit_conditions"), question, activeFrame, requestContext,
+                            Math.min(dagConfig.getMaxNodes(), maxToolCalls));
             DagPlan plan = compiled.dagPlan();
             if (plan.nodes().isEmpty() && reply != null && !reply.isBlank()) {
                 return evaluateReplyWithoutPlan(parsed, reply, traceId, sink);
@@ -591,18 +641,31 @@ public class DagPlanner {
     }
 
     private ChatResponse callLlm(List<ChatMessage> messages, String traceId, TraceSink sink, int attempt,
-                                 JsonNode responseFormat) {
+                                 JsonNode responseFormat, List<LlmUsage> usages) {
+        LlmClient client = attempt == 1 ? llm : repairLlm;
+        // 单客户端兼容构造不能把同一个真实客户端按模型 2 的单价计费。
+        boolean useRepair = attempt > 1 && repairLlm != llm;
+        String role = useRepair ? "flagship" : "normal";
+        LlmConfig.ModelConfig model = useRepair ? llmConfig.getFlagship() : llmConfig.getNormal();
         long start = System.currentTimeMillis();
-        String input = eventInput(attempt, messages, responseFormat);
+        String input = eventInput(attempt, messages, responseFormat, client, role, model.getModel());
+        boolean received = false;
         try {
-            ChatResponse response = llm.chat(messages, null, responseFormat);
+            ChatResponse response = client.chat(messages, null, responseFormat);
+            LlmUsage usage = LlmUsage.of(role, model, response);
+            usages.add(usage);
+            received = true;
+            ObjectNode output = LlmTraceSerializer.responseToObject(response);
+            output.put("model_role", role).put("model", model.getModel());
+            output.set("estimated_cost", MAPPER.valueToTree(usage.estimatedCost()));
             sink.record(TraceEvent.llmCall(traceId, TRACE_NAME,
-                    input, LlmTraceSerializer.responseToJson(response),
+                    input, output.toString(),
                     System.currentTimeMillis() - start,
                     response.promptTokens(), response.completionTokens(),
                     response.ttftMs(), response.cachedTokens(), null));
             return response;
         } catch (Exception e) {
+            if (!received) usages.add(LlmUsage.of(role, model, null));
             sink.record(TraceEvent.llmCall(traceId, TRACE_NAME,
                     input, null,
                     System.currentTimeMillis() - start, null, null, null, null, e.getMessage()));
@@ -610,17 +673,48 @@ public class DagPlanner {
         }
     }
 
+    /** Answer 始终使用 normal；与 Planner 共用同一份模型单价配置。 */
+    public LlmUsage answerUsage(ChatResponse response) {
+        return LlmUsage.of("normal", llmConfig.getNormal(), response);
+    }
+
+    /** 最终对账/绑定/历史输入保护均结束后记录结果，不能把提前产生的 PLAN_COMPILED 当作可执行。 */
+    private void recordAttempt(String traceId, TraceSink sink, int attempt, String retryReason,
+            String callStatus, String validationStatus, String result, String error,
+            com.cexpilot.metric.CompiledPlan plan) {
+        LlmClient client = attempt == 1 ? llm : repairLlm;
+        boolean useRepair = attempt > 1 && repairLlm != llm;
+        var model = useRepair ? llmConfig.getFlagship() : llmConfig.getNormal();
+        ObjectNode input = MAPPER.createObjectNode().put("attempt", attempt)
+                .put("model_role", useRepair ? "flagship" : "normal")
+                .put("model", client.requestParameters(null).path("model").asText(model.getModel()));
+        input.put("retry_reason", retryReason);
+        ObjectNode output = MAPPER.createObjectNode().put("call_status", callStatus)
+                .put("validation_status", validationStatus).put("result", result);
+        output.put("call_error", "FAILED".equals(callStatus) ? error : null);
+        output.put("validation_error", "FAILED".equals(validationStatus) ? error : null);
+        if (plan != null) {
+            output.set("logical_plan", plan.logicalPlanJson());
+            output.set("compiled_plan", plan.dagPlan().toJson());
+        }
+        sink.record(new TraceEvent(traceId, "PLANNER_ATTEMPT", TRACE_NAME, input.toString(), output.toString(),
+                null, null, null, null, null, error));
+    }
+
     private static String textOrNull(JsonNode node) {
         return node.isTextual() ? node.asText() : null;
     }
 
-    private String eventInput(int attempt, List<ChatMessage> messages, JsonNode responseFormat) {
+    private String eventInput(int attempt, List<ChatMessage> messages, JsonNode responseFormat,
+                              LlmClient client, String role, String model) {
         ObjectNode node = MAPPER.createObjectNode();
         node.put("stage", TRACE_NAME);
         node.put("attempt", attempt);
         node.put("message_count", messages.size());
         node.set("messages", LlmTraceSerializer.messagesToArray(messages));
-        llm.requestParameters(responseFormat).fields().forEachRemaining(field -> node.set(field.getKey(), field.getValue()));
+        client.requestParameters(responseFormat).fields().forEachRemaining(field -> node.set(field.getKey(), field.getValue()));
+        node.put("model_role", role);
+        if (!node.hasNonNull("model")) node.put("model", model);
         // 显式 null 表示本次没有下发结构约束；完整 Schema 保留在 response_format 中。
         node.set("response_format", responseFormat == null
                 ? com.fasterxml.jackson.databind.node.NullNode.instance : responseFormat.deepCopy());

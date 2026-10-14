@@ -31,15 +31,22 @@ public class ConversationController {
                 ? null
                 : conversation.latestConversationId(visitorId);
         List<QueryRecord> queries = conversation.history(conversationId);
-        return new ConversationHistoryResponse(conversationId,
+        // 父轮次与回显历史来自同一次读取，避免另一标签页恰好提交导致 token 超前于页面内容。
+        String parentTurnId = queries.stream()
+                .filter(q -> q.turnId() != null && java.util.Set.of("SUCCEEDED", "NEEDS_CLARIFICATION", "FAILED")
+                        .contains(q.turnStatus() == null ? "" : q.turnStatus()))
+                .max(java.util.Comparator.comparingInt(QueryRecord::queryNo))
+                .map(QueryRecord::turnId).orElse("");
+        return new ConversationHistoryResponse(conversationId, parentTurnId,
                 queries.stream()
-                        .map(q -> new QueryMessage(q.question(), q.answer(), q.traceId(), q.createdAt()))
+                        .map(q -> new QueryMessage(q.question(), q.answer(), q.traceId(), q.createdAt(), q.turnId(), q.turnStatus()))
                         .toList());
     }
 
-    public record ConversationHistoryResponse(String conversationId, List<QueryMessage> messages) {
+    public record ConversationHistoryResponse(String conversationId, String parentTurnId, List<QueryMessage> messages) {
     }
 
-    public record QueryMessage(String question, String answer, String traceId, LocalDateTime createdAt) {
+    public record QueryMessage(String question, String answer, String traceId, LocalDateTime createdAt,
+                               String turnId, String turnStatus) {
     }
 }

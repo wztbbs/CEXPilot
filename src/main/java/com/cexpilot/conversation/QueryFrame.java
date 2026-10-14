@@ -60,8 +60,38 @@ public record QueryFrame(
             JsonNode evidence, String status) {
         return new QueryFrame(frameId, conversationId, version, turnId, question,
                 requestTime == null ? null : requestTime.toString(),
-                userZone == null ? null : userZone.getId(), plan.targets(), focusFromEvidence(evidence), null,
+                userZone == null ? null : userZone.getId(), targetsFromEvidence(plan, evidence, turnId, frameId, version), focusFromEvidence(evidence), null,
                 new LastAttempt(turnId, status));
+    }
+
+    /** 回填每个真实指标节点的执行元数据；不复制 payload，也不把自动 5m 覆盖为用户要求的 interval。 */
+    private static List<EffectiveTarget> targetsFromEvidence(CompiledPlan plan, JsonNode evidence,
+            String turnId, String frameId, long version) {
+        java.util.Map<String, JsonNode> byNode = new java.util.HashMap<>();
+        if (evidence != null && evidence.isArray()) {
+            for (JsonNode entry : evidence) {
+                if (entry.path("ok").asBoolean(false) && entry.path("data").isObject()) {
+                    byNode.put(entry.path("node_id").asText(), entry.path("data"));
+                }
+            }
+        }
+        return plan.targets().stream().map(target -> {
+            var sources = new java.util.LinkedHashMap<String, com.cexpilot.metric.ConditionSource>();
+            target.conditionSources().forEach((field, source) -> sources.put(field, source.identify(turnId, frameId, version)));
+            ObjectNode execution = MAPPER.createObjectNode();
+            JsonNode data = byNode.get(target.physicalId());
+            if (data != null) {
+                for (String field : List.of("candle_interval", "interval_source", "requested_range", "effective_range",
+                        "actual_range", "coverage", "as_of", "timezone", "requested_count", "actual_count", "sample_complete")) {
+                    if (data.hasNonNull(field)) execution.set(field, data.get(field).deepCopy());
+                }
+                // Provider 为完整窗口可能省略相同的 effective_range；持久化仍明确保留两者。
+                if (!execution.has("effective_range") && execution.has("requested_range")) {
+                    execution.set("effective_range", execution.get("requested_range").deepCopy());
+                }
+            }
+            return target.withMetadata(sources, execution.isEmpty() ? null : execution);
+        }).toList();
     }
 
     /** focus 的描述性引用：只留节点身份与成功标记，完整数据仍在 trace / evidence。 */
@@ -87,6 +117,7 @@ public record QueryFrame(
                 if (entry.has("reused")) {
                     node.put("reused", entry.path("reused").asBoolean());
                 }
+                if (entry.has("source_turn_id")) node.set("source_turn_id", entry.get("source_turn_id"));
             }
         }
         return focus;

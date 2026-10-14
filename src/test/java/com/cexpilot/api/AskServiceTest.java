@@ -89,6 +89,32 @@ class AskServiceTest {
     }
 
     @Test
+    void 混合模型费用按实际调用记录汇总而不是全部按普通模型单价() {
+        var usages = List.of(new com.cexpilot.llm.LlmUsage("normal","one",10,5,0.02),
+                new com.cexpilot.llm.LlmUsage("flagship","two",10,5,0.2),
+                new com.cexpilot.llm.LlmUsage("normal","one",10,5,0.02));
+        when(runtime.execute(anyString(), anyString(), anyString(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new ExecutionResult("答案",null,1,1,30,15).withLlmUsages(usages));
+        service.ask("conv-1","查询","v1",null,null,null);
+        var cost = org.mockito.ArgumentCaptor.forClass(Double.class);
+        verify(traceRepository).finishTrace(anyString(),eq("SUCCESS"),eq("答案"),anyInt(),anyInt(),eq(30),eq(15),
+                cost.capture(),anyLong(),isNull(),anyInt(),anyInt(),anyInt(),anyInt(),anyInt(),anyInt());
+        assertEquals(0.24,cost.getValue(),1e-12);
+    }
+
+    @Test
+    void 第二模型失败时保留先前token但总费用保持未知() {
+        var usages = List.of(new com.cexpilot.llm.LlmUsage("normal","one",10,5,0.02),
+                new com.cexpilot.llm.LlmUsage("flagship","two",null,null,null));
+        var counters = new DagRuntime.TurnCounters(2,0,0,0,0,0,List.of()).withLlmUsages(usages);
+        when(runtime.execute(anyString(),anyString(),anyString(),any(),any(),any(),any(),any(),any(),any()))
+                .thenThrow(new DagRuntime.ExecutionFailure(new IllegalStateException("模型2超时"),counters));
+        assertThrows(DagRuntime.ExecutionFailure.class,() -> service.ask("conv-1","查询","v1",null,null,null));
+        verify(traceRepository).finishTrace(anyString(),eq("FAILED"),isNull(),anyInt(),anyInt(),eq(10),eq(5),
+                isNull(),anyLong(),eq("模型2超时"),eq(0),eq(2),eq(0),eq(0),eq(0),eq(0));
+    }
+
+    @Test
     void 成功路径登记并提交轮次且响应带turnId() {
         stubRuntimeSuccess();
 
@@ -103,6 +129,25 @@ class AskServiceTest {
         verify(traceRepository).finishTrace(eq(response.traceId()), eq("SUCCESS"), eq("答案"),
                 anyInt(), anyInt(), anyInt(), anyInt(), any(), anyLong(), isNull(), eq(0),
                 anyInt(), anyInt(), anyInt(), anyInt(), anyInt());
+    }
+
+    @Test
+    void 陈旧父轮次不读取上下文不建trace不调用LLM() {
+        when(conversation.beginTurn(eq("conv-1"), anyString(), any(), any()))
+                .thenThrow(new com.cexpilot.conversation.StaleContextException("conv-1", "new-turn"));
+        assertThrows(com.cexpilot.conversation.StaleContextException.class,
+                () -> service.ask("conv-1", "它现在呢", "v1", null, "old-turn", null));
+        org.mockito.Mockito.verifyNoInteractions(runtime, traceRepository, contextService);
+    }
+
+    @Test
+    void 执行失败提交后确认客户端可以继续使用该轮次() {
+        when(runtime.execute(anyString(), anyString(), anyString(), any(), any(), any(), any(), any(), any(), any()))
+                .thenThrow(new IllegalStateException("LLM 超时"));
+        AskService.AskStreamListener listener = mock(AskService.AskStreamListener.class);
+        assertThrows(IllegalStateException.class,
+                () -> service.ask("conv-1", "查询", "v1", null, null, listener));
+        verify(listener).onTurnFinished("turn-1");
     }
 
     @Test

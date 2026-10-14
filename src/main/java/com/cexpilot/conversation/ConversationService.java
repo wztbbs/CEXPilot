@@ -94,6 +94,15 @@ public class ConversationService {
         if (!turnId.equals(state.runningTurnId())) {
             return null;
         }
+        // acquireTurn 持有 state 行锁直到此事务结束，校验与登记之间不会有别的任务提交。
+        // null 兼容旧客户端；空串明确表示页面还没有看到任何完成轮次。
+        if (parentTurnId != null) {
+            String latest = repository.latestCompletedTurnId(conversationId);
+            if (!parentTurnId.equals(latest == null ? "" : latest)) {
+                // RuntimeException 回滚 acquireTurn：冲突不分配序号、不占用会话、不调用 LLM。
+                throw new StaleContextException(conversationId, latest);
+            }
+        }
         // acquireTurn 成功时已推进 last_query_no，返回值就是本轮分配的序号
         long queryNo = state.lastQueryNo();
         repository.insertRunningTurn(conversationId, queryNo, turnId, parentTurnId, question, requestTime);

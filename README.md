@@ -129,18 +129,27 @@ java -jar target/cexpilot-0.1.0.jar --spring.profiles.active=test
 | 配置 / 环境变量 | 当前默认值 | 用途 |
 | --- | --- | --- |
 | `server.port` / `SERVER_PORT` | 8082 | HTTP 端口 |
-| `llm.normal.model` / `LLM_NORMAL_MODEL` | qwen-plus | 当前 Planner 与 Answer 使用普通模型客户端 |
+| `llm.normal.model` / `LLM_NORMAL_MODEL` | qwen-plus | 首次 Planner 与 Answer 使用模型 1 |
+| `llm.flagship.model` / `LLM_FLAGSHIP_MODEL` | qwen-max | Planner 校验失败后，修复调用使用模型 2 |
+| `LLM_FLAGSHIP_BASE_URL` / `LLM_FLAGSHIP_API_KEY` | 沿用 normal 的地址 / Key | 可独立覆盖以接入不同服务商 |
 | `LLM_NORMAL_ENABLE_THINKING` | false | 模型思考开关 |
 | `LLM_TEMPERATURE` / `LLM_SEED` | 0 / 不下发 | 采样参数 |
 | `DAG_MAX_NODES` | 8 | 展开后的执行节点上限，还受 `llm.max-tool-calls=8` 限制 |
 | `DAG_MAX_DEPTH` | 3 | 依赖深度上限 |
 | `DAG_EXECUTOR_THREADS` | 4 | DAG 固定线程池大小 |
 | `DAG_NODE_TIMEOUT_MS` | 30000 | 回收单节点 Future 的等待预算，不保证终止底层 HTTP |
-| `DAG_PLANNER_MAX_RETRIES` | 2 | 规划修复次数，含首次最多 3 次调用 |
+| `DAG_PLANNER_MAX_RETRIES` | 2 | 含首次最多 3 次：模型 1 → 模型 2 → 模型 2；绑定失败仍最多修复一次 |
 | `DAG_PLANNER_RESPONSE_FORMAT` | 空 | 不下发结构化约束；可选 json_object / json_schema，需模型支持 |
-| `LLM_NORMAL_PRICE_INPUT_PER_1K` / `LLM_NORMAL_PRICE_OUTPUT_PER_1K` | 0 / 0 | Trace 成本估算单价，默认 0 不表示实际免费 |
+| `LLM_NORMAL_PRICE_INPUT_PER_1K` / `LLM_NORMAL_PRICE_OUTPUT_PER_1K` | 0 / 0 | 模型 1 成本估算单价 |
+| `LLM_FLAGSHIP_PRICE_INPUT_PER_1K` / `LLM_FLAGSHIP_PRICE_OUTPUT_PER_1K` | 0 / 0 | 模型 2 成本估算单价，独立于模型 1 |
 
-配置和提示词随进程加载，不支持热更新；更改后需要重新构建并重启。
+同一服务商时，设置 `LLM_FLAGSHIP_MODEL` 即可选择模型 2；地址和 Key 没有单独设置时继承 normal。模型名变量未设置时默认 qwen-max。不同服务商时同时设置第二套地址和 Key；两套模型都需支持当前配置的 JSON 输出格式。
+
+只在规划解析/编译/校验实际进入修复循环时切换，正常澄清、出域、能力说明和 HTTP 超时/鉴权错误不会触发这个切换。Answer 始终使用 normal。每次 LLM_CALL 记录实际模型；总费用按各次调用对应模型单价汇总，缺失 usage 时为未知。两套默认单价为 0，不表示实际免费。
+
+配置和提示词随进程加载，不支持热更新；环境变量更改后重启生效，代码或提示词更改后重新构建并重启。
+
+Trace 单条接口保留完整 `events`，另提供 `planner_attempts`、`final_plan`、`final_compiled_plan`。每次尝试直接记录模型、调用状态、校验状态和失败原因；批量 `/api/traces` 也保留轻量 `planner_attempts`，便于比较模型 1 首次失败与模型 2 修复成功。页面只展示最终可执行 Plan；详情约定见 [上下文管理](docs/上下文管理.md)。
 
 ## HTTP 接口
 

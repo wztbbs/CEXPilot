@@ -380,6 +380,12 @@ public class ConversationContextService {
             s.append("，depth=").append(t.depth()).append('(').append(t.depthOrigin()).append(')');
         }
         s.append("，单位=").append(t.unit()).append("，provider=").append(t.provider());
+        if (!t.conditionSources().isEmpty()) {
+            s.append("，条件来源=").append(new com.fasterxml.jackson.databind.ObjectMapper().valueToTree(t.conditionSources()).toString());
+        }
+        if (t.executionMetadata() != null) {
+            s.append("，上次执行元数据（只说明上次结果，不是本次固定要求）=").append(t.executionMetadata());
+        }
         return s.toString();
     }
 

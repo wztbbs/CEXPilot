@@ -195,7 +195,7 @@
       + '<div class="meta-grid">'
       + '<span class="badge ' + statusClass + '">' + esc(trace.status) + '</span>'
       + metaItem('visitor', trace.visitor_id && String(trace.visitor_id).slice(0, 8) + '…')
-      + metaItem('model', trace.model)
+      + metaItem('首次模型', trace.model)
       + metaItem('commit', trace.build_commit)
       + metaItem('耗时', trace.duration_ms != null ? (trace.duration_ms / 1000).toFixed(1) + 's' : null)
       + metaItem('tokens', trace.prompt_tokens != null ? (trace.prompt_tokens + trace.completion_tokens) : null)
@@ -203,38 +203,23 @@
       + metaItem('时间', trace.created_at)
       + '</div></div>';
 
-    /* ② 规划输出（单次 LLM 生成指标计划，可能含 repair 多次尝试） */
-    var plannerCalls = events.filter(function (e) { return e.event_type === 'LLM_CALL' && e.name === 'dag_planner'; });
-    html += '<div class="section"><h2><span class="no">2</span>指标规划输出</h2>';
-    if (!plannerCalls.length) {
-      html += '<div class="dag-empty">没有规划调用记录</div>';
+    /* ② 仅展示最终通过全部校验/绑定保护的计划；各次尝试保留在 API 的 planner_attempts / events。 */
+    var attempts = data.planner_attempts || [];
+    var lastAttempt = attempts.length ? attempts[attempts.length - 1] : null;
+    html += '<div class="section"><h2><span class="no">2</span>最终指标计划</h2>';
+    if (data.final_plan) {
+      var label = '最终可执行 Plan';
+      if (lastAttempt && lastAttempt.attempt != null) label += ' · 第 ' + lastAttempt.attempt + ' 次尝试';
+      if (lastAttempt && lastAttempt.model) label += ' · ' + lastAttempt.model;
+      if (lastAttempt && lastAttempt.validation_status === 'UNKNOWN') label += '（历史记录未单独保存最终校验状态）';
+      html += '<details open><summary>' + esc(label) + '</summary>'
+        + '<pre class="json">' + esc(pretty(data.final_plan)) + '</pre></details>';
+    } else {
+      html += '<div class="dag-empty">没有校验成功的可执行 Plan（规划失败 / 澄清 / 出域 / 能力不足）</div>';
     }
-    plannerCalls.forEach(function (e, i) {
-      var envelope = e.output && e.output.content != null ? parseJson(e.output.content) : e.output;
-      var label = plannerCalls.length > 1 ? '第 ' + (i + 1) + ' 次尝试' : '规划输出';
-      if (e.error) label += '（调用失败）';
-      html += '<details' + (i === plannerCalls.length - 1 ? ' open' : '') + '><summary>' + label
-        + (e.duration_ms != null ? ' · ' + (e.duration_ms / 1000).toFixed(1) + 's' : '')
-        + (e.ttft_ms != null ? ' · ttft ' + (e.ttft_ms / 1000).toFixed(1) + 's' : '')
-        + (e.cached_tokens != null ? ' · 缓存 ' + e.cached_tokens + (e.prompt_tokens != null ? '/' + e.prompt_tokens : '') : '')
-        + '</summary>'
-        + '<pre class="json">' + esc(typeof envelope === 'string' ? envelope : JSON.stringify(envelope, null, 2)) + '</pre></details>';
-    });
-    /* 校验失败的 PLAN 记录也展示出来（学习价值最高的一类数据） */
-    var badPlans = events.filter(function (e) { return e.event_type === 'PLAN' && e.error; });
-    badPlans.forEach(function (e) {
-      html += '<details><summary>校验失败的 Plan · ' + esc(e.error) + '</summary>'
-        + '<pre class="json">' + esc(pretty(e.output)) + '</pre></details>';
-    });
-    events.filter(function (e) { return e.event_type === 'PLAN' && !e.error && e.output && e.output.plan && e.output.plan.metrics; }).forEach(function (e) {
-      html += '<details><summary>有效指标计划（完整）</summary>'
-        + '<pre class="json">' + esc(pretty(e.output)) + '</pre></details>';
-    });
     html += '</div>';
 
     /* ③ DAG 拓扑 */
-    var planEvents = events.filter(function (e) { return e.event_type === 'PLAN' && !e.error; });
-    var compiledPlans = events.filter(function (e) { return e.event_type === 'PLAN_COMPILED' && !e.error; });
     var toolCalls = events.filter(function (e) { return e.event_type === 'TOOL_CALL'; });
     var byNodeId = {};
     var metricByNodeId = {};
@@ -245,8 +230,7 @@
       if (e.input && e.input.node_id) byNodeId[e.input.node_id] = e;
     });
     html += '<div class="section"><h2><span class="no">3</span>Plan 拓扑（点击节点查看入参/出参）</h2>';
-    var plan = planEvents.length ? parseJson(planEvents[planEvents.length - 1].output) : null;
-    if (compiledPlans.length) plan = compiledPlans[compiledPlans.length - 1].output;
+    var plan = data.final_compiled_plan;
     /* 兼容旧数据：合并规划改造初期的 PLAN 事件落的是整个 envelope（plan 在 .plan 子树） */
     if (plan && !plan.nodes && plan.plan && plan.plan.nodes) plan = plan.plan;
     if (!plan || !plan.nodes || !plan.nodes.length) {

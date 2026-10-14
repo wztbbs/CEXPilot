@@ -101,7 +101,7 @@ class DagPlannerTest {
         var failure = assertThrows(DagPlanner.PlanningFailure.class,
                 () -> planner(llm, registry(), config).plan("问题", "", "test", events::add));
         assertEquals(1, failure.llmCalls);
-        assertEquals(1, events.size());
+        assertEquals(2, events.size());
         assertEquals("simulated transport failure", events.get(0).error());
         assertEquals("json_schema", json(events.get(0).inputJson()).at("/response_format/type").asText());
     }
@@ -182,7 +182,7 @@ class DagPlannerTest {
         assertNotNull(nodes.get(0).metricQuery());
         assertEquals("kline",nodes.get(0).metric().provider());
         assertEquals(com.cexpilot.metric.KlineMetric.TURNOVER,nodes.get(0).metric().selector());
-        assertEquals(List.of("LLM_CALL", "PLAN", "PLAN_COMPILED", "FOLLOWUP_PLAN"), events.stream().map(TraceEvent::eventType).toList());
+        assertEquals(List.of("LLM_CALL", "PLAN", "PLAN_COMPILED", "FOLLOWUP_PLAN", "PLANNER_ATTEMPT"), events.stream().map(TraceEvent::eventType).toList());
         assertTrue(events.get(2).outputJson().contains("metric_binding"));
     }
     @Test void promptExposesOnlyMetricContractsAndOperators() {

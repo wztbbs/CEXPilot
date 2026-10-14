@@ -109,4 +109,67 @@ class TaskPipelineTest {
             assertEquals(b3.toJson(), repo.findTask("c1", b3.frameId()).toJson());
         } finally { executor.shutdown(); }
     }
+
+    @Test void 自动粒度追问重新选择而用户后来指定的固定粒度继续沿用() {
+        var repo = new InMemoryTaskRepository() {
+            @Override public boolean conversationExists(String id) { return true; }
+        };
+        var conversations = new ConversationService(repo, new ConversationConfig());
+        var contexts = new ConversationContextService(repo);
+        var store = new com.cexpilot.evidence.EvidenceStore(new com.cexpilot.evidence.InMemoryEvidenceRepository());
+        var first = scalarPlan(); ((com.fasterxml.jackson.databind.node.ObjectNode)first.at("/metrics/0")).remove("interval");
+        var copied = scalarPlan(); ((com.fasterxml.jackson.databind.node.ObjectNode)copied.at("/metrics/0")).put("interval", "5m");
+        var rolling = json("{\"type\":\"rolling_window\",\"duration\":{\"value\":30,\"unit\":\"day\"}}");
+        ((com.fasterxml.jackson.databind.node.ObjectNode)copied.at("/metrics/0")).set("time", rolling);
+        var continued = (com.fasterxml.jackson.databind.node.ObjectNode)json(envelope(copied));
+        continued.put("task_action", "CONTINUE"); continued.putArray("changes").add("time");
+        var explicit = continued.deepCopy();
+        explicit.putObject("explicit_conditions").putObject("m1").put("interval", "5分钟");
+        explicit.withArray("changes").add("interval");
+        var omitted = (com.fasterxml.jackson.databind.node.ObjectNode)json(envelope(first));
+        omitted.put("task_action", "CONTINUE"); omitted.putArray("changes").add("time");
+        var llm = new Script(envelope(first), "首答", continued.toString(), "追问答案",
+                explicit.toString(), "固定粒度答案", omitted.toString(), "沿用粒度答案");
+        List<String> receivedIntervals = new ArrayList<>();
+        var provider = provider((q,c) -> {
+            var tq = (TimeRangeQuery)q;
+            receivedIntervals.add(tq.intervalCode());
+            var range = new com.cexpilot.time.TimeRangeResolver(Clock.fixed(c.requestTime(), c.userZone()))
+                    .resolve(c.userZone(), tq.time(), c.requestTime());
+            String interval = tq.intervalCode() != null ? tq.intervalCode()
+                    : Duration.between(range.startInclusive(), range.endExclusive()).toDays() > 7 ? "1h" : "5m";
+            var coverage = new com.cexpilot.market.series.SeriesCoverage(1,1,List.of(),List.of(),List.of(),false,false,
+                    null,range.endExclusive().toEpochMilli(),false);
+            return new MetricResult.Scalar(new MetricResult.SeriesMetadata(range, range, coverage, interval,
+                    tq.intervalCode() == null, 1), java.math.BigDecimal.TEN, java.math.BigDecimal.valueOf(86400), range);
+        });
+        var config = new DagConfig();
+        var executor = new DagExecutor(registry(), config, providers(provider));
+        try {
+            var runtime = new DagRuntime(llm, planner(llm, registry(), config), executor,
+                    new PromptStore(LOADER), Clock.fixed(NOW, ZoneOffset.UTC), store);
+            var ask = new AskService(conversations, contexts, runtime, mock(TraceRepository.class),
+                    mock(DbTraceSink.class), new LlmConfig(), Clock.fixed(NOW, ZoneOffset.UTC), mock(ObjectProvider.class));
+            var a = ask.ask("c1", "昨天币安BTC成交额", "v", "Asia/Shanghai", "", null);
+            var firstState = repo.findActiveTask("c1");
+            assertNull(firstState.frame().targets().get(0).interval());
+            assertEquals("5m", firstState.frame().targets().get(0).executionMetadata().path("candle_interval").asText());
+            var b = ask.ask("c1", "换成最近30天", "v", "Asia/Shanghai", a.turnId(), null);
+            var secondState = repo.findActiveTask("c1");
+            assertEquals(firstState.frameId(), secondState.frameId());
+            assertNull(secondState.frame().targets().get(0).interval());
+            assertEquals("1h", secondState.frame().targets().get(0).executionMetadata().path("candle_interval").asText());
+            var c = ask.ask("c1", "固定用5分钟粒度", "v", "Asia/Shanghai", b.turnId(), null);
+            var thirdState = repo.findActiveTask("c1");
+            assertEquals(ConditionOrigin.EXPLICIT, thirdState.frame().targets().get(0).intervalOrigin());
+            ask.ask("c1", "再换回昨天", "v", "Asia/Shanghai", c.turnId(), null);
+            var finalTarget = repo.findActiveTask("c1").frame().targets().get(0);
+            assertEquals("5m", finalTarget.interval());
+            assertEquals(ConditionOrigin.INHERITED, finalTarget.intervalOrigin());
+            assertEquals(c.turnId(), finalTarget.conditionSources().get("interval").sourceTurnId());
+            assertEquals(3L, finalTarget.conditionSources().get("interval").sourceVersion());
+            assertEquals(Arrays.asList(null, null, "5m", "5m"), receivedIntervals);
+            assertEquals(8, llm.calls.size()); // 每轮一次 Planner + 一次 Answer，未因来源补齐而增加 LLM 调用。
+        } finally { executor.shutdown(); }
+    }
 }

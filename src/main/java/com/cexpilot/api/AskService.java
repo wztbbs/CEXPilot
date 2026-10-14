@@ -57,6 +57,8 @@ public class AskService {
 
     /** 流式问答的事件出口：meta 在建 trace 后触发，progress 为阶段进度，delta 为答案增量，done 带完整结果。 */
     public interface AskStreamListener {
+        /** 失败也可能已经提交为完成轮次；仅在收尾成功后确认，客户端才推进父轮次。 */
+        default void onTurnFinished(String turnId) {}
         void onMeta(String conversationId, String traceId, String turnId);
 
         void onProgress(String text);
@@ -99,7 +101,7 @@ public class AskService {
     }
 
     /**
-     * @param parentTurnId 前端声明的上一轮 turnId，登记时落库；null 表示未携带
+     * @param parentTurnId 页面看到的最近完成轮次，登记前校验；null 兼容旧客户端
      */
     public AskResponse ask(String conversationId, String question, String visitorId, String timezone,
                            String parentTurnId, AskStreamListener listener) {
@@ -173,7 +175,8 @@ public class AskService {
                     listener == null ? null : listener::onProgress, compiledPlanRef::set, plannerInput,
                     new com.cexpilot.evidence.EvidenceSession(resolvedConversationId, turn.turnId()));
             long durationMs = System.currentTimeMillis() - start;
-            double cost = computeCost(result.promptTokens(), result.completionTokens());
+            Double cost = result.llmUsages() == null ? computeCost(result.promptTokens(), result.completionTokens())
+                    : com.cexpilot.llm.LlmUsage.totalCost(result.llmUsages());
 
             traceRepository.finishTrace(traceId, "SUCCESS", result.answer(), result.steps(),
                     result.toolCallCount(), result.promptTokens(), result.completionTokens(),
@@ -229,7 +232,12 @@ public class AskService {
             log.warn("问答失败 traceId={}: {}", traceId, failure.getMessage());
             if (traceStarted && !traceFinished) {
                 traceRepository.finishTrace(traceId, "FAILED", null, 0, 0,
-                        null, null, null, durationMs, failure.getMessage(),
+                        counters == null || counters.llmUsages() == null ? null
+                                : com.cexpilot.llm.LlmUsage.knownPromptTokens(counters.llmUsages()),
+                        counters == null || counters.llmUsages() == null ? null
+                                : com.cexpilot.llm.LlmUsage.knownCompletionTokens(counters.llmUsages()),
+                        counters == null || counters.llmUsages() == null ? null
+                                : com.cexpilot.llm.LlmUsage.totalCost(counters.llmUsages()), durationMs, failure.getMessage(),
                         counters == null ? null : counters.reusedFactCount(),
                         counters == null ? null : counters.plannerLlmCalls(),
                         counters == null ? null : counters.answerLlmCalls(),
@@ -242,6 +250,10 @@ public class AskService {
                 turnFinished = failTurnQuietly(resolvedConversationId, turn, question, traceId,
                         compiledPlan, taskScopeRef.get(), requestContext, failure.getMessage(), failureEvidenceRef.get(), traceStarted,
                         counters == null ? java.util.List.of() : counters.savedFactIds());
+            }
+            if (turnFinished && listener != null) {
+                try { listener.onTurnFinished(turn.turnId()); }
+                catch (Exception ignored) { /* 失败已提交，不因通知失败改写状态。 */ }
             }
             throw e;
         } finally {

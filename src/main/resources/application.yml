@@ -26,8 +26,8 @@ llm:
     price-input-per-1k: ${LLM_NORMAL_PRICE_INPUT_PER_1K:0}
     price-output-per-1k: ${LLM_NORMAL_PRICE_OUTPUT_PER_1K:0}
   flagship:
-    base-url: ${LLM_FLAGSHIP_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
-    api-key: ${LLM_FLAGSHIP_API_KEY:}
+    base-url: ${LLM_FLAGSHIP_BASE_URL:${llm.normal.base-url}}
+    api-key: ${LLM_FLAGSHIP_API_KEY:${llm.normal.api-key}}
     model: ${LLM_FLAGSHIP_MODEL:qwen-max}
     pooling: ${LLM_FLAGSHIP_POOLING:true}
     price-input-per-1k: ${LLM_FLAGSHIP_PRICE_INPUT_PER_1K:0}

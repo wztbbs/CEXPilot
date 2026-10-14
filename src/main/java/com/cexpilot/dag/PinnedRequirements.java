@@ -72,7 +72,7 @@ final class PinnedRequirements {
                     .forEach(t -> {
                         ObjectNode identity = MAPPER.valueToTree(t);
                         identity.remove(List.of("groupId", "physicalId", "exchangeOrigin", "settleOrigin",
-                                "intervalOrigin", "includeUnclosedOrigin", "depthOrigin"));
+                                "intervalOrigin", "includeUnclosedOrigin", "depthOrigin", "conditionSources", "executionMetadata"));
                         query.add(identity);
                     });
             List<String> paths = new ArrayList<>(uses.getOrDefault(metric.id(), List.of()));

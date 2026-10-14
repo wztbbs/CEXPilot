@@ -52,6 +52,8 @@ public class AskController {
                         }
                     })
                     .body(response);
+        } catch (com.cexpilot.conversation.StaleContextException e) {
+            return ResponseEntity.status(409).body(e.response());
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
@@ -73,9 +75,12 @@ public class AskController {
 
         SseEmitter emitter = new SseEmitter(Duration.ofSeconds(300).toMillis());
         taskExecutor.execute(() -> {
+            var completedTurn = new java.util.concurrent.atomic.AtomicReference<String>();
             try {
                 askService.ask(request.conversationId(), request.question(), resolvedVisitorId,
                         request.timezone(), request.parentTurnId(), new AskService.AskStreamListener() {
+                            @Override
+                            public void onTurnFinished(String turnId) { completedTurn.set(turnId); }
                             @Override
                             public void onMeta(String conversationId, String traceId, String turnId) {
                                 Map<String, Object> meta = new java.util.LinkedHashMap<>();
@@ -115,11 +120,13 @@ public class AskController {
                                 send(emitter, "done", done);
                             }
                         });
+            } catch (com.cexpilot.conversation.StaleContextException e) {
+                sendQuietly(emitter, "error", e.response());
             } catch (IllegalArgumentException e) {
-                sendQuietly(emitter, "error", Map.of("error", e.getMessage()));
+                sendQuietly(emitter, "error", errorResponse(e.getMessage(), completedTurn.get()));
             } catch (Exception e) {
                 log.warn("流式问答失败: {}", e.getMessage());
-                sendQuietly(emitter, "error", Map.of("error", "问答处理失败: " + e.getMessage()));
+                sendQuietly(emitter, "error", errorResponse("问答处理失败: " + e.getMessage(), completedTurn.get()));
             } finally {
                 emitter.complete();
             }
@@ -143,6 +150,13 @@ public class AskController {
             // 发送失败（多为客户端断开）：中断后续发送，由编排层按失败收尾
             throw new IllegalStateException("SSE 推送失败: " + e.getMessage(), e);
         }
+    }
+
+    private static Map<String, Object> errorResponse(String message, String completedTurnId) {
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("error", message);
+        if (completedTurnId != null) result.put("turnId", completedTurnId);
+        return result;
     }
 
     private static void sendQuietly(SseEmitter emitter, String event, Object data) {
