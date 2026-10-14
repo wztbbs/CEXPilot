@@ -482,10 +482,18 @@ def protocol_errors(envelope):
         errors.append("in_domain=false 时 plan 必须为空（null 或无取数无计算的空对象）")
     if envelope.get("needs_clarification") is True and plan is not None and not _is_empty_plan(plan):
         errors.append("needs_clarification=true 时 plan 必须为空（null 或无取数无计算的空对象）")
-    if plan is None:
-        text = envelope.get("clarify") or envelope.get("reply")
-        if not isinstance(text, str) or not text.strip():
-            errors.append("plan=null 必须有明确 reply 或 clarify")
+    if plan is None or _is_empty_plan(plan):
+        # 空计划等价于缺 plan：必须有话术交代。与服务端同口径——clarify 仅在
+        # needs_clarification=true 时生效；没置旗时 clarify 是死文字，说明必须用 reply。
+        reply = envelope.get("reply")
+        clarify = envelope.get("clarify")
+        has_reply = isinstance(reply, str) and bool(reply.strip())
+        has_clarify = isinstance(clarify, str) and bool(clarify.strip())
+        flagged = envelope.get("needs_clarification") is True
+        if has_clarify and not flagged:
+            errors.append("clarify 仅在 needs_clarification=true 时生效（未置旗时服务端按规划路径处理），说明文字请用 reply")
+        if not has_reply and not (has_clarify and flagged):
+            errors.append("空计划（plan=null 或无取数无计算）必须有明确 reply；澄清场景须置 needs_clarification=true 并配 clarify")
         return errors
     if not isinstance(plan, dict):
         return errors + ["plan 必须为对象或 null"]
@@ -495,13 +503,6 @@ def protocol_errors(envelope):
         if not isinstance(plan.get(key), list):
             errors.append("plan." + key + " 必须为数组")
     if errors:
-        return errors
-    if not plan["metrics"] and not plan["calculations"]:
-        # 与 Java evaluateReplyWithoutPlan 同口径：空计划等价于缺 plan，
-        # 可以是"有意不规划"，但必须有明确话术交代；无话术即协议违约。
-        text = envelope.get("clarify") or envelope.get("reply")
-        if not isinstance(text, str) or not text.strip():
-            errors.append("空计划（无指标无计算）必须有明确 reply 或 clarify")
         return errors
     ids = {}
     for kind, nodes in (("metric", plan["metrics"]), ("calculation", plan["calculations"])):

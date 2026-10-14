@@ -647,6 +647,19 @@ class DagPlannerTest {
         }
     }
 
+    @Test void 写了clarify没置旗时修复提示直指补旗() {
+        // P039 型：clarify 仅在 needs_clarification=true 时生效；没置旗时服务端按规划路径处理，
+        // 泛泛的"plan 不包含任何节点"会把模型引向修 plan——修复提示必须直指补旗
+        var noFlag = "{\"in_domain\":true,\"clarify\":\"币安还是OKX？\",\"plan\":{\"metrics\":[],\"calculations\":[]}}";
+        var flagged = "{\"in_domain\":true,\"needs_clarification\":true,\"clarify\":\"币安还是OKX？\",\"plan\":null}";
+        var llm = new Script(noFlag, flagged);
+        var result = planner(llm, registry(), new DagConfig()).plan("它的均值呢", "", "t", e -> {});
+        assertTrue(result.needsClarification(), result.lastError());
+        assertEquals("币安还是OKX？", result.reply());
+        assertEquals(2, llm.calls.size());
+        assertTrue(llm.calls.get(1).get(3).content().contains("needs_clarification"), "修复消息要教模型补旗");
+    }
+
     @Test void task_ref尾部标点归一后正常命中索引() {
         // P042 型：模型输出 "task_2,"（带自然语言逗号），归一后命中 task_2，不再误变澄清
         var tasks = List.of(com.cexpilot.conversation.TaskSnapshot.candidate(firstTaskState(), "task_2"));

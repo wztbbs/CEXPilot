@@ -458,6 +458,17 @@ public class DagPlanner {
             if (plan.nodes().isEmpty() && reply != null && !reply.isBlank()) {
                 return evaluateReplyWithoutPlan(parsed, reply, traceId, sink);
             }
+            if (plan.nodes().isEmpty() && !parsed.path("needs_clarification").asBoolean(false)) {
+                // P039 型：模型写了澄清话术但忘了置旗，"plan 不包含任何节点"的泛泛提示会把
+                // 模型引向修 plan（永远修不好）；直接指出该补的是 needs_clarification=true。
+                String clarify = textOrNull(parsed.path("clarify"));
+                if (clarify != null && !clarify.isBlank()) {
+                    return repairDecision(traceId, sink, parsed.toString(),
+                            "输出了 clarify 但 needs_clarification 未置 true：澄清必须同时设置 "
+                                    + "needs_clarification=true、plan=null（或无取数无计算的空对象）并保留 clarify；"
+                                    + "若不是澄清意图，请把说明文字放入 reply");
+                }
+            }
             List<String> errors = validator.validate(plan, compiler.allowedTools(), maxToolCalls);
             if (errors.isEmpty()) {
                 // 继承对账：NEW 无基准，CONTINUE/RESUME 使用已选择的任务版本。漏报 changes 的第一次先修复教学；修复后仍不声明则

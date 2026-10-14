@@ -334,6 +334,16 @@ class PlannerEvalTests(unittest.TestCase):
             violated = {**branch, "plan": plan()["plan"]}
             self.assertTrue(ev.protocol_errors(violated), violated)
 
+    def test_clarify_without_flag_is_protocol_error(self):
+        # P039 型：clarify 仅在 needs_clarification=true 时生效；没置旗时它是死文字，
+        # 空计划又没 reply → 协议违约（与服务端同口径）。
+        no_flag = {"in_domain": True, "reply": None,
+                   "clarify": "币安还是OKX？", "plan": {"metrics": [], "calculations": []}}
+        errors = ev.protocol_errors(no_flag)
+        self.assertTrue(any("needs_clarification" in e for e in errors), errors)
+        self.assertFalse(ev.protocol_errors({**no_flag, "needs_clarification": True}))
+        self.assertFalse(ev.protocol_errors({**no_flag, "clarify": None, "reply": "请明确查询对象。"}))
+
     def test_unparseable_output_marks_protocol_fail_and_skips_judge(self):
         attempt = ev.extract_planner(trace([event(1, "broken JSON")]), case()["question"])["attempts"][0]
         judge = FakeJudge()
