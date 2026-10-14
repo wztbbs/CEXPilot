@@ -41,5 +41,28 @@ class LlmRequestParametersTest {
         assertFalse(parameters.has("response_format"));
         assertFalse(parameters.has("seed"));
         assertFalse(parameters.has("enable_thinking"));
+        assertFalse(parameters.has("thinking"));
+        assertFalse(parameters.has("reasoning_effort"));
+    }
+
+    @Test void thinkingTypeAndReasoningEffortAreSentWhenConfigured() throws Exception {
+        var config = new LlmConfig.ModelConfig();
+        config.setModel("test-model");
+        config.setThinkingType("enabled");
+        config.setReasoningEffort("low");
+        var client = new OpenAiCompatibleClient(config, 0, null, false);
+        var parameters = client.requestParameters(null);
+        assertEquals("enabled", parameters.at("/thinking/type").asText());
+        assertEquals("low", parameters.path("reasoning_effort").asText());
+    }
+
+    @Test void blankThinkingTypeAndReasoningEffortStayOmitted() {
+        var config = new LlmConfig.ModelConfig();
+        config.setThinkingType("  ");
+        config.setReasoningEffort("");
+        var client = new OpenAiCompatibleClient(config, 0, null, false);
+        var parameters = client.requestParameters(null);
+        assertFalse(parameters.has("thinking"));
+        assertFalse(parameters.has("reasoning_effort"));
     }
 }

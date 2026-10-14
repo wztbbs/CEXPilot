@@ -77,6 +77,10 @@ public class LlmConfig {
         private double priceOutputPer1k = 0;
         /** null = 不下发该参数；Qwen3 混合模型默认开思考，低延迟场景应显式设为 false。 */
         private Boolean enableThinking;
+        /** null/空 = 不下发；兼容厂商的 thinking.type 参数（GLM/DeepSeek：enabled/disabled/adaptive）。 */
+        private String thinkingType;
+        /** null/空 = 不下发；推理强度（OpenAI reasoning_effort：low/medium/high）。 */
+        private String reasoningEffort;
         /** false = 关闭连接复用（每次调用重新 TLS 握手），仅用于 A/B 测量握手开销。 */
         private boolean pooling = true;
 
@@ -94,6 +98,22 @@ public class LlmConfig {
 
         public void setEnableThinking(Boolean enableThinking) {
             this.enableThinking = enableThinking;
+        }
+
+        public String getThinkingType() {
+            return thinkingType;
+        }
+
+        public void setThinkingType(String thinkingType) {
+            this.thinkingType = thinkingType;
+        }
+
+        public String getReasoningEffort() {
+            return reasoningEffort;
+        }
+
+        public void setReasoningEffort(String reasoningEffort) {
+            this.reasoningEffort = reasoningEffort;
         }
 
         public String getBaseUrl() {

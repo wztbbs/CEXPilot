@@ -21,6 +21,8 @@ llm:
     api-key: ${LLM_NORMAL_API_KEY:}
     model: ${LLM_NORMAL_MODEL:qwen-plus}
     enable-thinking: ${LLM_NORMAL_ENABLE_THINKING:false}
+    thinking-type: ${LLM_NORMAL_THINKING_TYPE:}
+    reasoning-effort: ${LLM_NORMAL_REASONING_EFFORT:}
     # 连接复用开关，仅用于 A/B 测量"每次调用的 TLS 握手开销"，线上请保持 true
     pooling: ${LLM_NORMAL_POOLING:true}
     price-input-per-1k: ${LLM_NORMAL_PRICE_INPUT_PER_1K:0}
@@ -32,6 +34,8 @@ llm:
     pooling: ${LLM_FLAGSHIP_POOLING:true}
     price-input-per-1k: ${LLM_FLAGSHIP_PRICE_INPUT_PER_1K:0}
     price-output-per-1k: ${LLM_FLAGSHIP_PRICE_OUTPUT_PER_1K:0}
+    thinking-type: ${LLM_FLAGSHIP_THINKING_TYPE:}
+    reasoning-effort: ${LLM_FLAGSHIP_REASONING_EFFORT:}
   temperature: ${LLM_TEMPERATURE:0}
   # 采样种子：排查/eval 需要复现输出时设置，默认不下发
   seed: ${LLM_SEED:}

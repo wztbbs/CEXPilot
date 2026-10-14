@@ -268,6 +268,13 @@ public class OpenAiCompatibleClient implements LlmClient {
             // 低延迟场景（规划 / 模板化回答）应关闭
             body.put("enable_thinking", config.getEnableThinking());
         }
+        if (config.getThinkingType() != null && !config.getThinkingType().isBlank()) {
+            // 厂商原生 thinking.type（GLM/DeepSeek）；与 Qwen 的 enable_thinking 相互独立
+            body.putObject("thinking").put("type", config.getThinkingType().trim());
+        }
+        if (config.getReasoningEffort() != null && !config.getReasoningEffort().isBlank()) {
+            body.put("reasoning_effort", config.getReasoningEffort().trim());
+        }
         return body;
     }
 
