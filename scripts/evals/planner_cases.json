@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "suite_id": "planner-v1",
-  "description": "按逻辑计划契约组织的种子用例；label_source=repository_contract，尚未经过人工/旗舰模型实测校准。实际prompt与标注版本冲突必须UNCERTAIN。",
+  "description": "按逻辑计划契约组织的种子用例；包含2026-10-09/14追问探针复核提炼的多轮分支，label_source=repository_contract。前置分支未触发或实际prompt与标注版本冲突必须UNCERTAIN；不因旧探针PASS推定新用例已通过。",
   "cases": [
     {
       "id": "P001",
@@ -1425,7 +1425,7 @@
         {
           "id": "P042.1",
           "dimension": "context",
-          "expectation": "依据实际近期任务索引，task_action=RESUME、task_ref=第一个成交额任务的真实轮次ID；不能编造ID或沿用当前ETH任务。"
+          "expectation": "依据实际近期任务索引及 first_query_no，task_action=RESUME，选择第一个成交额任务的真实 task_ref 别名及原有效 state_ref；若实际契约允许 turnId 兼容引用可接受。别名 task_1 不保证最早，不能编造ID、按列表首项猜或沿用当前ETH任务。"
         },
         {
           "id": "P042.2",
@@ -1436,6 +1436,1031 @@
           "id": "P042.3",
           "dimension": "context",
           "expectation": "任务索引缺失或第一轮没有成为可回访任务时，应澄清；回访前提缺失标UNCERTAIN。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P043",
+      "title": "连续换指标保持固定粒度",
+      "question": "基础币成交量呢？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:followup",
+        "context:metric_chain",
+        "parameters:fixed_interval"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:followup",
+        "context:metric_chain",
+        "parameters:fixed_interval"
+      ],
+      "source_probes": [
+        "F01",
+        "F15"
+      ],
+      "setup_questions": [
+        "查币安 BTC-USDT 永续昨天按1小时K线统计的最高成交价。",
+        "最低价呢？"
+      ],
+      "criteria": [
+        {
+          "id": "P043.1",
+          "dimension": "context",
+          "expectation": "普通修改延续当前任务（task_action=CONTINUE，旧协议等价方案按实际契约），不能新建任务或回到无关历史任务。 本轮只从最低价改为基础币成交量，changes 声明 metric，不复活最高价查询。"
+        },
+        {
+          "id": "P043.2",
+          "dimension": "metric_shape",
+          "expectation": "唯一所需查询为 binance BTC/USDT 永续 trade.volume/range_statistic，不把基础币成交量换成成交额或当前快照。"
+        },
+        {
+          "id": "P043.3",
+          "dimension": "time",
+          "expectation": "继承活动任务原昨天固定区间和原时区；interval=1h 是原用户要求，不能因换指标恢复自动粒度或把旧区间改为本次昨天。"
+        },
+        {
+          "id": "P043.4",
+          "dimension": "minimality",
+          "expectation": "不增加均值、比较、求和等无关计算；区间成交量成品指标无需另加 sum。"
+        },
+        {
+          "id": "P043.5",
+          "dimension": "context",
+          "expectation": "先核对实际 Planner 输入中的活动状态、任务/版本或原始事实候选；若前置轮未建立本条需要的状态、候选或待补需求，相应依赖判据标 UNCERTAIN 并说明缺失前提，不把未触发的分支判 PASS。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P044",
+      "title": "先换交易所再换币种",
+      "question": "ETH 呢？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:followup",
+        "context:exchange_base_chain"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:followup",
+        "context:exchange_base_chain"
+      ],
+      "source_probes": [
+        "F06"
+      ],
+      "setup_questions": [
+        "查币安 BTC-USDT 永续昨天完整自然日的最高成交价。",
+        "那 OKX 呢？"
+      ],
+      "criteria": [
+        {
+          "id": "P044.1",
+          "dimension": "context",
+          "expectation": "普通修改延续当前任务（task_action=CONTINUE，旧协议等价方案按实际契约），不能新建任务或回到无关历史任务。 本轮只改 base=ETH，changes 声明 base；交易所应沿用最近的 OKX，而不是首轮币安。"
+        },
+        {
+          "id": "P044.2",
+          "dimension": "metric_shape",
+          "expectation": "okx ETH/USDT 永续 price.high/range_statistic，保留原固定日期和时区，不改成 ETH 当前价。"
+        },
+        {
+          "id": "P044.3",
+          "dimension": "context",
+          "expectation": "先核对实际 Planner 输入中的活动状态、任务/版本或原始事实候选；若前置轮未建立本条需要的状态、候选或待补需求，相应依赖判据标 UNCERTAIN 并说明缺失前提，不把未触发的分支判 PASS。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P045",
+      "title": "指标焦点往返",
+      "question": "再查一下最高价。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:followup",
+        "context:focus_roundtrip"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:followup",
+        "context:focus_roundtrip"
+      ],
+      "source_probes": [
+        "F07"
+      ],
+      "setup_questions": [
+        "查币安 BTC-USDT 永续昨天按1小时K线统计的最高成交价。",
+        "最低价呢？"
+      ],
+      "criteria": [
+        {
+          "id": "P045.1",
+          "dimension": "context",
+          "expectation": "普通修改延续当前任务（task_action=CONTINUE，旧协议等价方案按实际契约），不能新建任务或回到无关历史任务。 当前活动指标虽为最低价，本轮明确改回 price.high，changes 声明 metric，不继续输出 price.low。"
+        },
+        {
+          "id": "P045.2",
+          "dimension": "metric_shape",
+          "expectation": "binance BTC price.high/range_statistic，继承原固定区间、时区与 interval=1h。"
+        },
+        {
+          "id": "P045.3",
+          "dimension": "context",
+          "expectation": "本轮明确再查，reference_mode 省略或 latest；不得把已有 price.low 事实绑定成最高价，也不得在 reply 复制历史答案数字。"
+        },
+        {
+          "id": "P045.4",
+          "dimension": "context",
+          "expectation": "先核对实际 Planner 输入中的活动状态、任务/版本或原始事实候选；若前置轮未建立本条需要的状态、候选或待补需求，相应依赖判据标 UNCERTAIN 并说明缺失前提，不把未触发的分支判 PASS。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P046",
+      "title": "连续修改后叠加指标",
+      "question": "成交量也查一下。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:followup",
+        "context:condition_chain",
+        "context:add_metric"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:followup",
+        "context:condition_chain",
+        "context:add_metric"
+      ],
+      "source_probes": [
+        "P4"
+      ],
+      "setup_questions": [
+        "分别列出币安和 OKX BTC-USDT 永续昨天完整自然日的成交额，不用比较。",
+        "换成 ETH，其他条件不变。",
+        "只看 OKX。",
+        "改成前天。"
+      ],
+      "criteria": [
+        {
+          "id": "P046.1",
+          "dimension": "context",
+          "expectation": "普通修改延续当前任务（task_action=CONTINUE，旧协议等价方案按实际契约），不能新建任务或回到无关历史任务。 继承最后有效条件：OKX、ETH、上一轮已确定的前天历史区间和时区，不能回退到 BTC/币安/昨天。"
+        },
+        {
+          "id": "P046.2",
+          "dimension": "metric_shape",
+          "expectation": "新增 trade.volume/range_statistic，同时保留 trade.turnover/range_statistic；“也查”是叠加而非替换，两项条件一致。"
+        },
+        {
+          "id": "P046.3",
+          "dimension": "minimality",
+          "expectation": "不恢复已被“只看 OKX”删除的 binance 分支；用户只是分列原始值，不自动增加两所比较或跨单位求和。"
+        },
+        {
+          "id": "P046.4",
+          "dimension": "context",
+          "expectation": "先核对实际 Planner 输入中的活动状态、任务/版本或原始事实候选；若前置轮未建立本条需要的状态、候选或待补需求，相应依赖判据标 UNCERTAIN 并说明缺失前提，不把未触发的分支判 PASS。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P047",
+      "title": "叠加与替换的对照",
+      "question": "改查成交量，成交额不用了。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:followup",
+        "context:condition_chain",
+        "context:replace_metric"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:followup",
+        "context:condition_chain",
+        "context:replace_metric"
+      ],
+      "source_probes": [
+        "P4"
+      ],
+      "setup_questions": [
+        "分别列出币安和 OKX BTC-USDT 永续昨天完整自然日的成交额，不用比较。",
+        "换成 ETH，其他条件不变。",
+        "只看 OKX。",
+        "改成前天。"
+      ],
+      "criteria": [
+        {
+          "id": "P047.1",
+          "dimension": "context",
+          "expectation": "普通修改延续当前任务（task_action=CONTINUE，旧协议等价方案按实际契约），不能新建任务或回到无关历史任务。 继承 OKX/ETH/前天固定区间和时区，changes 声明 metric。"
+        },
+        {
+          "id": "P047.2",
+          "dimension": "metric_shape",
+          "expectation": "只保留 okx ETH trade.volume/range_statistic；明确“成交额不用了”时不保留 trade.turnover，更不能按叠加处理。"
+        },
+        {
+          "id": "P047.3",
+          "dimension": "minimality",
+          "expectation": "无无关比较或计算，不用旧成交额推算基础币成交量。"
+        },
+        {
+          "id": "P047.4",
+          "dimension": "context",
+          "expectation": "先核对实际 Planner 输入中的活动状态、任务/版本或原始事实候选；若前置轮未建立本条需要的状态、候选或待补需求，相应依赖判据标 UNCERTAIN 并说明缺失前提，不把未触发的分支判 PASS。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P048",
+      "title": "五轮干扰后回访最早任务",
+      "question": "回到最开始那个问题，换成 OKX，其他条件不变。",
+      "timezone": "America/New_York",
+      "tags": [
+        "context:followup",
+        "context:long_resume",
+        "context:task_order",
+        "time:inherited_timezone"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:followup",
+        "context:long_resume",
+        "context:task_order",
+        "time:inherited_timezone"
+      ],
+      "source_probes": [
+        "P1"
+      ],
+      "setup_questions": [
+        "查币安 BTC-USDT 永续昨天的成交额，按上海时区。",
+        "ETH 现在多少钱？",
+        "SOL 现在多少钱？",
+        "XRP 现在多少钱？",
+        "DOGE 现在多少钱？",
+        "ADA 现在多少钱？"
+      ],
+      "criteria": [
+        {
+          "id": "P048.1",
+          "dimension": "context",
+          "expectation": "按实际近期任务索引的 first_query_no 和原问题选择最早 BTC 成交额任务及其原有效版本。task_action=RESUME，task_ref/state_ref 必须来自该候选；task_1 及列表首项不一定最早，不得按别名数字或列表位置猜。"
+        },
+        {
+          "id": "P048.2",
+          "dimension": "metric_shape",
+          "expectation": "okx BTC/USDT 永续 trade.turnover/range_statistic；不能沿用中途 ETH/ADA 的 price.last 快照。"
+        },
+        {
+          "id": "P048.3",
+          "dimension": "time",
+          "expectation": "继承首轮按 Asia/Shanghai 消解的昨天固定区间，不能改为请求默认 America/New_York，也不能用本次时钟重新计算昨天；按原版本时间锚点检查区间等价。"
+        },
+        {
+          "id": "P048.4",
+          "dimension": "context",
+          "expectation": "本轮只改交易所，changes 声明 exchange；恢复查询任务不等于绑定旧币安成交额，不能用 binance 的 pinned 事实冒充 OKX。"
+        },
+        {
+          "id": "P048.5",
+          "dimension": "context",
+          "expectation": "先核对实际 Planner 输入中的活动状态、任务/版本或原始事实候选；若前置轮未建立本条需要的状态、候选或待补需求，相应依赖判据标 UNCERTAIN 并说明缺失前提，不把未触发的分支判 PASS。 原始任务在结构化索引中即可成立，不要求它一定已从文字历史删除；若文字窗口未淘汰，不能宣称已验证淘汰分支。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P049",
+      "title": "六轮混合任务后回访最早版本",
+      "question": "回到最开始那个问题，换成 OKX，其他条件不变。",
+      "timezone": "America/New_York",
+      "tags": [
+        "context:followup",
+        "context:long_resume",
+        "context:task_order",
+        "context:mixed_interference",
+        "time:inherited_timezone"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:followup",
+        "context:long_resume",
+        "context:task_order",
+        "context:mixed_interference",
+        "time:inherited_timezone"
+      ],
+      "source_probes": [
+        "F08"
+      ],
+      "setup_questions": [
+        "查币安 BTC-USDT 永续昨天的成交额，按上海时区。",
+        "ETH 现在多少钱？",
+        "SOL 的官方24小时涨跌幅？",
+        "XRP 最近3期已结算资金费率的均值？",
+        "DOGE 现在多少钱？",
+        "ADA 和 BNB 的现价差多少？",
+        "LTC 昨天最高价？"
+      ],
+      "criteria": [
+        {
+          "id": "P049.1",
+          "dimension": "context",
+          "expectation": "选择实际索引中 first_query_no 最小的 BTC 成交额任务和原有效 state_ref，task_action=RESUME。不能选最近 LTC 任务、首项 ETH 任务或带垃圾字符的引用；引用合法并不证明选对任务。"
+        },
+        {
+          "id": "P049.2",
+          "dimension": "metric_shape",
+          "expectation": "计划回到 okx BTC trade.turnover/range_statistic，不夹带中途价格、资金费率聚合或价差节点。"
+        },
+        {
+          "id": "P049.3",
+          "dimension": "time",
+          "expectation": "保留原 Asia/Shanghai 和原昨天完整自然日，不继承 America/New_York 请求默认或干扰任务的时间口径。"
+        },
+        {
+          "id": "P049.4",
+          "dimension": "context",
+          "expectation": "先核对实际 Planner 输入中的活动状态、任务/版本或原始事实候选；若前置轮未建立本条需要的状态、候选或待补需求，相应依赖判据标 UNCERTAIN 并说明缺失前提，不把未触发的分支判 PASS。 候选应包含最早任务及原有效版本；无法定位则应澄清，不伪造任务引用。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P050",
+      "title": "聚合追问后仍锁定原十期",
+      "question": "再找出最开始那10期的最小值。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:followup",
+        "context:pinned_after_aggregation",
+        "operator:min"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:followup",
+        "context:pinned_after_aggregation",
+        "operator:min"
+      ],
+      "source_probes": [
+        "P3",
+        "F02"
+      ],
+      "setup_questions": [
+        "列出币安 BTC-USDT 永续最近10期已结算资金费率。",
+        "刚才这10期的均值。",
+        "这10期的最大值。"
+      ],
+      "criteria": [
+        {
+          "id": "P050.1",
+          "dimension": "context",
+          "expectation": "实际有最初原始样本候选时绑定原 funding.rate_settled/recent_n/count=10 的 pinned_result，evidence_ref 来自本次候选并对应最初原始事实；不绑定 derived 的 avg/max 单值，也不重取最新10期。候选缺失时澄清并将复用前提记 UNCERTAIN。"
+        },
+        {
+          "id": "P050.2",
+          "dimension": "calculation",
+          "expectation": "min 对所绑定原始 samples.value 求最小值，不对 avg.value/max.value 求 min，不读取历史回答表格作字面量输入。"
+        },
+        {
+          "id": "P050.3",
+          "dimension": "instrument",
+          "expectation": "继承 binance BTC/USDT 永续，不能因连续聚合改交易所、币种或期数。"
+        },
+        {
+          "id": "P050.4",
+          "dimension": "minimality",
+          "expectation": "本轮只求最小值，不重复规划已经完成的 avg/max 或无关比较。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P051",
+      "title": "先复用再显式刷新最新集合",
+      "question": "现在重新取最新10期，算平均值。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:followup",
+        "context:latest_after_pinned",
+        "operator:avg"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:followup",
+        "context:latest_after_pinned",
+        "operator:avg"
+      ],
+      "source_probes": [
+        "F03"
+      ],
+      "setup_questions": [
+        "列出币安 BTC-USDT 永续最近10期已结算资金费率。",
+        "刚才那10期的平均值呢？"
+      ],
+      "criteria": [
+        {
+          "id": "P051.1",
+          "dimension": "context",
+          "expectation": "明确“现在重新取最新”覆盖上一轮 pinned 选择：funding.rate_settled/recent_n/count=10 使用 latest 或省略 reference_mode；不能继续绑定旧 evidence_ref。"
+        },
+        {
+          "id": "P051.2",
+          "dimension": "calculation",
+          "expectation": "avg 本轮最新样本的 samples.value，不复用上轮 avg.value，也不把 period/count 换成时间窗口。"
+        },
+        {
+          "id": "P051.3",
+          "dimension": "instrument",
+          "expectation": "保持 binance BTC/USDT 永续。"
+        },
+        {
+          "id": "P051.4",
+          "dimension": "context",
+          "expectation": "先核对实际 Planner 输入中的活动状态、任务/版本或原始事实候选；若前置轮未建立本条需要的状态、候选或待补需求，相应依赖判据标 UNCERTAIN 并说明缺失前提，不把未触发的分支判 PASS。 若上一轮未建立 pinned 聚合状态，则不得声称 pinned→latest 切换分支已通过。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P052",
+      "title": "连续刷新保持当前对象",
+      "question": "再刷新。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:followup",
+        "context:refresh_chain"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:followup",
+        "context:refresh_chain"
+      ],
+      "source_probes": [
+        "F04"
+      ],
+      "setup_questions": [
+        "币安 BTC-USDT 永续现在最新成交价是多少？",
+        "刷新一下。"
+      ],
+      "criteria": [
+        {
+          "id": "P052.1",
+          "dimension": "context",
+          "expectation": "普通修改延续当前任务（task_action=CONTINUE，旧协议等价方案按实际契约），不能新建任务或回到无关历史任务。 继承当前 binance/BTC/USDT 永续对象；再次刷新使用 latest 或省略 reference_mode，不绑定原 price.last 快照。"
+        },
+        {
+          "id": "P052.2",
+          "dimension": "metric_shape",
+          "expectation": "price.last/snapshot，不带历史 time 或 interval，不改成官方24h、mark.price 或区间 close。"
+        },
+        {
+          "id": "P052.3",
+          "dimension": "minimality",
+          "expectation": "只刷新价格，不因多次快照自动增加相对变化计算。"
+        },
+        {
+          "id": "P052.4",
+          "dimension": "context",
+          "expectation": "先核对实际 Planner 输入中的活动状态、任务/版本或原始事实候选；若前置轮未建立本条需要的状态、候选或待补需求，相应依赖判据标 UNCERTAIN 并说明缺失前提，不把未触发的分支判 PASS。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P053",
+      "title": "多交易所多币种四候选澄清",
+      "question": "它的均值呢？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:followup",
+        "context:four_candidates",
+        "decision:clarification"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:followup",
+        "context:four_candidates",
+        "decision:clarification"
+      ],
+      "source_probes": [
+        "F10"
+      ],
+      "setup_questions": [
+        "分别列出币安和 OKX 的 BTC-USDT、ETH-USDT 永续最近10期已结算资金费率。"
+      ],
+      "criteria": [
+        {
+          "id": "P053.1",
+          "dimension": "context",
+          "expectation": "先检查真实候选是否覆盖 binance/okx × BTC/ETH 四组原始序列。满足时指代无法唯一确定，应澄清交易所和币种；候选不足而消除了歧义时标 UNCERTAIN，不能冒充四候选覆盖。"
+        },
+        {
+          "id": "P053.2",
+          "dimension": "decision",
+          "expectation": "前提满足时 needs_clarification=true，无可执行计划，clarify 或 reply 具体追问选哪家交易所、哪种币。选择式“币安还是 OKX、BTC 还是 ETH”与“哪一组”均可接受，不要求正则固定话术；程序兜底不算模型自己写了澄清。"
+        },
+        {
+          "id": "P053.3",
+          "dimension": "minimality",
+          "expectation": "不默认第一组，不把四组混合平均，也不分别为所有候选计算来绕过指代澄清。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P054",
+      "title": "澄清后短回复完成原聚合",
+      "question": "币安 BTC 那组。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:followup",
+        "context:clarification_resume",
+        "operator:avg"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:followup",
+        "context:clarification_resume",
+        "operator:avg"
+      ],
+      "source_probes": [
+        "F10",
+        "F11"
+      ],
+      "setup_questions": [
+        "分别列出币安和 OKX 的 BTC-USDT、ETH-USDT 永续最近10期已结算资金费率。",
+        "它的均值呢？"
+      ],
+      "criteria": [
+        {
+          "id": "P054.1",
+          "dimension": "context",
+          "expectation": "实际上下文须包含上一轮对“它的均值”的待补任务/澄清链和四组事实；若上一轮未澄清或原聚合意图没有保存，相应接续判据标 UNCERTAIN，不按普通选择冒充澄清接续。"
+        },
+        {
+          "id": "P054.2",
+          "dimension": "decision",
+          "expectation": "前提满足后 task_action=CONTINUE，用户短回复补全交易所和币种并完成原均值需求；不能只查价格、只列费率或把短回复当新任务。"
+        },
+        {
+          "id": "P054.3",
+          "dimension": "calculation",
+          "expectation": "绑定实际候选中的 binance/BTC 原10期 funding.rate_settled 样本（pinned_result）并 avg samples.value；不重查最新集合，不绑定 ETH/OKX 或 derived 计算事实。候选不可恢复时明确澄清，不编造引用。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P055",
+      "title": "连续澄清补币种再补期数",
+      "question": "10期。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:followup",
+        "context:clarification_chain",
+        "parameters:required_count",
+        "operator:avg"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:followup",
+        "context:clarification_chain",
+        "parameters:required_count",
+        "operator:avg"
+      ],
+      "source_probes": [
+        "F11"
+      ],
+      "setup_questions": [
+        "查币安 USDT 永续最近几期已结算资金费率的平均值。",
+        "BTC。"
+      ],
+      "criteria": [
+        {
+          "id": "P055.1",
+          "dimension": "context",
+          "expectation": "首轮缺基础币和具体期数，第二轮仅补 BTC；真实上下文应保留原均值需求和待补 count。若没有形成对应澄清链，相应分支记 UNCERTAIN，不把首轮模型猜出的币种/期数当用户要求。"
+        },
+        {
+          "id": "P055.2",
+          "dimension": "decision",
+          "expectation": "补齐后延续原任务（CONTINUE），不将“10期”当出域问题或另起行情任务，不再追问已提供的 BTC。"
+        },
+        {
+          "id": "P055.3",
+          "dimension": "metric_shape",
+          "expectation": "binance BTC/USDT 永续 funding.rate_settled/recent_n/count=10，不带 time/interval；此前尚未形成对应原样本事实时正常 latest 取数，不伪造 pinned 引用。"
+        },
+        {
+          "id": "P055.4",
+          "dimension": "calculation",
+          "expectation": "保留首轮请求的平均值，显式 avg 对本轮 samples.value，而不只列出10期原始费率。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P056",
+      "title": "新话题后代词绑定新对象",
+      "question": "它现在呢？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:followup",
+        "context:pronoun_after_new"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:followup",
+        "context:pronoun_after_new"
+      ],
+      "source_probes": [
+        "F22"
+      ],
+      "setup_questions": [
+        "币安 BTC-USDT 永续现在成交价是多少？",
+        "换个话题，OKX ETH-USDT 永续现在成交价是多少？"
+      ],
+      "criteria": [
+        {
+          "id": "P056.1",
+          "dimension": "context",
+          "expectation": "本轮“它”绑定当前新任务 OKX ETH，task_action=CONTINUE；不因 BTC 历史存在或更早而回到 BTC/binance，也不 RESUME 旧任务。"
+        },
+        {
+          "id": "P056.2",
+          "dimension": "metric_shape",
+          "expectation": "okx ETH price.last/snapshot，latest 或省略 reference_mode；不继承旧任务时间窗口或旧 BTC 快照。"
+        },
+        {
+          "id": "P056.3",
+          "dimension": "context",
+          "expectation": "先核对实际 Planner 输入中的活动状态、任务/版本或原始事实候选；若前置轮未建立本条需要的状态、候选或待补需求，相应依赖判据标 UNCERTAIN 并说明缺失前提，不把未触发的分支判 PASS。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P057",
+      "title": "长答案后按结构化区间换指标",
+      "question": "同一区间最低价。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:followup",
+        "context:long_answer",
+        "context:structured_over_text",
+        "parameters:fixed_interval"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:followup",
+        "context:long_answer",
+        "context:structured_over_text",
+        "parameters:fixed_interval"
+      ],
+      "source_probes": [
+        "P5",
+        "P5b",
+        "F09",
+        "F15"
+      ],
+      "setup_questions": [
+        "逐根列出币安 BTC-USDT 永续昨天每小时收盘价，一根都不要省略，最后说明实际覆盖到几点。"
+      ],
+      "criteria": [
+        {
+          "id": "P057.1",
+          "dimension": "context",
+          "expectation": "用实际活动状态继承 binance BTC/USDT、原历史区间和时区、interval=1h，改为 price.low/range_statistic；不能从被截断的答案表格或显示尾部反推区间，也不能把执行元数据当用户重新指定的条件。"
+        },
+        {
+          "id": "P057.2",
+          "dimension": "context",
+          "expectation": "已有 price.close 样本并不自动支持跨指标复用：未列出匹配 price.low 事实时应正常取最低价，不把 price.close 的 pinned 事实当 price.low，也不在 reply 自行读表算最低价。"
+        },
+        {
+          "id": "P057.3",
+          "dimension": "context",
+          "expectation": "先核对实际 Planner 输入中的活动状态、任务/版本或原始事实候选；若前置轮未建立本条需要的状态、候选或待补需求，相应依赖判据标 UNCERTAIN 并说明缺失前提，不把未触发的分支判 PASS。 只评结构化条件继承；若实际文字未被截断，不宣称已触发截断分支。"
+        },
+        {
+          "id": "P057.4",
+          "dimension": "minimality",
+          "expectation": "不安排均值、sum 或比较，区间最低价由成品指标产生。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P058",
+      "title": "成交价切换标记价",
+      "question": "标记价呢？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:followup",
+        "context:snapshot_metric_switch"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:followup",
+        "context:snapshot_metric_switch"
+      ],
+      "source_probes": [
+        "F17"
+      ],
+      "setup_questions": [
+        "币安 BTC-USDT 永续现在最新成交价是多少？"
+      ],
+      "criteria": [
+        {
+          "id": "P058.1",
+          "dimension": "context",
+          "expectation": "普通修改延续当前任务（task_action=CONTINUE，旧协议等价方案按实际契约），不能新建任务或回到无关历史任务。 保持 binance/BTC/USDT 永续，只改 metric 为 mark.price。"
+        },
+        {
+          "id": "P058.2",
+          "dimension": "metric_shape",
+          "expectation": "mark.price/snapshot；没有匹配标记价事实时 latest 取数，不能复用 price.last 的事实或将旧成交价写进 reply。"
+        },
+        {
+          "id": "P058.3",
+          "dimension": "minimality",
+          "expectation": "不额外查询指数价或计算基差。"
+        },
+        {
+          "id": "P058.4",
+          "dimension": "context",
+          "expectation": "先核对实际 Planner 输入中的活动状态、任务/版本或原始事实候选；若前置轮未建立本条需要的状态、候选或待补需求，相应依赖判据标 UNCERTAIN 并说明缺失前提，不把未触发的分支判 PASS。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P059",
+      "title": "官方24小时追问改自然日",
+      "question": "昨天完整自然日呢？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:followup",
+        "context:shape_switch",
+        "time:official_vs_calendar"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:followup",
+        "context:shape_switch",
+        "time:official_vs_calendar"
+      ],
+      "source_probes": [
+        "F18"
+      ],
+      "setup_questions": [
+        "币安 BTC-USDT 永续官方24小时涨跌幅是多少？"
+      ],
+      "criteria": [
+        {
+          "id": "P059.1",
+          "dimension": "context",
+          "expectation": "普通修改延续当前任务（task_action=CONTINUE，旧协议等价方案按实际契约），不能新建任务或回到无关历史任务。 保留 binance/BTC/USDT 永续；本轮明确改变时间和形态，不能继续 official_24h。"
+        },
+        {
+          "id": "P059.2",
+          "dimension": "metric_shape",
+          "expectation": "price.change_pct/range_statistic，time 表达本次请求时区下昨天完整自然日，不查询 price.change_pct_24h。"
+        },
+        {
+          "id": "P059.3",
+          "dimension": "time",
+          "expectation": "必须比较窗口整体；自然日不能换成请求时刻往回滚动24h，绝对区间仅在可见锚点能证明等价时接受。"
+        },
+        {
+          "id": "P059.4",
+          "dimension": "context",
+          "expectation": "先核对实际 Planner 输入中的活动状态、任务/版本或原始事实候选；若前置轮未建立本条需要的状态、候选或待补需求，相应依赖判据标 UNCERTAIN 并说明缺失前提，不把未触发的分支判 PASS。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P060",
+      "title": "已结算费率追问预测能力边界",
+      "question": "下次预测费率呢？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:followup",
+        "context:capability_switch",
+        "decision:unsupported"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:followup",
+        "context:capability_switch",
+        "decision:unsupported"
+      ],
+      "source_probes": [
+        "F19"
+      ],
+      "setup_questions": [
+        "列出币安 BTC-USDT 永续最近10期已结算资金费率。"
+      ],
+      "criteria": [
+        {
+          "id": "P060.1",
+          "dimension": "decision",
+          "expectation": "按实际目录：预测/未结算费率未接入时，in_domain=true，无可执行计划，明确说明能力缺口；若目录已支持则标注版本冲突记 UNCERTAIN。"
+        },
+        {
+          "id": "P060.2",
+          "dimension": "context",
+          "expectation": "继承 binance BTC/USDT 对象，但不能用 funding.rate_settled 的最近一期、旧10期均值或猜测周期替代下次预测费率。"
+        },
+        {
+          "id": "P060.3",
+          "dimension": "minimality",
+          "expectation": "不重查原已结算列表或添加价格指标，用户本轮只问预测费率。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P061",
+      "title": "不支持任务换所仍保持原需求",
+      "question": "那 OKX 呢？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:followup",
+        "context:unsupported_continuation",
+        "decision:unsupported"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:followup",
+        "context:unsupported_continuation",
+        "decision:unsupported"
+      ],
+      "source_probes": [
+        "F12"
+      ],
+      "setup_questions": [
+        "查币安 BTC-USDT 永续昨天的隐含波动率曲面。"
+      ],
+      "criteria": [
+        {
+          "id": "P061.1",
+          "dimension": "context",
+          "expectation": "实际上下文保留原隐含波动率曲面需求时，本轮仅将交易所换 OKX，不偷换成 OKX 价格、成交额或无关成功历史任务。原需求未进入本轮输入时相应继承判据记 UNCERTAIN。"
+        },
+        {
+          "id": "P061.2",
+          "dimension": "decision",
+          "expectation": "目录未接入该指标时保持在域、无计划并说明 OKX 同样不支持，不编造 IV 指标；若实际目录能力已变化，标注冲突记 UNCERTAIN。"
+        },
+        {
+          "id": "P061.3",
+          "dimension": "context",
+          "expectation": "这是不支持任务的需求接续，不把它宣称为已经验证了交易所取数异常后的恢复。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P062",
+      "title": "否定旧窗口同时换所换指标",
+      "question": "那 OKX 呢，但别用昨天，改查最近6小时的最高成交价和成交额。",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:followup",
+        "context:compound_change",
+        "context:negated_condition",
+        "time:rolling_window"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:followup",
+        "context:compound_change",
+        "context:negated_condition",
+        "time:rolling_window"
+      ],
+      "source_probes": [
+        "F20"
+      ],
+      "setup_questions": [
+        "查币安 BTC-USDT 永续昨天完整自然日的成交额。"
+      ],
+      "criteria": [
+        {
+          "id": "P062.1",
+          "dimension": "context",
+          "expectation": "普通修改延续当前任务（task_action=CONTINUE，旧协议等价方案按实际契约），不能新建任务或回到无关历史任务。 本轮明确改 exchange=okx、指标集合和 time；保留 BTC/USDT 永续，不因改多项就误判新话题。"
+        },
+        {
+          "id": "P062.2",
+          "dimension": "metric_shape",
+          "expectation": "okx BTC price.high/range_statistic 与 trade.turnover/range_statistic，均使用最近6小时窗口，不只换交易所却漏换指标或时间。"
+        },
+        {
+          "id": "P062.3",
+          "dimension": "time",
+          "expectation": "rolling_window/duration=6 hour 或可核实的等价区间，终点为本次请求时刻；不能继承昨天完整自然日。判断窗口起止整体，不能因为滚动窗口起点日期恰好是昨天就判失败。"
+        },
+        {
+          "id": "P062.4",
+          "dimension": "context",
+          "expectation": "先核对实际 Planner 输入中的活动状态、任务/版本或原始事实候选；若前置轮未建立本条需要的状态、候选或待补需求，相应依赖判据标 UNCERTAIN 并说明缺失前提，不把未触发的分支判 PASS。"
+        }
+      ],
+      "expected_fields": {
+        "in_domain": true
+      }
+    },
+    {
+      "id": "P063",
+      "title": "有数据缺口的历史序列追问成交量合计",
+      "question": "这一段的成交量合计呢？",
+      "timezone": "Asia/Shanghai",
+      "tags": [
+        "context:followup",
+        "context:coverage_metadata",
+        "context:cross_metric",
+        "minimality:precomputed_metric"
+      ],
+      "label_source": "repository_contract",
+      "coverage": [
+        "context:followup",
+        "context:coverage_metadata",
+        "context:cross_metric",
+        "minimality:precomputed_metric"
+      ],
+      "source_probes": [
+        "F16"
+      ],
+      "setup_questions": [
+        "列出币安 BTC-USDT 永续2019年9月每小时收盘价。"
+      ],
+      "criteria": [
+        {
+          "id": "P063.1",
+          "dimension": "context",
+          "expectation": "实际活动状态有效时继承 binance BTC/USDT 永续、2019-09-01至2019-10-01右开的完整请求区间、Asia/Shanghai和1h粒度，不悄悄缩成历史实际有数据的部分，也不换成现在或官方24h。"
+        },
+        {
+          "id": "P063.2",
+          "dimension": "metric_shape",
+          "expectation": "使用 trade.volume/range_statistic 成品区间合计即可，无需额外 sum；不得强制只接受 time_series+sum 的拓扑。未提供匹配 trade.volume 原始事实时正常取数，不以旧 price.close 样本或 fact 当成交量。"
+        },
+        {
+          "id": "P063.3",
+          "dimension": "minimality",
+          "expectation": "Planner reply 不写合计数值、不从历史回答逐项自算，也不承诺原有缺口已经消失。是否本次缺口仍存在、是否省略 value 及 Answer 是否披露不完整，属于执行层/Answer验收，不据此决定本条 Planner PASS。"
+        },
+        {
+          "id": "P063.4",
+          "dimension": "context",
+          "expectation": "先核对实际 Planner 输入中的活动状态、任务/版本或原始事实候选；若前置轮未建立本条需要的状态、候选或待补需求，相应依赖判据标 UNCERTAIN 并说明缺失前提，不把未触发的分支判 PASS。 如果实际输入没有缺口元数据，只能评区间和指标继承，不能宣称已验证“模型看到缺口”的分支；交易所当时返回527根等数值不作为期望答案。"
         }
       ],
       "expected_fields": {

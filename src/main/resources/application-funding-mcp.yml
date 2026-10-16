@@ -1,0 +1,21 @@
+# 行情 MCP Server 进程（FundingMcpServerApplication）专用配置
+spring:
+  application:
+    name: cexpilot-funding-mcp
+
+server:
+  port: ${MCP_SERVER_PORT:8090}
+
+exchange:
+  binance:
+    # 默认走约定的交易所代理（AGENTS.md）。注意：本机开发环境对 JVM 进程的出站长连
+    # 有限制（仅 80/443 可达，代理的 18080 端口对 Java 进程被静默丢包，curl/python 正常），
+    # 本地演示需显式覆盖：BINANCE_BASE_URL=https://fapi.binance.com（与主应用本地默认一致）
+    base-url: ${BINANCE_BASE_URL:http://43.160.213.63:18080}
+
+logging:
+  level:
+    com.cexpilot: info
+    io.modelcontextprotocol: info
+  file:
+    name: ${LOG_FILE:logs/cexpilot-funding-mcp.log}

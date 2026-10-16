@@ -243,6 +243,56 @@ class DagExecutorTest {
         assertTrue(outcome.context().get("n2").ok());
         assertEquals(List.of("fast_tool"), order);
     }
+
+    /**
+     * 节点超时后工作线程可能仍存活（cancel 不保证终止）：迟到的子调用事件必须被丢弃，
+     * 不能让主线程在 collect 里与 worker 并发读写同一列表（曾因此 CME 升级为整次执行失败）。
+     */
+    @Test
+    void timeoutDropsLateSubCallEvents() throws Exception {
+        DagConfig config = config();
+        config.setNodeTimeoutMs(200);
+        CountDownLatch lateRecorded = new CountDownLatch(1);
+        AgentTool lateWriter = new BaseTool() {
+            @Override
+            public String name() {
+                return "late_recording_tool";
+            }
+
+            @Override
+            public ToolResult execute(JsonNode args, ToolContext ctx) {
+                // 不响应 interrupt（模拟卡死的 HTTP 调用），且必须睡到主线程冻结之后，
+                // 否则被 cancel 唤醒后的写入会与冻结竞争，时序不确定
+                long deadline = System.currentTimeMillis() + 1000;
+                while (System.currentTimeMillis() < deadline) {
+                    try {
+                        Thread.sleep(deadline - System.currentTimeMillis());
+                    } catch (InterruptedException ignored) {
+                    }
+                }
+                // 主线程早已超时回收：这是一次"迟到"的子调用事件写入
+                com.cexpilot.runtime.NodeTraceCollector.record("mcp.fake", "{}", "{}", 1, null);
+                lateRecorded.countDown();
+                return ToolResult.success(MAPPER.createObjectNode());
+            }
+        };
+        ListSink sink = new ListSink();
+        DagExecutor executor = new DagExecutor(
+                com.cexpilot.runtime.TestTools.registry(List.of(lateWriter)), config);
+        DagPlan plan = plan("""
+                {"nodes": [{"id": "n1", "tool": "late_recording_tool", "args": {}, "depends_on": []}]}
+                """);
+
+        DagExecutor.ExecutionOutcome outcome = executor.execute(plan, "trace-late", sink);
+
+        assertFalse(outcome.context().get("n1").ok());
+        assertTrue(outcome.context().get("n1").error().contains("超时"));
+        // 迟到写入确实发生了（否则测试没覆盖到目标时序）
+        assertTrue(lateRecorded.await(3, TimeUnit.SECONDS));
+        // 但它被冻结丢弃，没有进入 trace，执行也没有因并发异常而失败
+        assertTrue(sink.events.stream().noneMatch(e -> "mcp.fake".equals(e.name())));
+        executor.shutdown();
+    }
     @Test
     void yamlDefaultsAndResolvedArgumentValidationReachExecutor() throws Exception {
         java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();

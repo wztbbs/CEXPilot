@@ -4,6 +4,7 @@ import com.cexpilot.config.DagConfig;
 import com.cexpilot.metric.*;
 import com.cexpilot.calculation.CalculationTool;
 import com.cexpilot.runtime.AgentTool;
+import com.cexpilot.runtime.NodeTraceCollector;
 import com.cexpilot.runtime.RequestContext;
 import com.cexpilot.runtime.ToolContext;
 import com.cexpilot.runtime.ToolRegistry;
@@ -101,11 +102,14 @@ public class DagExecutor {
         List<List<PlanNode>> levels = topoLevels(plan);
         for (List<PlanNode> level : levels) {
             List<Future<NodeOutcome>> futures = new ArrayList<>();
+            List<NodeTraceCollector.Session> sessions = new ArrayList<>();
             for (PlanNode node : level) {
-                futures.add(pool.submit(() -> runNode(node, ctx, traceId, requestContext, bindings, httpRequests)));
+                NodeTraceCollector.Session session = new NodeTraceCollector.Session();
+                sessions.add(session);
+                futures.add(pool.submit(() -> runNode(node, ctx, traceId, requestContext, bindings, httpRequests, session)));
             }
             for (int i = 0; i < level.size(); i++) {
-                collect(level.get(i), futures.get(i), ctx, traceId, sink, bindings);
+                collect(level.get(i), futures.get(i), sessions.get(i), ctx, traceId, sink, bindings);
             }
         }
         return new ExecutionOutcome(ctx, levels.size(), httpRequests.get());
@@ -115,12 +119,15 @@ public class DagExecutor {
     private NodeOutcome runNode(PlanNode node, DagContext ctx, String traceId,
                                 RequestContext requestContext,
                                 com.cexpilot.metric.ExecutionBindings bindings,
-                                java.util.concurrent.atomic.AtomicInteger httpRequests) {
+                                java.util.concurrent.atomic.AtomicInteger httpRequests,
+                                NodeTraceCollector.Session session) {
         com.cexpilot.market.HttpRequestCounter.bind(httpRequests);
+        NodeTraceCollector.bind(session);
         try {
             return doRunNode(node, ctx, traceId, requestContext, bindings);
         } finally {
             com.cexpilot.market.HttpRequestCounter.clear();
+            NodeTraceCollector.clear();
         }
     }
 
@@ -180,7 +187,8 @@ public class DagExecutor {
     }
 
     /** 主线程回收：带超时等待 → 写 DagContext → 落 trace；REUSE_FACT 节点落 FACT_REUSED，不伪装成 METRIC_RESULT。 */
-    private void collect(PlanNode node, Future<NodeOutcome> future, DagContext ctx,
+    private void collect(PlanNode node, Future<NodeOutcome> future, NodeTraceCollector.Session session,
+                         DagContext ctx,
                          String traceId, TraceSink sink,
                          com.cexpilot.metric.ExecutionBindings bindings) {
         NodeOutcome outcome;
@@ -202,6 +210,12 @@ public class DagExecutor {
                     null, 0);
         }
         ToolResult result = outcome.result();
+        // 节点执行期间的子调用（如 MCP tools/call）先于节点自身事件落库，保持时序。
+        // 冻结后取快照：节点超时场景下工作线程可能仍存活，迟到写入被丢弃，主线程不并发遍历。
+        for (NodeTraceCollector.Draft draft : session.freezeAndSnapshot()) {
+            sink.record(TraceEvent.toolCall(traceId, draft.name(), draft.inputJson(),
+                    draft.outputJson(), draft.durationMs(), draft.error()));
+        }
         com.cexpilot.metric.ExecutionBindings.ReuseFact reuse =
                 node.metric() != null && bindings != null ? bindings.reuseFor(node.id()) : null;
         if (reuse != null) {

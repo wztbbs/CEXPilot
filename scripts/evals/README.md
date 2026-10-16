@@ -1,5 +1,7 @@
 # Planner 文件评测
 
+Answer阶段另见 [Answer评测说明](ANSWER_README.md)，入口 `scripts/answer_eval.py`。可离线导入已有Planner raw再只调用裁判，不必重新采集问答。
+
 入口 `scripts/planner_eval.py`，仅依赖 Python 3.9+ 标准库。旧脚本、服务端旧 eval、数据库表均保留。
 
 本套件只评 Planner。`collect/run` 通过真实 `/api/ask` 采集，因此仍执行取数与 answer，前置轮也是真实问答；它们不属于本报告的评分对象。当前没有纯 planner HTTP 接口，不用近似重写 Java 的 prompt/编译器来假装测试真实系统。已有完整 trace 可离线导入后仅调用裁判复评。
@@ -66,7 +68,7 @@ nohup python3 -u scripts/planner_eval.py run --target-url https://cex.hrscrm.net
 
 ## 用例和人工标注
 
-用例在 `planner_cases.json`，不需要修改 Python。当前42条是依据仓库契约设计的种子用例，标注来源是 `repository_contract`；还没有经过人工/旗舰模型实测校准，不宣称完整覆盖。后续真实失败和业务表达应继续补充。
+用例在 `planner_cases.json`，不需要修改 Python。当前63条：原 P001～P042，加上从追问探针复核提炼的 P043～P063。标注来源是 `repository_contract`；新增21条尚未执行线上评测，不能把旧探针的 PASS 当作新用例已通过，也不宣称完整覆盖。
 
 每条包含 `id/title/question/timezone/setup_questions/tags/coverage` 与非空 `criteria`。每个 criterion 包含唯一 `id`、`dimension` 和自然语言 `expectation`，精确说明对应字段、对象、口径、计算方向与允许的等价方案。维度：decision、instrument、metric_shape、time、parameters、calculation、context、minimality。
 
@@ -75,6 +77,46 @@ nohup python3 -u scripts/planner_eval.py run --target-url https://cex.hrscrm.net
 人工直接修改 expectation/expected_fields，并可修改 label_source 标记审核来源。`judge --cases 新标注文件` 会保存新旧标注指纹并采用新标注。只改标注可以复评；更改 question/timezone/setup_questions 需要重新采集，不能把新问题套到旧trace。默认 judge 使用采集时冻结的标注，不自动读取今天改过的文件。
 
 覆盖包含五种查询形态、四种TimeSpec、九个算子、多层引用、最小必要计划、默认/显式条件、支持/澄清/出域/部分可答，以及多轮继承、pinned/latest、歧义和回访。维度/feature计数用于定位已声明覆盖，不是全组合覆盖率或证明所有分支均被触发。历史复用和任务回访依赖前置轮真的建立事实/任务；输入前提缺失或线上目录与标注冲突时裁判必须给UNCERTAIN，避免虚绿。
+
+## 多轮追问覆盖与探针对照
+
+原 P035～P042 已覆盖短链换所/换币、pinned/latest、双候选澄清、换话题及简单任务回访。新增用例检查结构化条件、任务及版本、事实身份和短回复接续，不写死价格、费率或实时取数结果。`source_probes` 标记来源场景，不代表使用旧脚本的 verdict 作为标签。
+
+| Planner 用例 | 主要新增分支 | 参考探针 |
+| --- | --- | --- |
+| P043～P045 | 连续换指标、先换所再换币、焦点往返 | F01/F06/F07/F15 |
+| P046/P047 | 多次修改后“也查”叠加与“改查”替换的对照 | P4 |
+| P048/P049 | 5～6轮干扰后的最早任务/原版本回访，显式上海时区与请求默认纽约时区冲突 | P1/F08 |
+| P050/P051 | avg/max之后继续绑定原样本求min，及pinned之后显式刷新 | P3/F02/F03 |
+| P052 | 连续刷新，不复用旧快照或自动增加涨幅计算 | F04 |
+| P053～P055 | 四候选具体澄清、选定候选的短回复、连续补币种与期数 | F10/F11 |
+| P056/P057 | 新话题后的代词、长答案后的结构化区间与粒度继承 | F22/P5/P5b/F09 |
+| P058～P060 | 成交价改标记价、官方24h改自然日、已结算改预测的能力边界 | F17/F18/F19 |
+| P061/P062 | 未支持需求换所、否定旧窗口并同时修改交易所及指标 | F12/F20 |
+| P063 | 原历史区间换成交量合计，不强制sum拓扑或伪造完整数据 | F16 |
+
+复核来源：
+
+- `importants/回归测试/追问链路探针-2026-10-09.md` 与 `raw/追问链路探针-20261009-1007.json`：旧链路基线。
+- `importants/回归测试/追问链路探针-2026-10-14.md`：17:07全量轮及之后多次复验的汇总；同日失败和成功均需保留，特别是P1/F08的任务选择不稳定。
+- `raw/追问链路探针-20261014-1725.json` **仅有F16两轮**，不能据此宣称所有追问已复验；其余链路见17:07全量、17:17等复验产物。
+
+多轮 case 的 `setup_questions` 顺序执行，最后一个 `question` 才是评分目标；前置轮原始trace逐轮保存。前置轮服务端已经接受澄清时也可以继续，包含仅有最终 `PLANNER_ATTEMPT=NEEDS_CLARIFICATION` 的程序兜底；这只是允许建立上下文，不把兜底记作模型通过。明确规划修复耗尽或缺少完整trace时停止采集，并保存已取得的前置轮trace供排查。
+
+测试前提必须从评分轮**实际输入**核验：任务/原版本是否在候选索引、原始FACT是否可绑定、是否确实存在待补澄清链。未触发澄清不能计作澄清接续PASS；样本数值恰好没变不能证明pinned成功；task_1和列表首项不一定代表最早任务；缺口/截断未触发时不能宣称相应分支已覆盖。多轮指标与计算只评最后一次输出，不用最后一轮PASS证明整条链每轮均正确；需要核对中间轮时查看 `setup_results`，或把该轮单独作为终点用例。
+
+F16的 `trade.volume/range_statistic` 是可直接使用的成品合计，不必须出现sum；缺口下是否省略value由执行层决定，是否如实披露由Answer评测判断。Planner只检查取对完整请求区间、指标和事实身份。C1访客会话选择、F14并发/父轮次、F13真实Answer故障、F21缓存不可恢复、强制跨结算/跨午夜等需要服务/执行层测试或可注入环境；不靠线上概率构造来宣称Planner覆盖。本次不改旧探针，也不删除旧脚本。
+
+新增多轮用例的前置请求较多；只跑一组时显式列出ID，例如：
+
+```bash
+# 离线查看新增覆盖
+python3 scripts/planner_eval.py list --only P048,P049,P050,P054,P055,P063
+
+# 仅在明确需要执行时运行（请求目标问答及裁判）
+python3 scripts/planner_eval.py run --target-url https://cex.hrscrm.net \
+  --only P048,P049,P054,P055
+```
 
 ## 判据与报告
 

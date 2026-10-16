@@ -713,6 +713,31 @@ def grade_record(record, config, prompt):
     return output
 
 
+def setup_turn_accepted(trace, planner):
+    """A clarification is a completed setup turn, even without a PLAN event.
+
+    New traces have an authoritative final PLANNER_ATTEMPT. Older traces fall
+    back to PLAN acceptance. Acceptance establishes context, not semantic PASS.
+    """
+    attempts = planner.get("attempts") or []
+    if not attempts or attempts[-1].get("error") or attempts[-1].get("extraction_error"):
+        return False
+    last_call_seq = int(attempts[-1]["seq"])
+    outcomes = [e for e in ordered_events(trace)
+                if e.get("event_type") == "PLANNER_ATTEMPT" and e.get("name") == "dag_planner"
+                and int(e.get("seq", 0)) > last_call_seq]
+    if outcomes:
+        event = outcomes[-1]
+        outcome = json_value(event.get("output_json"), "PLANNER_ATTEMPT.output_json")
+        return (not event.get("error") and outcome.get("call_status") == "SUCCEEDED"
+                and not outcome.get("call_error") and not outcome.get("validation_error")
+                and outcome.get("validation_status") in ("PASSED", "NOT_APPLICABLE")
+                and outcome.get("result") in ("EXECUTABLE", "NEEDS_CLARIFICATION", "NO_PLAN", "OUT_OF_DOMAIN"))
+    plans = [e for e in ordered_events(trace)
+             if e.get("event_type") == "PLAN" and int(e.get("seq", 0)) > last_call_seq]
+    return bool(plans) and planner.get("server_accepted") is True
+
+
 def collect_case(case, target_url, timeout):
     record = {"format_version": FORMAT_VERSION, "case": copy.deepcopy(case),
               "case_hash": digest(case), "source_kind": "live_ask", "target_url": target_url,
@@ -740,9 +765,9 @@ def collect_case(case, target_url, timeout):
                 record["planner"] = extract_planner(trace, case["question"])
             else:
                 setup_planner = extract_planner(trace, question)
-                if not setup_planner["attempts"] or setup_planner["server_accepted"] is not True:
-                    raise EvalError("前置轮缺少 planner trace，不能建立可核验上下文")
                 record["setup_results"].append(turn)
+                if not setup_turn_accepted(trace, setup_planner):
+                    raise EvalError("前置轮缺少完整 planner trace 或最终决策未被接受，不能建立可核验上下文")
     except EvalError as exc:
         record["collection_error"] = str(exc)
     return record

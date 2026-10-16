@@ -51,6 +51,14 @@ dag:
   planner-response-format: ${DAG_PLANNER_RESPONSE_FORMAT:}
   executor-threads: ${DAG_EXECUTOR_THREADS:4}
 
+# 币安资金费率取数通道：local = 进程内直连交易所；mcp = 经本地行情 MCP Server（需先启动 FundingMcpServerApplication）
+mcp:
+  funding:
+    transport: ${MCP_FUNDING_TRANSPORT:local}
+    base-url: ${MCP_FUNDING_BASE_URL:http://localhost:8090}
+    endpoint: ${MCP_FUNDING_ENDPOINT:/mcp}
+    request-timeout-ms: ${MCP_FUNDING_REQUEST_TIMEOUT_MS:30000}
+
 exchange:
   binance:
     base-url: ${BINANCE_BASE_URL:https://fapi.binance.com}

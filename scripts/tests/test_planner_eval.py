@@ -532,6 +532,52 @@ class PlannerEvalTests(unittest.TestCase):
             record = ev.collect_case(sample, "https://target.invalid", 1)
         self.assertIn("collection_error", record)
         self.assertEqual(2, transport.call_count)
+        self.assertEqual(1, len(record["setup_results"]), "Keep failed setup trace for diagnosis")
+
+    def test_collection_continues_after_server_clarification_fallback(self):
+        sample = case()
+        sample["setup_questions"] = [sample["question"]]
+        no_text = {"in_domain": True, "needs_clarification": True, "plan": None, "reply": None}
+        setup = trace([event(content=json.dumps(no_text)),
+                       {"seq": 2, "event_type": "CLARIFY_FALLBACK", "name": "dag_planner"},
+                       {"seq": 3, "event_type": "PLANNER_ATTEMPT", "name": "dag_planner",
+                        "output_json": {"call_status": "SUCCEEDED", "validation_status": "NOT_APPLICABLE",
+                                        "result": "NEEDS_CLARIFICATION"}, "error": None}])
+        final = trace([event(), {"seq": 2, "event_type": "PLAN", "name": "dag_planner",
+                                "output_json": plan(), "error": None}])
+        response = {"conversationId": "clarifying-conversation", "traceId": "trace-fixture"}
+        with patch.object(ev, "request_json", side_effect=[(response, 1), (setup, 0),
+                                                           (response, 1), (final, 0)]) as transport:
+            record = ev.collect_case(sample, "https://target.invalid", 1)
+        self.assertNotIn("collection_error", record)
+        self.assertEqual("clarifying-conversation", transport.call_args_list[2].args[1]["conversationId"])
+        self.assertEqual(setup, record["setup_results"][0]["trace"])
+        # The setup was accepted by the server; the model's missing clarification
+        # text is still a protocol failure when that output is graded.
+        observed = ev.extract_planner(setup, sample["question"])
+        self.assertFalse(observed["server_accepted"] is True)
+        self.assertEqual("FAIL", ev.grade_record({"case": sample, "planner": observed}, FakeJudge(), "rubric")
+                         ["stages"]["final"]["protocol_verdict"])
+
+    def test_final_setup_audit_overrides_earlier_PLAN_acceptance(self):
+        data = trace([event(), {"seq": 2, "event_type": "PLAN", "name": "dag_planner",
+                               "output_json": plan(), "error": None},
+                      {"seq": 3, "event_type": "PLANNER_ATTEMPT", "name": "dag_planner",
+                       "output_json": {"call_status": "SUCCEEDED", "validation_status": "FAILED",
+                                       "result": "REPAIR_EXHAUSTED"}, "error": "binding failure"}])
+        self.assertFalse(ev.setup_turn_accepted(data, ev.extract_planner(data, case()["question"])))
+
+    def test_setup_audit_before_last_model_call_does_not_accept_repair(self):
+        data = trace([event(), {"seq": 2, "event_type": "PLANNER_ATTEMPT", "name": "dag_planner",
+                               "output_json": {"call_status": "SUCCEEDED", "validation_status": "PASSED",
+                                               "result": "EXECUTABLE"}, "error": None},
+                      event(seq=3, attempt=2)])
+        self.assertFalse(ev.setup_turn_accepted(data, ev.extract_planner(data, case()["question"])))
+
+    def test_setup_PLAN_before_last_model_call_does_not_accept_repair(self):
+        data = trace([event(), {"seq": 2, "event_type": "PLAN", "name": "dag_planner",
+                               "output_json": plan(), "error": None}, event(seq=3, attempt=2)])
+        self.assertFalse(ev.setup_turn_accepted(data, ev.extract_planner(data, case()["question"])))
 
     def test_planner_call_failure_is_not_a_semantic_fail(self):
         failed = event()
