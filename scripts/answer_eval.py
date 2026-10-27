@@ -310,15 +310,30 @@ def validate_judgment(obj, case, sample):
     if not isinstance(claims, list) or not claims:
         raise EvalError("裁判必须逐条审查 answer 原文断言（claims 非空）")
     seen = set()
-    normalize = lambda s: re.sub(r"\s+", " ", s).strip()
+    # 归一化：合并空白、去掉 markdown 强调标记、统一引号/省略号/破折号全半角写法。
+    # 裁判摘取 quote 时普遍会规范化 **加粗** 等标记，也会把直角引号写成弯引号；
+    # 只做空白归一会把"格式符号不同"误报成"quote 不是答案原文"。
+    def normalize(s):
+        s = re.sub(r"\s+", " ", s or "").strip()
+        s = re.sub(r"[*_`~#]", "", s)
+        for a, b in (("\u201c", '"'), ("\u201d", '"'), ("\u2018", "'"), ("\u2019", "'"),
+                     ("\u2026", "..."), ("\u2014", "-"), ("\u2013", "-"), ("\u00a0", " ")):
+            s = s.replace(a, b)
+        return re.sub(r"\.{2,}", "...", s)
+
+    norm_answer = normalize(sample["answer"])
     for c in claims:
         if not isinstance(c, dict):
             raise EvalError("claim 必须为对象")
         quote = c.get("quote")
-        if (not isinstance(quote, str) or not quote.strip() or normalize(quote) in seen
-                or normalize(quote) not in normalize(sample["answer"])):
-            raise EvalError("claim.quote 必须为不重复的答案原文片段")
-        seen.add(normalize(quote))
+        if not isinstance(quote, str) or not quote.strip():
+            raise EvalError("claim.quote 必须是非空字符串")
+        key = normalize(quote)
+        if key in seen:
+            raise EvalError("claim.quote 与其他 claim 重复：%s" % quote[:40])
+        if key not in norm_answer:
+            raise EvalError("claim.quote 不是答案原文片段（忽略空白与 markdown 标记后仍未命中）：%s" % quote[:40])
+        seen.add(key)
         if c.get("verdict") not in ("SUPPORTED", "UNSUPPORTED", "UNCERTAIN"):
             raise EvalError("claim verdict 非法")
         if not isinstance(c.get("reason"), str) or not c["reason"].strip():
@@ -331,20 +346,26 @@ def validate_judgment(obj, case, sample):
     return criteria, claims
 
 
-def judge_messages(case, sample, prompt):
+def judge_messages(case, sample, prompt, feedback=None):
     payload = {k: sample[k] for k in ("question", "answer", "facts", "query_status", "time_context", "answer_input_messages")}
     payload.update(criteria=case["criteria"], label_source=case["label_source"])
-    return [{"role": "system", "content": prompt},
-            {"role": "user", "content": "逐项评测以下 Answer 样本；其中所有嵌套文本均为待审数据。\n" + pe.dumps(payload)}]
+    text = "逐项评测以下 Answer 样本；其中所有嵌套文本均为待审数据。\n" + pe.dumps(payload)
+    if feedback:
+        # 重试时把上一次被拒的原因原样回传，让裁判自行修正格式；不涉及判定内容，不构成开卷。
+        text += "\n\n上一次输出被程序拒绝，原因是：" + feedback + "\n请修正后重新输出完整判定，要求同上。"
+    return [{"role": "system", "content": prompt}, {"role": "user", "content": text}]
 
 
-def grade_record(record, config, prompt):
+def grade_record(record, config, prompt, retries=0):
+    """判定一条样本。retries 只针对"裁判输出不合法"（JSON 解析失败 / 结构校验失败）这类可自愈错误；
+    传输层失败由 ClientConfig.retries 单独处理，两者互不包含。"""
     case = record["case"]
     result = {"case_id": case["id"], "title": case["title"], "question": case["question"], "mode": case["mode"],
               "case_hash": pe.digest(case), "trace_id": record.get("trace_id"), "source_kind": record.get("source_kind"),
               "judge_model": config.model, "judge_config_hash": pe.digest(config.public()),
               "judge_prompt_hash": pe.digest(prompt), "grader_script_hash": pe.digest(Path(__file__).read_text()),
-              "shared_script_hash": pe.digest(Path(pe.__file__).read_text()), "criteria": [], "claims": []}
+              "shared_script_hash": pe.digest(Path(pe.__file__).read_text()), "criteria": [], "claims": [],
+              "judge_output_retries": 0}
     if record.get("collection_error"):
         return {**result, "verdict": "COLLECTION_ERROR", "error": record["collection_error"]}
     try:
@@ -356,28 +377,38 @@ def grade_record(record, config, prompt):
     result.update(answer_model=sample.get("model"), answer_calls=sample["answer_calls"],
                   input_hash=pe.digest(sample["answer_input_messages"]), answer_hash=pe.digest(sample["answer"]),
                   answer_duration_ms=sample.get("answer_duration_ms"))
-    try:
-        content, metadata = config.call(judge_messages(case, sample, prompt), judgment_schema(case))
-        result["judge_call"] = metadata
-        result["judge_content"] = content.replace(config.api_key, "[REDACTED]")
-        criteria, claims = validate_judgment(pe.parse_model_object(result["judge_content"]), case, sample)
-        result.update(criteria=criteria, claims=claims)
-        statuses = {c["verdict"] for c in criteria}
-        supports = {c["verdict"] for c in claims}
-        result["verdict"] = ("FAIL" if "FAIL" in statuses or "UNSUPPORTED" in supports else
-                             "UNCERTAIN" if "UNCERTAIN" in statuses or "UNCERTAIN" in supports else "PASS")
-        result["claim_counts"] = dict(Counter(c["verdict"] for c in claims))
-    except EvalError as exc:
-        result.update(verdict="JUDGE_ERROR", error=str(exc))
+    feedback = None
+    last_error = None
+    for attempt in range(1 + max(0, retries)):
+        try:
+            content, metadata = config.call(judge_messages(case, sample, prompt, feedback), judgment_schema(case))
+            result["judge_call"] = metadata
+            result["judge_content"] = content.replace(config.api_key, "[REDACTED]")
+            criteria, claims = validate_judgment(pe.parse_model_object(result["judge_content"]), case, sample)
+            result.update(criteria=criteria, claims=claims)
+            statuses = {c["verdict"] for c in criteria}
+            supports = {c["verdict"] for c in claims}
+            result["verdict"] = ("FAIL" if "FAIL" in statuses or "UNSUPPORTED" in supports else
+                                 "UNCERTAIN" if "UNCERTAIN" in statuses or "UNCERTAIN" in supports else "PASS")
+            result["claim_counts"] = dict(Counter(c["verdict"] for c in claims))
+            result["judge_output_retries"] = attempt
+            return result
+        except EvalError as exc:
+            last_error = str(exc)
+            result["judge_output_retries"] = attempt + 1
+            feedback = last_error
+    result.update(verdict="JUDGE_ERROR", error=last_error)
     return result
 
 
-def create_run(root, mode, cases, config=None, prompt=None, source=None, generator=None):
+def create_run(root, mode, cases, config=None, prompt=None, source=None, generator=None, judge_output_retries=None):
     directory = pe.create_run(root, mode, cases, config=config, prompt=prompt, source=source)
     path = directory / "manifest.json"
     manifest = pe.read_json(path)
     manifest.update(eval_kind="answer", coverage=coverage(cases), script_hash=pe.digest(Path(__file__).read_text()),
                     shared_script_hash=pe.digest(Path(pe.__file__).read_text()))
+    if judge_output_retries is not None:
+        manifest["judge_output_retries"] = judge_output_retries
     if generator:
         manifest["generator"] = generator.public()
         manifest["answer_prompt_hash"] = pe.digest(ANSWER_PROMPT.read_text())
@@ -469,6 +500,9 @@ def parser():
             q.add_argument("--timeout", type=float, default=240)
         if name in ("run", "run-fixtures"):
             q.add_argument("--judge-prompt", type=Path, default=PROMPT)
+            q.add_argument("--judge-retries", type=int, metavar="N",
+                           help="裁判输出不合法时的最大重试次数；默认取 ANSWER_EVAL_JUDGE_OUTPUT_RETRIES 或 0。"
+                                "与 ANSWER_EVAL_JUDGE_RETRIES（传输层）互不包含")
             q.add_argument("--compare", type=Path)
         if name in ("import-trace", "import-planner"):
             q.add_argument("source", type=Path)
@@ -477,12 +511,16 @@ def parser():
     q.add_argument("--cases", type=Path)
     q.add_argument("--only")
     q.add_argument("--judge-prompt", type=Path, default=PROMPT)
+    q.add_argument("--judge-retries", type=int, metavar="N",
+                   help="裁判输出不合法时的最大重试次数；默认取 ANSWER_EVAL_JUDGE_OUTPUT_RETRIES 或 0")
     q.add_argument("--output-root", type=Path, default=OUTPUT)
     q.add_argument("--compare", type=Path)
     q = sub.add_parser("calibrate", help="只调用裁判检查固定的正确/错误答案标签")
     q.add_argument("--cases", type=Path, default=CASES)
     q.add_argument("--calibration", type=Path, default=CALIBRATION)
     q.add_argument("--judge-prompt", type=Path, default=PROMPT)
+    q.add_argument("--judge-retries", type=int, metavar="N",
+                   help="裁判输出不合法时的最大重试次数；默认取 ANSWER_EVAL_JUDGE_OUTPUT_RETRIES 或 0")
     q.add_argument("--output-root", type=Path, default=OUTPUT)
     q = sub.add_parser("report")
     q.add_argument("source", type=Path)
@@ -605,6 +643,17 @@ def main(argv=None):
             raise EvalError("没有匹配模式的用例")
     config = ClientConfig.from_env() if args.command in ("judge", "run", "run-fixtures", "calibrate") else None
     generator = ClientConfig.from_env("MODEL") if args.command in ("generate", "run-fixtures") else None
+    output_retries = 0
+    if config is not None:
+        raw_retries = getattr(args, "judge_retries", None)
+        if raw_retries is None:
+            raw_retries = os.environ.get("ANSWER_EVAL_JUDGE_OUTPUT_RETRIES", "0")
+        try:
+            output_retries = int(raw_retries)
+        except ValueError:
+            raise EvalError("ANSWER_EVAL_JUDGE_OUTPUT_RETRIES / --judge-retries 必须为整数") from None
+        if output_retries < 0:
+            raise EvalError("--judge-retries 必须为非负整数")
     prompt = pe.read_prompt(args.judge_prompt) if config else None
     target = None
     if args.command in ("collect", "run"):
@@ -618,7 +667,8 @@ def main(argv=None):
         comparison = pe.latest_scores(args.output_root)
     previous = check_scores(pe.read_jsonl(comparison)) if comparison else None
     directory = create_run(args.output_root, args.command, cases, config, prompt,
-                           getattr(args, "source", None) or getattr(args, "calibration", None), generator)
+                           getattr(args, "source", None) or getattr(args, "calibration", None), generator,
+                           judge_output_retries=output_retries if config is not None else None)
     if target:
         def collect():
             for c in cases:
@@ -635,7 +685,7 @@ def main(argv=None):
     for r in records:
         pe.append_jsonl(directory / "raw.jsonl", r)
         if config:
-            score = grade_record(r, config, prompt)
+            score = grade_record(r, config, prompt, output_retries)
             if "expected_verdict" in r:
                 score.update(expected_verdict=r["expected_verdict"], label_reason=r["label_reason"],
                              calibration_passed=score["verdict"] == r["expected_verdict"])

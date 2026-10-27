@@ -10,6 +10,7 @@ import com.cexpilot.market.model.Candle;
 import com.cexpilot.market.model.OiPoint;
 import com.cexpilot.market.model.TakerVolumePoint;
 import com.cexpilot.market.oi.OiQueryRequest;
+import com.cexpilot.market.oi.OiQueryMode;
 import com.cexpilot.market.oi.OiQueryResult;
 import com.cexpilot.market.oi.OiQueryService;
 import com.cexpilot.market.series.SeriesCoverage;
@@ -110,13 +111,14 @@ class Stage2MetricAccessTest {
     }
 
     private static OiQueryService oiService() {
-        var points = List.of(new OiPoint(START.toEpochMilli(), new BigDecimal("1000")),
-                new OiPoint(START.plusSeconds(82800).toEpochMilli(), new BigDecimal("1100")));
-        var request = new OiQueryRequest(Exchange.BINANCE, "BTC", OiInterval.parse("1h"), DAY_RANGE, false);
-        var coverage = new SeriesCoverage(2, 2, List.of(), List.of(), List.of(), false, false, null,
-                START.plusSeconds(82800).toEpochMilli(), false);
+        // OI变化使用包含准确起止点的端点模式；全天1h采样需要25个点。
+        var points = new ArrayList<OiPoint>();
+        for(int i=0;i<=24;i++) points.add(new OiPoint(START.plusSeconds(i*3600L).toEpochMilli(),BigDecimal.valueOf(i==24?1100:1000+i*4)));
+        var request = new OiQueryRequest(Exchange.BINANCE, "BTC", OiInterval.parse("1h"), DAY_RANGE, false,OiQueryMode.BOUNDARY_VALUES);
+        var coverage = new SeriesCoverage(25, 25, List.of(), List.of(), List.of(), false, false, null,
+                DAY_RANGE.endExclusive().toEpochMilli(), false);
         var service = mock(OiQueryService.class);
-        when(service.query(any(), any(), any(), any(), anyString(), any(), anyBoolean()))
+        when(service.query(any(), any(), any(), any(), anyString(), any(), anyBoolean(),eq(OiQueryMode.BOUNDARY_VALUES)))
                 .thenReturn(new OiQueryResult(request, request, points, coverage));
         return service;
     }
@@ -168,9 +170,10 @@ class Stage2MetricAccessTest {
         var data = result(r, "metric_0").path("data");
         assertEquals(0, new BigDecimal("10.0000").compareTo(data.path("value").decimalValue()));
         assertEquals("percent", data.path("unit").asText());
-        assertEquals(new BigDecimal("82800.000"), data.path("observation_seconds").decimalValue());
+        assertEquals(new BigDecimal("86400.000"), data.path("observation_seconds").decimalValue());
         assertEquals("oi", data.at("/source/provider").asText());
         assertEquals("CHANGE_PCT", data.at("/source/selector").asText());
+        assertEquals(DAY_RANGE.endExclusive().toString(),data.path("end_sample_at").asText());
         assertEquals("1h", data.path("candle_interval").asText());
     }
 

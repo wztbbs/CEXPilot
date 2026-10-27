@@ -16,6 +16,8 @@ CEXPilot 是面向加密货币行情查询的 AI Copilot。用户用自然语言
 | [时间窗口](docs/时间窗口.md) | TimeSpec、固定请求时间、时区、网格对齐、分页、覆盖核对与实际统计范围 |
 | [聚合指标](docs/聚合指标.md) | 成品指标与计算节点、九个算子、输入输出、精度、来源传播和年化限制 |
 | [Trace搭建](docs/trace搭建.md) | Trace 生命周期、表结构、事件负载、版本指纹、回放接口与定位步骤 |
+| [主动监控](docs/主动监控.md) | 受控试用的规则确认、Execution 排期、Work 调度与恢复、Resend 邮件/模拟投递、只读巡检与部署迁移 |
+| [路由与监控规划](docs/路由与监控规划.md) | Plan 前独立路由、原 Query 链、Monitor 候选协议、上下文隔离与迁移 |
 
 大模型评测暂未单独展开。
 
@@ -50,7 +52,12 @@ CEXPilot 是面向加密货币行情查询的 AI Copilot。用户用自然语言
 flowchart TD
     Q[POST /api/ask 或 /api/ask/stream] --> S[AskService：固定请求时间、建立 Trace]
     M[指标目录 + 算子契约] --> P[DagPlanner：领域判断与逻辑规划]
-    S --> P
+    S --> R0[IntentRouter：query / monitor / clarify]
+    R0 -->|query| P
+    R0 -->|monitor| MP[MonitorPlanner：独立提示词与候选校验]
+    MP --> MD[待确认规则卡片]
+    MD -->|用户明确确认版本、规则与邮箱| MC[启用后台检查与邮件]
+    R0 -->|clarify| RC[澄清路由，不执行]
     P --> C[MetricPlanCompiler：绑定、展开交易所、推导依赖]
     C --> V[PlanValidator：参数、引用、环、深度与预算]
     C -->|编译错误，有限修复| P
@@ -63,7 +70,7 @@ flowchart TD
     P -->|无有效计划| D[直接返回范围、缺口或澄清说明]
 ```
 
-正常路径通常一次 Planner 调用、一次 Answer 调用。Planner 校验失败会增加修复调用；没有有效计划时不调用 Answer。模型通过 JSON 文本生成计划，当前两阶段 LLM 调用均不传 API `tools` 参数。
+正常查询通常依次调用 Router、Query Planner、Answer。Monitor 分支通常调用 Router 和独立 Monitor Planner，将候选保存为待确认草稿并展示规则，用户核对规则和通知邮箱、点击确认后才启用后台检查。规划校验失败会增加修复调用；没有有效查询计划时不调用 Answer。模型通过 JSON 文本生成计划，各阶段均不传 API `tools` 参数。原查询 LogicalPlan 协议不变，路由与监控规划协议见上方专题文档。
 
 指标事实统一包含身份、单位和来源；时间查询还包含覆盖状态。区间不完整时 Provider 可返回 `statistics_omitted` 而不返回 `value`，因此 `ok=true` 只表示执行成功。依赖失败或不完整数据的计算不会补算；独立分支可以继续返回结果。Answer 的提示词要求只引用已有指标和算子结果，不能自行补出差值、均值、年化等结论。
 
@@ -91,7 +98,7 @@ mvn spring-boot:run -Dspring-boot.run.profiles=test
 
 访问 [本地问答页](http://localhost:8082/)；Trace 页为 `http://localhost:8082/trace.html?id=<traceId>`。
 
-交易所连接必须使用仓库约定的代理：
+当前本地和服务器环境使用以下交易所代理，基础配置已将其设为默认值：
 
 ```yaml
 exchange:
@@ -101,14 +108,14 @@ exchange:
     base-url: http://43.160.213.63:18081
 ```
 
-`application-test.yml` 已固定上述两个地址。基础配置的默认地址仍是官方域名，`prod` 仅为 Binance 提供代理默认值；使用其他 profile 时必须显式配置两个代理，不能直接沿用官方默认地址。基础配置及 `prod` 可通过以下环境变量配置；`test` 的固定值不会被这两个占位符覆盖：
+其他部署环境可以通过以下环境变量覆盖为可访问的代理或官方地址。监控业务不校验固定代理地址，连接异常在实际取数时报告。`application-test.yml` 固定上述代理地址，不使用这两个环境变量占位符：
 
 ```bash
 export BINANCE_BASE_URL='http://43.160.213.63:18080'
 export OKX_BASE_URL='http://43.160.213.63:18081'
 ```
 
-OKX 请求必须携带 `User-Agent`，否则可能收到 `403 error code: 1010`。当前 OkxClient 未显式设置该头，实际出站头还取决于底层 HTTP 实现及代理；配置连接或新增路径时应显式保证该头，不能把当前 Client 当作请求头保障。历史游标方向与分页细节见 [时间窗口](docs/时间窗口.md)。
+OKX 请求必须携带 `User-Agent`，否则可能收到 `403 error code: 1010`。当前 OkxClient 已统一设置该请求头。历史游标方向与分页细节见 [时间窗口](docs/时间窗口.md)。
 
 新库启动时自动执行 [schema.sql](src/main/resources/db/schema.sql) 建表。**存量库不会自动升级字段**：`CREATE TABLE IF NOT EXISTS` 不执行 ALTER，也没有自动迁移框架；部署前需核对 [migrations](src/main/resources/db/migrations) 并手工执行尚未应用的迁移，不能把所有 ALTER 重复执行。
 
@@ -119,11 +126,13 @@ OKX 请求必须携带 `User-Agent`，否则可能收到 `403 error code: 1010`�
 构建及运行 JAR：
 
 ```bash
-mvn package -DskipTests
+mvn clean package -DskipTests
 java -jar target/cexpilot-0.1.0.jar --spring.profiles.active=test
 ```
 
 `prod` 使用 [application-prod.yml](src/main/resources/application-prod.yml) 的线上数据库配置，密码来自 `MYSQL_PASSWORD`；不要将本地 `DB_*` 变量误认为可以替换该 profile 的固定数据库地址。
+
+主动监控仅保留聊天确认入口 `/api/monitor-flow`，运维巡检为 `/api/monitor-health`。沿用已有数据库和模型配置时，模拟邮件部署只需新增 `MONITOR_ENABLED=true`、`RESEND_DRY_RUN=true`，以及巡检所需的 `MONITOR_ACCESS_TOKEN`（至少32字符）。收件邮箱由用户填写并确认，调度随应用启动，不需要额外cron。部署前按 [主动监控](docs/主动监控.md) 执行尚未应用的014～017迁移。
 
 ## 常用运行配置
 

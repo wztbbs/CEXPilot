@@ -141,6 +141,38 @@ public class ConversationService {
 
     public record TaskCommit(boolean updated, String frameId, long version, TaskState state) {}
 
+    public com.fasterxml.jackson.databind.JsonNode routingState(String conversationId) { return repository.routingState(conversationId); }
+
+    /** Query 继续既有任务生命周期；Monitor/Router 澄清不写入查询任务。 */
+    @Transactional
+    public TaskCommit finishRoutedTurn(String conversationId,TurnHandle turn,String question,String status,String answer,
+            String traceId,com.cexpilot.metric.CompiledPlan plan,com.fasterxml.jackson.databind.JsonNode evidence,TaskScope scope,
+            java.time.Instant requestTime,java.time.ZoneId zone,String taskResponse,String agent,
+            com.fasterxml.jackson.databind.JsonNode payload) {
+        boolean owns=repository.ownsTurnForUpdate(conversationId,turn.turnId(),turn.fencingToken());
+        var commit=finishTaskTurn(conversationId,turn,question,status,answer,traceId,
+                "query".equals(agent)?plan:null,evidence,"query".equals(agent)?scope:null,requestTime,zone,taskResponse);
+        repository.saveAgentOutcome(turn.turnId(),agent,payload);
+        if(owns) {
+            com.fasterxml.jackson.databind.JsonNode monitor=null;
+            if("monitor".equals(agent)) {
+                var mapper=new com.fasterxml.jackson.databind.ObjectMapper();
+                var previous=repository.routingState(conversationId).path("monitor_context");
+                var state=previous.isObject()?((com.fasterxml.jackson.databind.node.ObjectNode)previous).deepCopy():mapper.createObjectNode();
+                state.put("last_question",abbreviate(question,1000)).put("last_reply",abbreviate(answer,1000))
+                        .put("status",payload==null?status:payload.path("status").asText(status));
+                if(payload!=null && payload.has("candidate")) state.set("candidate",payload.path("candidate"));
+                if(payload!=null && payload.has("confirmation")) state.set("confirmation",payload.path("confirmation"));
+                var dialogue=mapper.createArrayNode(); var old=state.path("dialogue");
+                for(int i=Math.max(0,old.size()-6);i<old.size();i++) dialogue.add(old.get(i));
+                dialogue.addObject().put("question",abbreviate(question,1000)).put("reply",abbreviate(answer,1000));
+                state.set("dialogue",dialogue); monitor=state;
+            }
+            repository.saveRoutingState(conversationId,turn.fencingToken(),agent,monitor);
+        }
+        return commit;
+    }
+
     /** 任务状态、轮次快照、活动指针和占用释放原子提交；来源版本与新增版本分开。 */
     @Transactional
     public TaskCommit finishTaskTurn(String conversationId, TurnHandle turn, String question, String status,

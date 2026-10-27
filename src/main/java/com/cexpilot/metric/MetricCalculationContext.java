@@ -111,6 +111,7 @@ public final class MetricCalculationContext {
                 ObjectNode metadata = MAPPER.createObjectNode().put("node_id", dep);
                 for (String key : List.of("group_id", "metric", "exchange", "instrument", "unit", "query_shape",
                         "requested_range", "effective_range", "actual_range", "coverage", "candle_interval",
+                        "sample_selection", "selection_range", "start_sample_at", "end_sample_at",
                         "catalog_version", "estimated", "truncated", "source",
                         "timezone", "sample_scope", "sample_complete_meaning", "period_scope",
                         "rate_status", "next_settlement_time_available", "next_settlement_time_unavailable_reason",

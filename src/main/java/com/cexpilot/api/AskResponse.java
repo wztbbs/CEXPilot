@@ -23,7 +23,15 @@ public record AskResponse(String conversationId,
                           int metricFetchCount,
                           int calculationCount,
                           int httpRequestCount,
-                          int reusedFactCount) {
+                          int reusedFactCount,
+                          String type, JsonNode planning, int routerLlmCalls) {
+
+    public AskResponse(String conversationId,String traceId,String answer,JsonNode evidence,int toolCalls,int llmSteps,
+                       long durationMs,String turnId,boolean busy,int plannerLlmCalls,int answerLlmCalls,int metricFetchCount,
+                       int calculationCount,int httpRequestCount,int reusedFactCount) {
+        this(conversationId,traceId,answer,evidence,toolCalls,llmSteps,durationMs,turnId,busy,plannerLlmCalls,answerLlmCalls,
+                metricFetchCount,calculationCount,httpRequestCount,reusedFactCount,"query",null,0);
+    }
 
     /** 正常完成路径的兼容构造（非忙碌，无拆分计数）。 */
     public AskResponse(String conversationId, String traceId, String answer, JsonNode evidence,

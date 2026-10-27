@@ -34,7 +34,16 @@ public record ExecutionResult(String answer,
                               int calculationCount,
                               int httpRequestCount,
                               List<String> savedFactIds, com.cexpilot.conversation.TaskScope taskScope,
-                              List<com.cexpilot.llm.LlmUsage> llmUsages) {
+                              List<com.cexpilot.llm.LlmUsage> llmUsages,
+                              int routerLlmCalls, String agentType, JsonNode agentPayload) {
+
+    public ExecutionResult(String answer,JsonNode evidence,int toolCallCount,int steps,int promptTokens,int completionTokens,
+            String turnStatus,String clarify,int reusedFactCount,int plannerLlmCalls,int answerLlmCalls,int metricFetchCount,
+            int calculationCount,int httpRequestCount,List<String> savedFactIds,com.cexpilot.conversation.TaskScope scope,
+            List<com.cexpilot.llm.LlmUsage> usages) {
+        this(answer,evidence,toolCallCount,steps,promptTokens,completionTokens,turnStatus,clarify,reusedFactCount,
+                plannerLlmCalls,answerLlmCalls,metricFetchCount,calculationCount,httpRequestCount,savedFactIds,scope,usages,0,"query",null);
+    }
 
     public ExecutionResult(String answer, JsonNode evidence, int toolCallCount, int steps, int promptTokens,
             int completionTokens, String turnStatus, String clarify, int reusedFactCount, int plannerLlmCalls,
@@ -57,13 +66,30 @@ public record ExecutionResult(String answer,
     public ExecutionResult withTaskScope(com.cexpilot.conversation.TaskScope scope) {
         return new ExecutionResult(answer, evidence, toolCallCount, steps, promptTokens, completionTokens,
                 turnStatus, clarify, reusedFactCount, plannerLlmCalls, answerLlmCalls, metricFetchCount,
-                calculationCount, httpRequestCount, savedFactIds, scope, llmUsages);
+                calculationCount, httpRequestCount, savedFactIds, scope, llmUsages,routerLlmCalls,agentType,agentPayload);
     }
 
     public ExecutionResult withLlmUsages(List<com.cexpilot.llm.LlmUsage> usages) {
         return new ExecutionResult(answer, evidence, toolCallCount, steps, promptTokens, completionTokens,
                 turnStatus, clarify, reusedFactCount, plannerLlmCalls, answerLlmCalls, metricFetchCount,
-                calculationCount, httpRequestCount, savedFactIds, taskScope, usages);
+                calculationCount, httpRequestCount, savedFactIds, taskScope, usages,routerLlmCalls,agentType,agentPayload);
+    }
+
+    public ExecutionResult withAgent(String type,JsonNode payload) {
+        return new ExecutionResult(answer,evidence,toolCallCount,steps,promptTokens,completionTokens,turnStatus,clarify,
+                reusedFactCount,plannerLlmCalls,answerLlmCalls,metricFetchCount,calculationCount,httpRequestCount,
+                savedFactIds,taskScope,llmUsages,routerLlmCalls,type,payload);
+    }
+
+    public ExecutionResult withRouterUsages(List<com.cexpilot.llm.LlmUsage> routing) {
+        var combined=new java.util.ArrayList<>(routing);
+        if(llmUsages!=null) combined.addAll(llmUsages);
+        else if(plannerLlmCalls+answerLlmCalls>0) combined.add(new com.cexpilot.llm.LlmUsage("unknown",null,null,null,null));
+        return new ExecutionResult(answer,evidence,toolCallCount,steps,
+                promptTokens+com.cexpilot.llm.LlmUsage.knownPromptTokens(routing),
+                completionTokens+com.cexpilot.llm.LlmUsage.knownCompletionTokens(routing),turnStatus,clarify,reusedFactCount,
+                plannerLlmCalls,answerLlmCalls,metricFetchCount,calculationCount,httpRequestCount,savedFactIds,taskScope,
+                combined,routing.size(),agentType,agentPayload);
     }
 
     public ExecutionResult {

@@ -15,6 +15,27 @@ spring:
 server:
   port: ${SERVER_PORT:8082}
 
+# 灰度试用默认关闭；开启前完成监控迁移并配置 Resend、通知邮箱与交易所代理。
+monitor:
+  enabled: ${MONITOR_ENABLED:false}
+  access-token: ${MONITOR_ACCESS_TOKEN:}
+  mail-from: ${MONITOR_MAIL_FROM:support@hrscrm.net}
+  publication-delay-seconds: 20
+  lease-seconds: 120
+  max-delivery-attempts: 3
+  max-execution-attempts: 3
+  work-timeout-seconds: 60
+  scan-ms: 10000
+  mail-scan-ms: 10000
+
+# 与 linkedin_scrm 一致：只从环境读取，不在仓库中保存实际密钥。
+resend:
+  api-key: ${RESEND_API_KEY:}
+  # 留空使用 SDK 官方地址；本地联调/故障演练可指向 HTTP 桩。
+  base-url: ${RESEND_BASE_URL:}
+  # 显式开启才模拟成功；不调用Resend，投递ID带dry-run前缀。
+  dry-run: ${RESEND_DRY_RUN:false}
+
 llm:
   normal:
     base-url: ${LLM_NORMAL_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
@@ -61,11 +82,11 @@ mcp:
 
 exchange:
   binance:
-    base-url: ${BINANCE_BASE_URL:https://fapi.binance.com}
+    base-url: ${BINANCE_BASE_URL:http://43.160.213.63:18080}
     api-key: ${BINANCE_API_KEY:}
     secret-key: ${BINANCE_SECRET_KEY:}
   okx:
-    base-url: ${OKX_BASE_URL:https://www.okx.com}
+    base-url: ${OKX_BASE_URL:http://43.160.213.63:18081}
     api-key: ${OKX_API_KEY:}
     secret-key: ${OKX_SECRET_KEY:}
     passphrase: ${OKX_PASSPHRASE:}

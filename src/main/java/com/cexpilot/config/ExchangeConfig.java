@@ -25,7 +25,7 @@ public class ExchangeConfig {
 
     public static class Binance {
         /** USDⓈ-M 永续合约公共行情入口，资金费率 / OI / 标记价格都在这里。 */
-        private String baseUrl = "https://fapi.binance.com";
+        private String baseUrl = "http://43.160.213.63:18080";
         private String apiKey = "";
         private String secretKey = "";
 
@@ -55,7 +55,7 @@ public class ExchangeConfig {
     }
 
     public static class Okx {
-        private String baseUrl = "https://www.okx.com";
+        private String baseUrl = "http://43.160.213.63:18081";
         private String apiKey = "";
         private String secretKey = "";
         private String passphrase = "";

@@ -55,6 +55,20 @@ class FakeJudge:
         return json.dumps(self.obj, ensure_ascii=False), {"duration_seconds": 1, "usage": {"completion_tokens": 10}}
 
 
+class FlakyJudge(FakeJudge):
+    """前 n 次返回不合法输出，之后返回正常判定；用来验证"输出不合法才重试"。"""
+
+    def __init__(self, bad, bad_times=1, good=None):
+        super().__init__(good if good is not None else judgment())
+        self.bad = bad
+        self.bad_times = bad_times
+
+    def call(self, messages, schema=None):
+        self.calls.append((messages, schema))
+        obj = self.bad if len(self.calls) <= self.bad_times else self.obj
+        return json.dumps(obj, ensure_ascii=False), {"duration_seconds": 1, "usage": {"completion_tokens": 10}}
+
+
 class AnswerEvalTests(unittest.TestCase):
     def setUp(self):
         blocker = patch.object(ev.pe.urllib.request, "build_opener", side_effect=AssertionError("Network forbidden"))
@@ -94,6 +108,31 @@ class AnswerEvalTests(unittest.TestCase):
         self.assertEqual(120, payload["facts"][0]["data"]["value"])
         self.assertNotIn("123456", json.dumps(payload))
         self.assertEqual("币安BTC最新成交价120 USDT。", payload["answer"])
+
+    def test_judge_output_retry_recovers_and_reports_rejection_reason(self):
+        bad = {"criteria": judgment()["criteria"], "claims": [dict(judgment()["claims"][0], quote="答案里没有这句")]}
+        judge = FlakyJudge(bad, bad_times=1)
+        result = ev.grade_record(record(), judge, "rubric", 1)
+        self.assertEqual("PASS", result["verdict"])
+        self.assertEqual(1, result["judge_output_retries"])
+        self.assertEqual(2, len(judge.calls))
+        self.assertIn("上一次输出被程序拒绝", judge.calls[1][0][1]["content"])
+
+    def test_judge_output_retry_exhausted_still_judge_error(self):
+        bad = {"criteria": judgment()["criteria"], "claims": [dict(judgment()["claims"][0], quote="答案里没有这句")]}
+        judge = FlakyJudge(bad, bad_times=9)
+        result = ev.grade_record(record(), judge, "rubric", 2)
+        self.assertEqual("JUDGE_ERROR", result["verdict"])
+        self.assertEqual(3, len(judge.calls))
+        self.assertEqual(3, result["judge_output_retries"])
+
+    def test_retry_never_applies_to_real_verdicts(self):
+        # UNSUPPORTED 是判定结果而不是输出不合法，重试不得改写它，也不得多调裁判。
+        judge = FakeJudge(judgment(claim_verdict="UNSUPPORTED"))
+        result = ev.grade_record(record(), judge, "rubric", 3)
+        self.assertEqual("FAIL", result["verdict"])
+        self.assertEqual(1, len(judge.calls))
+        self.assertEqual(0, result["judge_output_retries"])
 
     def test_historical_prompt_metadata_is_not_evaluable(self):
         data = trace()
@@ -323,8 +362,10 @@ class AnswerEvalTests(unittest.TestCase):
             self.assertEqual(1, ev.main(["calibrate", "--output-root", tmp]))
             path = next(Path(tmp).glob("*/scores.jsonl"))
             rows = ev.pe.read_jsonl(path)
-            self.assertEqual(8, sum(r["calibration_passed"] for r in rows))
-            self.assertEqual(16, len(rows))
+            samples = ev.pe.read_json(ev.CALIBRATION)["samples"]
+            self.assertEqual(sum(s["expected_verdict"] == "PASS" for s in samples),
+                             sum(r["calibration_passed"] for r in rows))
+            self.assertEqual(len(samples), len(rows))
 
     def test_generate_config_uses_model_key_without_double_suffix(self):
         env = {"ANSWER_EVAL_MODEL_BASE_URL": "https://fixture.invalid/v1",

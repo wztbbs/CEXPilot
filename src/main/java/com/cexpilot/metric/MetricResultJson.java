@@ -67,6 +67,13 @@ public final class MetricResultJson {
             out.put("next_settlement_time_unavailable_reason", "系统未接入下次结算时间；历史周期不能用于推算未来结算安排");
         }
         out.put("estimated", false).put("truncated", false);
+        if (binding.selector() instanceof OiMetric oi && metadata.requestedRange() != null) {
+            boolean boundary = oi.usesBoundaryValues();
+            out.put("sample_selection", boundary ? "boundary_values" : "interval_samples");
+            ObjectNode selection = range(metadata.effectiveRange());
+            if (boundary) selection.set("end_inclusive", selection.remove("end_exclusive"));
+            out.set("selection_range", selection);
+        }
         if (result instanceof MetricResult.Scalar scalar) {
             if (metadata instanceof MetricResult.SeriesMetadata series) out.put("candle_count", series.candleCount());
             out.put("value", scalar.value());
@@ -74,6 +81,14 @@ public final class MetricResultJson {
             ObjectNode actual = range(scalar.actualRange());
             actual.remove("timezone"); // 兼容现有 actual_range 的字段结构
             out.set("actual_range", actual);
+        } else if (result instanceof MetricResult.SampledScalar scalar) {
+            out.put("candle_count", scalar.metadata().candleCount());
+            out.put("value", scalar.value()).put("observation_seconds", scalar.observationSeconds());
+            ZoneId zone = metadata.effectiveRange().timezone();
+            out.putObject("actual_range")
+                    .put("start_inclusive", Times.readable(scalar.startSampleAt().toEpochMilli(), zone))
+                    .put("end_inclusive", Times.readable(scalar.endSampleAt().toEpochMilli(), zone));
+            out.put("start_sample_at", scalar.startSampleAt().toString()).put("end_sample_at", scalar.endSampleAt().toString());
         } else if (result instanceof MetricResult.Omitted omitted) {
             out.put("statistics_omitted", omitted.reason());
         } else if (result instanceof MetricResult.Series series) {

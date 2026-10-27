@@ -37,6 +37,10 @@ public enum OiMetric implements MetricSelector {
 
     public boolean supportsSnapshot() { return snapshot; }
 
+    public boolean usesBoundaryValues() {
+        return this == START || this == END || this == CHANGE || this == CHANGE_PCT;
+    }
+
     @Override public boolean supports(String shape) {
         return QueryShape.TIME_SERIES.code().equals(shape) && sample != null
                 || QueryShape.RANGE_STATISTIC.code().equals(shape) && statistic != null

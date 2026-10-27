@@ -1,0 +1,25 @@
+-- Execution 排期账本；存量库先完成 014/015/016，再执行本迁移一次。
+CREATE TABLE IF NOT EXISTS monitor_execution (
+    execution_id VARCHAR(64) NOT NULL PRIMARY KEY,
+    rule_id VARCHAR(64) NOT NULL,
+    rule_version INT NOT NULL,
+    spec_hash CHAR(64) NOT NULL,
+    scheduled_at DATETIME(6) NOT NULL,
+    deadline_at DATETIME(6) NOT NULL,
+    status VARCHAR(24) NOT NULL,
+    attempt_count INT NOT NULL DEFAULT 0,
+    lease_token BIGINT NOT NULL DEFAULT 0,
+    lease_until DATETIME(6) NULL,
+    attempt_deadline DATETIME(6) NULL,
+    checkpoint_json JSON NULL,
+    result VARCHAR(16) NULL,
+    last_error VARCHAR(1000) NULL,
+    started_at DATETIME(6) NULL,
+    finished_at DATETIME(6) NULL,
+    created_at DATETIME(6) NOT NULL,
+    updated_at DATETIME(6) NOT NULL,
+    UNIQUE KEY uk_execution_slot (rule_id, rule_version, scheduled_at),
+    KEY idx_execution_dispatch (status, scheduled_at),
+    KEY idx_execution_rule (rule_id, status, scheduled_at),
+    KEY idx_execution_cleanup (finished_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

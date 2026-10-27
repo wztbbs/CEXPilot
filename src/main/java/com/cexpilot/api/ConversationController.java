@@ -39,7 +39,7 @@ public class ConversationController {
                 .map(QueryRecord::turnId).orElse("");
         return new ConversationHistoryResponse(conversationId, parentTurnId,
                 queries.stream()
-                        .map(q -> new QueryMessage(q.question(), q.answer(), q.traceId(), q.createdAt(), q.turnId(), q.turnStatus()))
+                        .map(q -> new QueryMessage(q.question(), q.answer(), q.traceId(), q.createdAt(), q.turnId(), q.turnStatus(), q.agentType(), q.planning()))
                         .toList());
     }
 
@@ -47,6 +47,6 @@ public class ConversationController {
     }
 
     public record QueryMessage(String question, String answer, String traceId, LocalDateTime createdAt,
-                               String turnId, String turnStatus) {
+                               String turnId, String turnStatus, String type, com.fasterxml.jackson.databind.JsonNode planning) {
     }
 }

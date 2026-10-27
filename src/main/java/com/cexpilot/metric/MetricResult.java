@@ -20,6 +20,18 @@ public sealed interface MetricResult {
             Objects.requireNonNull(actualRange, "actualRange");
         }
     }
+    /** 瞬时采样统计：实际观测端点均包含，允许期初/期末或单样本极值的零时长。 */
+    record SampledScalar(SeriesMetadata metadata, BigDecimal value, Instant startSampleAt,
+                         Instant endSampleAt) implements MetricResult {
+        public SampledScalar {
+            Objects.requireNonNull(metadata); Objects.requireNonNull(value);
+            Objects.requireNonNull(startSampleAt); Objects.requireNonNull(endSampleAt);
+            if (endSampleAt.isBefore(startSampleAt)) throw new IllegalArgumentException("采样终点不能早于起点");
+        }
+        public BigDecimal observationSeconds() {
+            return BigDecimal.valueOf(endSampleAt.toEpochMilli() - startSampleAt.toEpochMilli(), 3);
+        }
+    }
     /** 快照形态的单点值：没有观测窗口，也不做覆盖核对。 */
     record Point(Metadata metadata, BigDecimal value) implements MetricResult {
         public Point {

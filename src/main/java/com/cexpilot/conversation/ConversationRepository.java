@@ -14,6 +14,34 @@ public class ConversationRepository {
         this.jdbc = jdbc;
     }
 
+    public com.fasterxml.jackson.databind.JsonNode routingState(String conversationId) {
+        var mapper=new com.fasterxml.jackson.databind.ObjectMapper().enable(com.fasterxml.jackson.databind.DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
+        var rows=jdbc.query("SELECT active_agent_type,monitor_planning_json FROM conversation_state WHERE conversation_id=?",(rs,n)->{
+            var state=mapper.createObjectNode().put("active_agent",rs.getString("active_agent_type")==null?"query":rs.getString("active_agent_type"));
+            String saved=rs.getString("monitor_planning_json");
+            try {
+                var monitor=saved==null?mapper.createObjectNode():mapper.readTree(saved);
+                if(monitor.isTextual()) monitor=mapper.readTree(monitor.textValue());
+                state.set("monitor_context",monitor); return state;
+            } catch(com.fasterxml.jackson.core.JsonProcessingException error) { throw new IllegalStateException("监控规划上下文损坏",error); }
+        },conversationId);
+        return rows.isEmpty()?mapper.createObjectNode():rows.get(0);
+    }
+
+    public void saveAgentOutcome(String turnId,String agent,com.fasterxml.jackson.databind.JsonNode payload) {
+        jdbc.update("UPDATE conversation_query SET agent_type=?,agent_payload_json=? WHERE turn_id=?",
+                agent,payload==null?null:payload.toString(),turnId);
+    }
+
+    /** 调用方须在同一事务内持有当前会话行锁，lease 释放后也不能让新请求插入。 */
+    public void saveRoutingState(String conversationId,long token,String agent,com.fasterxml.jackson.databind.JsonNode monitor) {
+        if("clarify".equals(agent)) return;
+        jdbc.update("""
+                UPDATE conversation_state SET active_agent_type=?,monitor_planning_json=COALESCE(?,monitor_planning_json)
+                WHERE conversation_id=? AND fencing_token=?
+                """,agent,monitor==null?null:monitor.toString(),conversationId,token);
+    }
+
     public boolean conversationExists(String conversationId) {
         Integer count = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM conversation WHERE conversation_id = ?",
@@ -38,7 +66,7 @@ public class ConversationRepository {
     /** 会话的全部问答，时间正序（历史回显用，不限条数）。 */
     public List<QueryRecord> allQueries(String conversationId) {
         return jdbc.query("""
-                        SELECT query_no, question, answer, trace_id, created_at, turn_id, turn_status
+                        SELECT query_no, question, answer, trace_id, created_at, turn_id, turn_status, agent_type, agent_payload_json
                         FROM conversation_query
                         WHERE conversation_id = ?
                         ORDER BY query_no ASC
@@ -49,7 +77,7 @@ public class ConversationRepository {
                         rs.getString("answer"),
                         rs.getString("trace_id"),
                         rs.getTimestamp("created_at").toLocalDateTime(),
-                        rs.getString("turn_id"), rs.getString("turn_status")),
+                        rs.getString("turn_id"), rs.getString("turn_status"),rs.getString("agent_type"),readAgentPayload(rs.getString("agent_payload_json"))),
                 conversationId);
     }
 
@@ -351,6 +379,16 @@ public class ConversationRepository {
                         WHERE conversation_id = ? AND running_turn_id = ? AND fencing_token = ?
                         """,
                 conversationId, turnId, fencingToken) > 0;
+    }
+
+    private com.fasterxml.jackson.databind.JsonNode readAgentPayload(String raw) {
+        if(raw==null) return null;
+        try {
+            var mapper=new com.fasterxml.jackson.databind.ObjectMapper().enable(com.fasterxml.jackson.databind.DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
+            var node=mapper.readTree(raw);
+            return node.isTextual()?mapper.readTree(node.textValue()):node;
+        }
+        catch(java.io.IOException invalid) { throw new IllegalStateException("Invalid saved agent payload",invalid); }
     }
 
     public List<QueryRecord> recentQueries(String conversationId, int limit) {

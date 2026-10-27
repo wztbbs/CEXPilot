@@ -49,7 +49,7 @@ public class OkxClient {
             baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
         }
         this.baseUrl = baseUrl;
-        this.rest = RestClient.builder().baseUrl(baseUrl).requestFactory(factory).build();
+        this.rest = RestClient.builder().baseUrl(baseUrl).defaultHeader("User-Agent","CEXPilot/1.0").requestFactory(factory).build();
     }
 
     /**

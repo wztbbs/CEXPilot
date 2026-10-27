@@ -1,5 +1,7 @@
 # Planner 文件评测
 
+端到端会话评测另见 [E2E评测说明](E2E_README.md)：25条场景、45轮输入，逐轮验收，包含澄清、出域、能力咨询及多轮任务链。
+
 Answer阶段另见 [Answer评测说明](ANSWER_README.md)，入口 `scripts/answer_eval.py`。可离线导入已有Planner raw再只调用裁判，不必重新采集问答。
 
 入口 `scripts/planner_eval.py`，仅依赖 Python 3.9+ 标准库。旧脚本、服务端旧 eval、数据库表均保留。

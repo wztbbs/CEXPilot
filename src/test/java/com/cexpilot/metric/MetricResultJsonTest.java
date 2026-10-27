@@ -87,4 +87,20 @@ class MetricResultJsonTest {
         assertFalse(json.path("truncated").asBoolean());
         assertEquals(0, BigDecimal.ONE.compareTo(json.get("value").decimalValue()));
     }
+
+    @Test void instantSampleStatisticsExposeInclusiveEndpointsAndAllowSingleSample() {
+        var instrument = JSON.createObjectNode().put("market_type","perpetual").put("base","BTC").put("quote","USDT").put("settle","USDT");
+        var binding = new MetricBinding("oi","oi.change_pct","binance","range_statistic",instrument,"percent","oi",OiMetric.CHANGE_PCT,"test-v1");
+        var sampled = new MetricResult.SampledScalar(metadata(),new BigDecimal("20"),START,RANGE.endExclusive());
+        var json = MetricResultJson.write(binding,sampled);
+        assertEquals(7200,json.path("observation_seconds").intValue());
+        assertEquals("2026-09-28 02:00:00",json.at("/actual_range/end_inclusive").asText());
+        assertEquals(RANGE.endExclusive().toString(),json.path("end_sample_at").asText());
+        assertFalse(json.path("actual_range").has("end_exclusive"));
+        assertTrue(json.path("selection_range").has("end_inclusive"));
+        assertFalse(json.path("selection_range").has("end_exclusive"));
+        var single=MetricResultJson.write(binding,new MetricResult.SampledScalar(metadata(),BigDecimal.ONE,START,START));
+        assertEquals(0,single.path("observation_seconds").intValue());
+        assertEquals(single.path("start_sample_at"),single.path("end_sample_at"));
+    }
 }

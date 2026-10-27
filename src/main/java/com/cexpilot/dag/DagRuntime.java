@@ -295,7 +295,12 @@ public class DagRuntime {
     /** 失败路径的调用/事实计数快照（4.3）。answerLlmCalls 为尝试次数（1=已发起）。 */
     public record TurnCounters(int plannerLlmCalls, int answerLlmCalls, int metricFetchCount,
                                int calculationCount, int httpRequestCount, int reusedFactCount,
-                               List<String> savedFactIds, List<LlmUsage> llmUsages) {
+                               List<String> savedFactIds, List<LlmUsage> llmUsages,int routerLlmCalls) {
+
+        public TurnCounters(int plannerLlmCalls,int answerLlmCalls,int metricFetchCount,int calculationCount,
+                int httpRequestCount,int reusedFactCount,List<String> savedFactIds,List<LlmUsage> usages) {
+            this(plannerLlmCalls,answerLlmCalls,metricFetchCount,calculationCount,httpRequestCount,reusedFactCount,savedFactIds,usages,0);
+        }
 
         public TurnCounters(int plannerLlmCalls, int answerLlmCalls, int metricFetchCount,
                 int calculationCount, int httpRequestCount, int reusedFactCount, List<String> savedFactIds) {
@@ -305,7 +310,15 @@ public class DagRuntime {
 
         public TurnCounters withLlmUsages(List<LlmUsage> usages) {
             return new TurnCounters(plannerLlmCalls, answerLlmCalls, metricFetchCount, calculationCount,
-                    httpRequestCount, reusedFactCount, savedFactIds, usages);
+                    httpRequestCount, reusedFactCount, savedFactIds, usages,routerLlmCalls);
+        }
+
+        public TurnCounters withRouterUsages(List<LlmUsage> routing) {
+            var combined=new ArrayList<>(routing);
+            if(llmUsages!=null) combined.addAll(llmUsages);
+            else if(plannerLlmCalls+answerLlmCalls>0) combined.add(new LlmUsage("unknown",null,null,null,null));
+            return new TurnCounters(plannerLlmCalls,answerLlmCalls,metricFetchCount,calculationCount,httpRequestCount,
+                    reusedFactCount,savedFactIds,combined,routing.size());
         }
 
         public TurnCounters {

@@ -5,6 +5,7 @@ import com.cexpilot.market.MarketDataService;
 import com.cexpilot.market.model.OiPoint;
 import com.cexpilot.market.oi.OiQueryRequest;
 import com.cexpilot.market.oi.OiQueryResult;
+import com.cexpilot.market.oi.OiQueryMode;
 import com.cexpilot.market.oi.OiQueryService;
 import com.cexpilot.market.series.SeriesCoverage;
 import com.cexpilot.runtime.RequestContext;
@@ -55,30 +56,46 @@ class OiMetricProviderTest {
         return new OiQueryResult(request, request, points, coverage);
     }
 
+    private static OiQueryResult boundaries(boolean complete, BigDecimal firstOi) {
+        var points = List.of(new OiPoint(START.toEpochMilli(), firstOi),
+                new OiPoint(START.plusSeconds(3600).toEpochMilli(),new BigDecimal("1100")),
+                new OiPoint(RANGE.endExclusive().toEpochMilli(),new BigDecimal("1200")));
+        var request = new OiQueryRequest(Exchange.BINANCE,"BTC",OiInterval.parse("30m"),RANGE,false,OiQueryMode.BOUNDARY_VALUES);
+        var coverage = new SeriesCoverage(3,3,complete?List.of():List.of(START.toEpochMilli()),List.of(),List.of(),false,false,null,
+                RANGE.endExclusive().toEpochMilli(),false);
+        return new OiQueryResult(request,request,points,coverage);
+    }
+
     private static OiQueryService service(OiQueryResult result) {
         var service = mock(OiQueryService.class);
         when(service.query(any(), any(), any(), any(), anyString(), any(), anyBoolean())).thenReturn(result);
+        when(service.query(any(), any(), any(), any(), anyString(), nullable(OiInterval.class), anyBoolean(), eq(OiQueryMode.BOUNDARY_VALUES)))
+                .thenReturn(boundaries(result.coverage().rangeComplete(),result.points().get(0).oi()));
         return service;
     }
 
     @ParameterizedTest
-    @CsvSource({"START,1000", "END,1100", "CHANGE,100", "CHANGE_PCT,10.0000", "MIN,1000", "MAX,1100"})
+    @CsvSource({"START,1000", "END,1200", "CHANGE,200", "CHANGE_PCT,20.0000", "MIN,1000", "MAX,1100"})
     void scalarMetricsMatchOiStatsAndCarryObservationWindow(OiMetric selector, String expected) throws Exception {
         var service = service(data(true, new BigDecimal("1000")));
-        var q = query(selector, "range_statistic", "30m", selector == OiMetric.CHANGE_PCT ? "percent" : "BTC");
+        var q = query(selector, "range_statistic", selector.usesBoundaryValues()?"30m":"1h", selector == OiMetric.CHANGE_PCT ? "percent" : "BTC");
         var result = new OiMetricProvider(service, market()).query(q, CONTEXT);
-        var scalar = assertInstanceOf(MetricResult.Scalar.class, result);
+        var scalar = assertInstanceOf(MetricResult.SampledScalar.class, result);
         assertEquals(0, new BigDecimal(expected).compareTo(scalar.value()));
-        assertEquals(new BigDecimal("3600.000"), scalar.observationSeconds());
-        assertEquals(START, scalar.actualRange().startInclusive());
-        assertEquals(START.plusSeconds(3600), scalar.actualRange().endExclusive());
-        verify(service).query(CONTEXT.userZone(), q.time(), CONTEXT.requestTime(),
-                Exchange.BINANCE, "BTC", OiInterval.parse("30m"), false);
+        long seconds = selector==OiMetric.START || selector==OiMetric.END ? 0 : selector.usesBoundaryValues()?7200:3600;
+        assertEquals(0,BigDecimal.valueOf(seconds).compareTo(scalar.observationSeconds()));
+        assertEquals(selector==OiMetric.END?RANGE.endExclusive():START,scalar.startSampleAt());
+        if(selector.usesBoundaryValues()) {
+            verify(service).query(CONTEXT.userZone(),q.time(),CONTEXT.requestTime(),Exchange.BINANCE,"BTC",OiInterval.parse("30m"),false,OiQueryMode.BOUNDARY_VALUES);
+        } else verify(service).query(CONTEXT.userZone(),q.time(),CONTEXT.requestTime(),Exchange.BINANCE,"BTC",OiInterval.parse("1h"),false);
         var json = MetricResultJson.write(q.binding(), result);
         assertEquals(0, new BigDecimal(expected).compareTo(json.get("value").decimalValue()));
-        assertEquals("30m", json.path("candle_interval").asText());
+        assertEquals(selector.usesBoundaryValues()?"30m":"1h", json.path("candle_interval").asText());
         assertEquals("explicit", json.path("interval_source").asText());
-        assertEquals(2, json.path("candle_count").asInt());
+        assertEquals(selector.usesBoundaryValues()?3:2, json.path("candle_count").asInt());
+        assertTrue(json.path("actual_range").has("end_inclusive"));
+        assertFalse(json.path("actual_range").has("end_exclusive"));
+        assertEquals(selector.usesBoundaryValues()?"boundary_values":"interval_samples",json.path("sample_selection").asText());
         assertEquals("oi", json.at("/source/provider").asText());
         assertEquals(selector.name(), json.at("/source/selector").asText());
     }
@@ -99,7 +116,7 @@ class OiMetricProviderTest {
         assertEquals(2, json.path("samples").size());
     }
 
-    @Test void incompleteRangeOmitsValueAndZeroStartRejectsChangePct() throws Exception {
+    @Test void incompleteRangeAndZeroStartOmitValue() throws Exception {
         var provider = new OiMetricProvider(service(data(false, new BigDecimal("1000"))), market());
         var q = query(OiMetric.END, "range_statistic", null, "BTC");
         var result = provider.query(q, CONTEXT);
@@ -109,8 +126,9 @@ class OiMetricProviderTest {
         assertFalse(json.at("/coverage/range_complete").asBoolean());
         // 期初为 0 时 change_pct 无法定义，按缺失处理而不是输出 0
         var zeroStart = new OiMetricProvider(service(data(true, BigDecimal.ZERO)), market());
-        assertThrows(IllegalArgumentException.class,
-                () -> zeroStart.query(query(OiMetric.CHANGE_PCT, "range_statistic", null, "percent"), CONTEXT));
+        var omitted = assertInstanceOf(MetricResult.Omitted.class,
+                zeroStart.query(query(OiMetric.CHANGE_PCT, "range_statistic", null, "percent"), CONTEXT));
+        assertTrue(omitted.reason().contains("为零"));
     }
 
     @Test void shapeSupportIsDeclaredBySelector() {

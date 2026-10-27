@@ -13,7 +13,7 @@ import java.util.List;
  * @param containsUnclosed 通过核对的点中是否含未完结点（仅 includeUnclosed=true 时可能为 true）
  * @param droppedUnclosed  是否因要求已完结而剔除了未完结点
  * @param abortReason      数据源分页中止原因；非 null 时结果为部分数据
- * @param coveredUntilMs   数据实际覆盖终点（不含，ms）；null 表示没有任何通过核对的点。
+ * @param coveredUntilMs   PERIOD 为末周期终点（不含），INSTANT 为最后采样时刻（含），单位 ms；null 表示没有通过核对的点。
  *                         区间延伸到 requestTime 之后时，该值明显小于请求终点
  * @param rangeBeyondNow   请求区间终点是否超过 requestTime（如"今天全天"在中午查询）：
  *                         未来部分永远无法覆盖，结果必然是部分覆盖

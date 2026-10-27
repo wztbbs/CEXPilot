@@ -3,11 +3,10 @@ package com.cexpilot.metric;
 import com.cexpilot.market.MarketCalculator;
 import com.cexpilot.market.MarketDataService;
 import com.cexpilot.market.oi.OiQueryService;
+import com.cexpilot.market.oi.OiQueryMode;
 import com.cexpilot.runtime.RequestContext;
 import com.cexpilot.time.OiInterval;
-import com.cexpilot.time.TimeRange;
 import org.springframework.stereotype.Component;
-import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Objects;
 
@@ -45,28 +44,44 @@ public class OiMetricProvider implements MetricProvider {
         if (!(query instanceof TimeRangeQuery timeQuery)) {
             throw new IllegalArgumentException("oi Provider 仅支持时间区间与快照查询: " + query.getClass().getSimpleName());
         }
-        OiInterval interval = timeQuery.intervalCode() == null ? DEFAULT_INTERVAL : OiInterval.parse(timeQuery.intervalCode());
-        var result = service.query(context.userZone(), timeQuery.time(), context.requestTime(),
-                timeQuery.exchange(), timeQuery.base(), interval, timeQuery.includeUnclosed());
-        var metadata = new MetricResult.SeriesMetadata(result.requested().range(), result.effective().range(),
-                result.coverage(), interval.code(), timeQuery.intervalCode() == null, result.points().size());
         OiMetric selector = (OiMetric) query.binding().selector();
+        boolean boundary = selector.usesBoundaryValues();
+        OiInterval interval = timeQuery.intervalCode() == null ? (boundary ? null : DEFAULT_INTERVAL) : OiInterval.parse(timeQuery.intervalCode());
+        var result = boundary
+                ? service.query(context.userZone(), timeQuery.time(), context.requestTime(), timeQuery.exchange(), timeQuery.base(),
+                        interval, timeQuery.includeUnclosed(), OiQueryMode.BOUNDARY_VALUES)
+                : service.query(context.userZone(), timeQuery.time(), context.requestTime(), timeQuery.exchange(), timeQuery.base(),
+                        interval, timeQuery.includeUnclosed());
+        var metadata = new MetricResult.SeriesMetadata(result.requested().range(), result.effective().range(),
+                result.coverage(), result.effective().interval().code(), timeQuery.intervalCode() == null, result.points().size());
         if (!query.binding().isRangeStatistic()) {
             return new MetricResult.Series(metadata, result.points().stream()
                     .map(p -> new MetricResult.Sample(Instant.ofEpochMilli(p.timestamp()),
                             MarketCalculator.roundPlain(selector.sample(p), 8))).toList());
         }
         if (!result.coverage().rangeComplete()) {
-            return new MetricResult.Omitted(metadata, "区间未完整覆盖，不提供指标 value");
+            return new MetricResult.Omitted(metadata, boundary
+                    ? "OI 端点或区间采样未齐/窗口无法按粒度精确表达，不以相邻采样替代，不提供指标 value"
+                    : "区间未完整覆盖，不提供指标 value");
         }
-        var statistics = MarketCalculator.oiStats(result.points());
-        if (statistics == null || result.coverage().coveredUntilMs() == null) {
-            throw new IllegalArgumentException("完整区间缺少持仓量采样或覆盖终点");
+        var points = result.points();
+        if (points.isEmpty()) return new MetricResult.Omitted(metadata, "区间内没有有效 OI 采样");
+        var first = points.get(0);
+        var last = points.get(points.size()-1);
+        if (boundary && (first.timestamp() != result.effective().range().startInclusive().toEpochMilli()
+                || last.timestamp() != result.effective().range().endExclusive().toEpochMilli())) {
+            return new MetricResult.Omitted(metadata, "缺少精确 OI 起止端点，不以区间内首末点替代");
         }
-        long start = result.points().get(0).timestamp();
-        long end = result.coverage().coveredUntilMs();
-        return new MetricResult.Scalar(metadata, MarketCalculator.roundPlain(selector.statistic(statistics), 8),
-                BigDecimal.valueOf(end - start, 3),
-                new TimeRange(Instant.ofEpochMilli(start), Instant.ofEpochMilli(end), result.effective().range().timezone()));
+        if ((selector == OiMetric.CHANGE || selector == OiMetric.CHANGE_PCT) && first.timestamp() >= last.timestamp()) {
+            return new MetricResult.Omitted(metadata, "OI 变化至少需要两个不同时刻的采样点");
+        }
+        if (selector == OiMetric.CHANGE_PCT && first.oi().signum() == 0) {
+            return new MetricResult.Omitted(metadata, "期初 OI 为零，变化率不可定义");
+        }
+        var statistics = MarketCalculator.oiStats(points);
+        long start = selector == OiMetric.END ? last.timestamp() : first.timestamp();
+        long end = selector == OiMetric.START ? first.timestamp() : last.timestamp();
+        return new MetricResult.SampledScalar(metadata, MarketCalculator.roundPlain(selector.statistic(statistics), 8),
+                Instant.ofEpochMilli(start), Instant.ofEpochMilli(end));
     }
 }

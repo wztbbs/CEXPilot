@@ -1,0 +1,1363 @@
+{
+  "format_version": 1,
+  "suite_id": "e2e-v1",
+  "description": "25条用户会话主集，每轮评分；7可答、4澄清、3域内不支持、2部分可答、2出域、1能力咨询、6多轮。混合请求按保留支持部分的明确产品口径验收。没有故障注入，未执行线上评测，不宣称全覆盖。",
+  "cases": [
+    {
+      "id": "E001",
+      "title": "口语当前价与产品默认",
+      "category": "answer",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "币安比特币现在多少钱？",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "按本系统默认USDT本位永续查询binance BTC的price.last/snapshot，提供有效价格和适用数据时间；不能替换标记/指数价，不能无故追问已经有默认的市场和报价币；无有效结果不算完成查询。",
+              "id": "E001.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E001.T1.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E002",
+      "title": "OKX标记价与指数价分列",
+      "category": "answer",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "OKX以太坊的标记价和指数价分别是多少？",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "查询okx ETH USDT永续的mark.price与index.price当前快照，分别对应标签和值，不添加比较、差值或其他计算。缺任一结果不算完整完成。",
+              "id": "E002.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E002.T1.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E003",
+      "title": "官方24小时统计",
+      "category": "answer",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "币安BTC官方24小时涨幅、成交量分别多少？",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "分别报告binance BTC的官方24h涨幅和基础币成交量，不能改成昨天自然日或USDT成交额，不增加计算。",
+              "id": "E003.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E003.T1.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E004",
+      "title": "纽约自然日成交额",
+      "category": "answer",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "按纽约时间，币安BTC昨天的成交额是多少？",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "取binance BTC trade.turnover/range_statistic，使用用户指定纽约时区的昨天完整自然日，以USDT报价币成交额回答，不能用基础币成交量或现价乘成交量替代。",
+              "id": "E004.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E004.T1.2"
+            },
+            {
+              "dimension": "time",
+              "expectation": "以本次固定请求锚点解析America/New_York昨天，不能用请求默认上海日期覆盖；完整区间成品指标可直接回答，不强制sum。缺口导致无完整统计值时不能伪装任务完成。",
+              "id": "E004.T1.3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E005",
+      "title": "小时序列与未收盘状态",
+      "category": "answer",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "列一下币安BTC最近6小时每小时的收盘价，没收盘的也要。",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "取binance BTC price.close/time_series，rolling_window=6h、interval=1h、include_unclosed=true，逐行列出实际样本并标时区与未收盘状态。",
+              "id": "E005.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E005.T1.2"
+            },
+            {
+              "dimension": "time",
+              "expectation": "区分请求窗口和对齐后的实际覆盖；数量按真实窗口/对齐规则判断，不强制6根或7根；末根临时close可解释为截至更新时的成交价格，只要明确尚未收盘且会变，不因措辞差异机械判错。",
+              "id": "E005.T1.3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E006",
+      "title": "最近N期费率均值",
+      "category": "answer",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "币安BTC最近10期已结算资金费率，平均是多少？",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "required",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "获取binance BTC最近10期已结算费率并由avg产出均值，正确表达ratio/percent和样本范围，不当作10天或一周统计，不自算。",
+              "id": "E006.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E006.T1.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E007",
+      "title": "跨所相对变化与基准",
+      "category": "answer",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "昨天OKX的BTC成交额比币安高百分之多少？",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "required",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "获取同一昨天自然日、可比口径的OKX与币安BTC成交额，relative_change的current=OKX、baseline=binance；按算子符号表述高/低和percent，不擅自接反，缺一侧或未产出最终比较都不能算完成。",
+              "id": "E007.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E007.T1.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E008",
+      "title": "缺币种后短回复接续",
+      "category": "clarification",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "币安上最近10期已结算资金费率分别是多少？",
+          "domain": "in_domain",
+          "outcome": "clarify",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "forbidden",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "新对话没有币种，必须追问，不得猜BTC/ETH或先取数。",
+              "id": "E008.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E008.T1.2"
+            }
+          ]
+        },
+        {
+          "question": "ETH。",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "将ETH补入上一未完成任务，保留binance、最近10期、已结算、分别列出的需求；列出ETH的10期费率，不把短回复当新查询或继续查BTC。",
+              "id": "E008.T2.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E008.T2.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E009",
+      "title": "缺期数后短回复接续",
+      "category": "clarification",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "查一下币安ETH最近几期已结算资金费率的平均值。",
+          "domain": "in_domain",
+          "outcome": "clarify",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "forbidden",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "已知binance/ETH和avg，但没有期数，必须追问多少期，不得默认10期或改成单期。",
+              "id": "E009.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E009.T1.2"
+            }
+          ]
+        },
+        {
+          "question": "10期。",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "required",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "补齐count=10，保留binance/ETH/已结算与求均值任务，由avg产出对应结果，不能只列原始值。",
+              "id": "E009.T2.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E009.T2.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E010",
+      "title": "歧义澄清后选择候选",
+      "category": "clarification",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "分别列出币安和OKX的BTC最近10期已结算资金费率。",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "两所BTC的最近10期已结算样本分别列出，不能混合或新增均值。",
+              "id": "E010.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E010.T1.2"
+            }
+          ]
+        },
+        {
+          "question": "它的均值呢？",
+          "domain": "in_domain",
+          "outcome": "clarify",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "forbidden",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "实际前轮成功建立两组可选样本时，追问币安还是OKX，不能默认第一组、混合平均或擅自取新样本；若候选确实缺失，明确指出前提未满足，相关复用/歧义覆盖记UNCERTAIN。",
+              "id": "E010.T2.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E010.T2.2"
+            }
+          ]
+        },
+        {
+          "question": "币安那组。",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "forbidden",
+            "calculation": "required",
+            "reuse": "required"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "接续前轮澄清，对原binance/BTC那10期计算avg；原样本候选存在时必须绑定真实fact身份，不重查最新。前轮未建立候选不能假装此分支通过。",
+              "id": "E010.T3.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E010.T3.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E011",
+      "title": "域内但现货未接入",
+      "category": "unsupported",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "币安BTC现货现在多少钱？",
+          "domain": "in_domain",
+          "outcome": "unsupported",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "forbidden",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "这是域内产品能力缺口，说明当前未支持现货；不得改查永续、也不能把整个加密领域判出域。",
+              "id": "E011.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E011.T1.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E012",
+      "title": "域内但费率窗口未接入",
+      "category": "unsupported",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "币安BTC过去一周的已结算资金费率，平均是多少？",
+          "domain": "in_domain",
+          "outcome": "unsupported",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "forbidden",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "说明系统未接入资金费率时间窗口，不能把一周换成7期/21期或猜结算周期；不编造均值、不说交易所没有历史数据。",
+              "id": "E012.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E012.T1.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E013",
+      "title": "基础币数量口径不兼容",
+      "category": "unsupported",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "币安BTC和ETH昨天的成交量直接相加，一共多少枚？",
+          "domain": "in_domain",
+          "outcome": "unsupported",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "forbidden",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "说明BTC/ETH基础币数量单位不兼容，不能相加；核心结果无法产生，不安排取数、不能改成分别列出替代原任务，也不能用USDT成交额偷换。",
+              "id": "E013.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E013.T1.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E014",
+      "title": "支持与未支持费率部分可答",
+      "category": "partial",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "币安BTC现在的未结算资金费率多少？最近10期已结算的也列一下。",
+          "domain": "in_domain",
+          "outcome": "partial",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "独立完成最近10期已结算费率查询，明确当前未结算/预测费率未接入。不能整题拒绝，也不能用历史最后一期替代当前未结算或推算未来结算。",
+              "id": "E014.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E014.T1.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E015",
+      "title": "域内与出域混合请求",
+      "category": "partial",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "币安BTC现在多少钱？顺便帮我写封请假邮件。",
+          "domain": "mixed",
+          "outcome": "partial",
+          "expected_fields": {},
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "按本套件明确的混合请求口径：完成支持的BTC现价查询，简短说明不处理写作部分；不能因混合输入整题拒绝或输出请假邮件。全局in_domain不作硬标签，以逐项处理与实际事实验收。",
+              "id": "E015.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E015.T1.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E016",
+      "title": "天气问题出域",
+      "category": "out_of_domain",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "上海明天会下雨吗？",
+          "domain": "out_of_domain",
+          "outcome": "out_of_domain",
+          "expected_fields": {
+            "in_domain": false
+          },
+          "execution": {
+            "fetch": "forbidden",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "简短说明仅支持加密行情等当前能力，不查询交易所、不凭训练知识回答明天天气，不要求补币种。",
+              "id": "E016.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E016.T1.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E017",
+      "title": "写作请求出域",
+      "category": "out_of_domain",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "帮我写一封请假邮件。",
+          "domain": "out_of_domain",
+          "outcome": "out_of_domain",
+          "expected_fields": {
+            "in_domain": false
+          },
+          "execution": {
+            "fetch": "forbidden",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "简短说明范围，不生成邮件，不查询行情，也不追问交易所或币种。",
+              "id": "E017.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E017.T1.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E018",
+      "title": "寒暄与能力介绍",
+      "category": "help",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "你好，你能帮我查哪些东西？",
+          "domain": "help",
+          "outcome": "help",
+          "expected_fields": {},
+          "execution": {
+            "fetch": "forbidden",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "友好简短介绍本系统当前可查的永续行情/已接入指标和计算能力；不能声称支持未接入交易、现货、预测费率或任意领域，不机械要求补币种，不取数。help不硬编码in_domain旗标。",
+              "id": "E018.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E018.T1.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E019",
+      "title": "连续改所改币继承条件",
+      "category": "multiturn",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "查一下币安BTC昨天的最高成交价，用1小时K线。",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "查询binance BTC昨天完整自然日price.high、显式interval=1h，正确回答。",
+              "id": "E019.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E019.T1.2"
+            }
+          ]
+        },
+        {
+          "question": "那OKX呢？",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "仅将交易所改为OKX，保持BTC、昨天原自然日、最高成交价和显式1h；不能退回当前价或改为平均值。",
+              "id": "E019.T2.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E019.T2.2"
+            }
+          ]
+        },
+        {
+          "question": "再换成ETH。",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "仅将币种改为ETH，保持OKX、昨天原区间、最高价、显式1h；不能回到币安BTC。",
+              "id": "E019.T3.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E019.T3.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E020",
+      "title": "原样本均值复用",
+      "category": "multiturn",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "列出币安BTC最近10期已结算资金费率。",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "列出binance BTC USDT永续最近10期已结算费率，样本时间、单位与收付方向依实际FACTS，不替代预测值、不推算未来结算；取数失败或不足时说明但不算完成本次可答任务。",
+              "id": "E020.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E020.T1.2"
+            }
+          ]
+        },
+        {
+          "question": "刚才那10期的平均值呢？",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "forbidden",
+            "calculation": "required",
+            "reuse": "required"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "对首轮已验证的原binance/BTC十期样本计算avg；使用真实fact身份和原观测范围，不重查最新、不从历史答案抄数；候选缺失时说明前提不足，不能冒充复用成功。",
+              "id": "E020.T2.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E020.T2.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E021",
+      "title": "复用后显式刷新",
+      "category": "multiturn",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "列出币安BTC最近10期已结算资金费率。",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "列出binance BTC USDT永续最近10期已结算费率，样本时间、单位与收付方向依实际FACTS，不替代预测值、不推算未来结算；取数失败或不足时说明但不算完成本次可答任务。",
+              "id": "E021.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E021.T1.2"
+            }
+          ]
+        },
+        {
+          "question": "刚才那10期求个平均。",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "forbidden",
+            "calculation": "required",
+            "reuse": "required"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "首轮候选可用时绑定原样本并计算avg；缺少候选不能宣称已复用。",
+              "id": "E021.T2.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E021.T2.2"
+            }
+          ]
+        },
+        {
+          "question": "重新查最新10期，再算平均值。",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "required",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "显式刷新必须走本轮最新取数路径并对新集合算avg，不沿用原样本冒充最新；数值恰好没变不代表没刷新，也不证明已刷新，核对事实身份与取数记录。",
+              "id": "E021.T3.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E021.T3.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E022",
+      "title": "旧新价格相对变化",
+      "category": "multiturn",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "币安BTC现在多少钱？",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "按本系统默认USDT本位永续查询binance BTC的price.last/snapshot，提供有效价格和适用数据时间；不能替换标记/指数价，不能无故追问已经有默认的市场和报价币；无有效结果不算完成查询。",
+              "id": "E022.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E022.T1.2"
+            }
+          ]
+        },
+        {
+          "question": "现在比刚才涨了百分之多少？",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "required",
+            "reuse": "required"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "旧baseline必须引用首轮已验证价格事实，新current需本轮最新取数，relative_change按current=新/baseline=旧；说明两次数据时间，不能从历史回答抄常量、交换基准或因数值相同推断没刷新。",
+              "id": "E022.T2.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E022.T2.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E023",
+      "title": "五轮干扰后回访原任务",
+      "category": "multiturn",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "按上海时区，查币安BTC昨天的成交额。",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "建立binance BTC、上海时区、昨天完整自然日trade.turnover任务，使用成品统计，不增加sum。",
+              "id": "E023.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E023.T1.2"
+            }
+          ]
+        },
+        {
+          "question": "换个问题，币安ETH现在多少钱？",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "建立独立的binance ETH当前price.last任务，不能沿用先前历史成交额窗口，不覆盖历史任务身份。",
+              "id": "E023.T2.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E023.T2.2"
+            }
+          ]
+        },
+        {
+          "question": "换个问题，币安SOL现在多少钱？",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "建立独立的binance SOL当前price.last任务，不能沿用先前历史成交额窗口，不覆盖历史任务身份。",
+              "id": "E023.T3.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E023.T3.2"
+            }
+          ]
+        },
+        {
+          "question": "换个问题，币安XRP现在多少钱？",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "建立独立的binance XRP当前price.last任务，不能沿用先前历史成交额窗口，不覆盖历史任务身份。",
+              "id": "E023.T4.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E023.T4.2"
+            }
+          ]
+        },
+        {
+          "question": "换个问题，币安BNB现在多少钱？",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "建立独立的binance BNB当前price.last任务，不能沿用先前历史成交额窗口，不覆盖历史任务身份。",
+              "id": "E023.T5.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E023.T5.2"
+            }
+          ]
+        },
+        {
+          "question": "换个问题，币安DOGE现在多少钱？",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "建立独立的binance DOGE当前price.last任务，不能沿用先前历史成交额窗口，不覆盖历史任务身份。",
+              "id": "E023.T6.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E023.T6.2"
+            }
+          ]
+        },
+        {
+          "question": "回到最开始那个问题，换成OKX，其他不变。",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "依据实际任务索引找回最早成交额任务的原有效版本，查询OKX BTC原上海昨天区间成交额；不能按列表首项/task_1猜ID，也不能沿用当前DOGE快照。索引确实缺失时说明未满足回访前提，相关覆盖UNCERTAIN。",
+              "id": "E023.T7.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E023.T7.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E024",
+      "title": "出域后回到域内任务",
+      "category": "multiturn",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "币安BTC现在多少钱？",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "按本系统默认USDT本位永续查询binance BTC的price.last/snapshot，提供有效价格和适用数据时间；不能替换标记/指数价，不能无故追问已经有默认的市场和报价币；无有效结果不算完成查询。",
+              "id": "E024.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E024.T1.2"
+            }
+          ]
+        },
+        {
+          "question": "帮我写一封请假邮件。",
+          "domain": "out_of_domain",
+          "outcome": "out_of_domain",
+          "expected_fields": {
+            "in_domain": false
+          },
+          "execution": {
+            "fetch": "forbidden",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "简短说明范围，不写邮件、不取行情；不将写作要求混入后续行情查询。",
+              "id": "E024.T2.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E024.T2.2"
+            }
+          ]
+        },
+        {
+          "question": "回到刚才BTC那个问题，换成OKX。",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "明确回访币安BTC当前价任务并仅改OKX，回答OKX BTC当前成交价；不能追问邮件内容或把出域轮当行情条件来源。",
+              "id": "E024.T3.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E024.T3.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E025",
+      "title": "连续短回复补齐币种与期数",
+      "category": "clarification",
+      "timezone": "Asia/Shanghai",
+      "label_source": "repository_contract_and_reviewable_e2e_policy",
+      "turns": [
+        {
+          "question": "查一下币安最近几期已结算资金费率的平均值。",
+          "domain": "in_domain",
+          "outcome": "clarify",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "forbidden",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "新对话同时缺币种和期数，需要追问缺失条件，可以一次问两项或分步问；不得猜BTC、10期或提前取数。",
+              "id": "E025.T1.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E025.T1.2"
+            }
+          ]
+        },
+        {
+          "question": "BTC。",
+          "domain": "in_domain",
+          "outcome": "clarify",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "forbidden",
+            "calculation": "forbidden",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "把BTC补入原费率均值任务，保留binance/已结算/avg，继续追问仍缺少的期数，不默认期数、不把BTC当独立当前价查询。",
+              "id": "E025.T2.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E025.T2.2"
+            }
+          ]
+        },
+        {
+          "question": "10期。",
+          "domain": "in_domain",
+          "outcome": "answer",
+          "expected_fields": {
+            "in_domain": true
+          },
+          "execution": {
+            "fetch": "required",
+            "calculation": "required",
+            "reuse": "forbidden"
+          },
+          "criteria": [
+            {
+              "dimension": "task",
+              "expectation": "补齐count=10后完成binance BTC最近10期已结算费率avg，保留原任务全部条件，不把任务覆盖成最后两个短回复或只列原始值。",
+              "id": "E025.T3.1"
+            },
+            {
+              "dimension": "grounding",
+              "expectation": "本轮最终回复中的数值、身份、单位、时间、限制、因果和预测断言均须有实际依据。行情只能由本轮Answer实际可见且成功适用的FACTS支持，不能用其他trace数据、历史回答或用户假设补证；澄清、拒答和能力说明依据问题与实际契约核验。允许合理展示和四舍五入，不把临时K线close的合理解释自动判为事实错误。",
+              "id": "E025.T3.2"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

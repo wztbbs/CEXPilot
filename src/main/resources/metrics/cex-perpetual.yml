@@ -125,22 +125,22 @@ metrics:
       snapshot: {provider: oi, selector: QUANTITY}
       time_series: {provider: oi, selector: QUANTITY, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
   oi.start:
-    description: 区间期初未平仓合约数量（基础币）；Binance 历史查询仅支持最近 30 天
+    description: 区间起点采样时刻的未平仓合约数量（基础币）；端点统计含逻辑右端点并要求覆盖完整，缺端点不替代；Binance 历史查询仅支持最近 30 天
     unit: base
     bindings:
       range_statistic: {provider: oi, selector: START, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
   oi.end:
-    description: 区间期末未平仓合约数量（基础币）；Binance 历史查询仅支持最近 30 天
+    description: 区间逻辑终点采样时刻的未平仓合约数量（基础币），不是半开区间内最后一点；缺端点不替代；Binance 历史查询仅支持最近 30 天
     unit: base
     bindings:
       range_statistic: {provider: oi, selector: END, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
   oi.change:
-    description: 区间未平仓合约数量变化量（基础币）；Binance 历史查询仅支持最近 30 天
+    description: 区间逻辑终点减起点的未平仓合约数量变化量（基础币），包含两端采样；缺端点不替代；Binance 历史查询仅支持最近 30 天
     unit: base
     bindings:
       range_statistic: {provider: oi, selector: CHANGE, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
   oi.change_pct:
-    description: 区间未平仓合约数量变化率；Binance 历史查询仅支持最近 30 天
+    description: 区间逻辑终点相对起点的未平仓合约数量变化率，包含两端采样；缺端点或零基数不输出值；Binance 历史查询仅支持最近 30 天
     unit: percent
     bindings:
       range_statistic: {provider: oi, selector: CHANGE_PCT, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}

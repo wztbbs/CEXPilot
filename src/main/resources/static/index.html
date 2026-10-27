@@ -142,12 +142,21 @@
     margin-bottom: 10px;
     overflow-y: auto;
   }
+.monitor-confirmation { margin-top:14px; padding:16px; border:1px solid #d4dedb; border-radius:12px; background:#f6faf8; font-size:14px; }
+.monitor-confirmation p { margin:10px 0; }
+.monitor-confirmation ol { padding-left:20px; }
+.monitor-confirmation li { margin:8px 0; white-space:pre-wrap; }
+.monitor-confirmation button { margin:6px 8px 0 0; padding:8px 12px; cursor:pointer; border:1px solid #a9c2b7; border-radius:6px; background:white; color:#204a37; }
+.monitor-confirmation button:disabled { opacity:.45; cursor:not-allowed; }
+.monitor-confirmation input { display:block; margin:8px 0; padding:8px; max-width:100%; width:290px; }
+.monitor-confirmation pre { overflow:auto; max-height:260px; font-size:12px; }
 </style>
 </head>
 <body>
 <div id="app" class="empty">
   <div id="hero">
     <h1>CEXPilot</h1>
+    <p style="font-size:14px;color:#6b7280">也可以说「监控 BTC 最近一小时跌幅超过 2%，发邮件提醒」</p>
     <p>加密货币交易 AI Copilot · 行情、资金费率、持仓量、链上交易，随便问</p>
   </div>
 
@@ -167,6 +176,7 @@
   </div>
 </div>
 
+<script src="/monitor-confirmation.js"></script>
 <script>
 (function () {
   var app = document.getElementById('app');
@@ -284,6 +294,7 @@
           answerDiv = addMessage('assistant', '（无回答）');
         }
         appendMeta(answerDiv, payload.toolCalls, payload.durationMs, payload.traceId);
+        if (window.MonitorConfirmation) window.MonitorConfirmation.render(answerDiv,payload.planning);
       } else if (name === 'error') {
         terminalReceived = true;
         // meta 只是请求开始；只有 done 或已提交失败的 error 才能推进父轮次。
@@ -389,11 +400,26 @@
           if (m.answer) {
             var div = addMessage('assistant', m.answer);
             appendMeta(div, 0, 0, m.traceId);
+            if (window.MonitorConfirmation) window.MonitorConfirmation.render(div,m.planning);
           }
         });
       })
       .catch(function () { requireHistoryRefresh(); })
-      .finally(function () { historyLoading = false; autoResize(); });
+      .finally(function () {
+        historyLoading = false; autoResize();
+        if (window.MonitorConfirmation) {
+          window.MonitorConfirmation.recover(function () {
+            app.className = 'chatting'; return addMessage('assistant','已恢复的监控任务');
+          }).catch(function () { /* 首次访问无访客 cookie 时没有可恢复监控。 */ });
+        }
+        if (window.MonitorConfirmation && window.location.search) {
+          var linked = new URLSearchParams(window.location.search).get('monitor');
+          if (linked) {
+            app.className = 'chatting';
+            window.MonitorConfirmation.openLinked(addMessage('assistant','监控任务'),window.location.search);
+          }
+        }
+      });
   }
 
   textarea.addEventListener('input', autoResize);

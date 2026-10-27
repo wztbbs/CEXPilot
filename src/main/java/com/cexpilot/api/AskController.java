@@ -117,6 +117,9 @@ public class AskController {
                                 done.put("toolCalls", response.toolCalls());
                                 done.put("durationMs", response.durationMs());
                                 done.put("busy", response.busy());
+                                done.put("type",response.type());
+                                done.put("routerLlmCalls",response.routerLlmCalls());
+                                if(response.planning()!=null) done.put("planning",response.planning());
                                 send(emitter, "done", done);
                             }
                         });
@@ -169,6 +172,7 @@ public class AskController {
 
     private static String visitorCookie(String visitorId) {
         return ResponseCookie.from(VISITOR_COOKIE, visitorId)
+                .httpOnly(true)
                 .path("/")
                 .maxAge(Duration.ofDays(365))
                 .sameSite("Lax")

@@ -82,7 +82,8 @@ public record QueryFrame(
             JsonNode data = byNode.get(target.physicalId());
             if (data != null) {
                 for (String field : List.of("candle_interval", "interval_source", "requested_range", "effective_range",
-                        "actual_range", "coverage", "as_of", "timezone", "requested_count", "actual_count", "sample_complete")) {
+                        "actual_range", "coverage", "as_of", "timezone", "requested_count", "actual_count", "sample_complete",
+                        "sample_selection", "selection_range", "start_sample_at", "end_sample_at")) {
                     if (data.hasNonNull(field)) execution.set(field, data.get(field).deepCopy());
                 }
                 // Provider 为完整窗口可能省略相同的 effective_range；持久化仍明确保留两者。

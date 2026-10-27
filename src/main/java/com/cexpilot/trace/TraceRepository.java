@@ -20,6 +20,10 @@ public class TraceRepository {
         this.jdbc = jdbc;
     }
 
+    public void saveRouting(String traceId,String agent,int routerCalls) {
+        jdbc.update("UPDATE ask_trace SET agent_type=?,router_llm_calls=? WHERE trace_id=?",agent,routerCalls,traceId);
+    }
+
     public void startTrace(String traceId, String conversationId, String question, String model,
                            String promptVersion, String visitorId, String buildCommit) {
         jdbc.update("""

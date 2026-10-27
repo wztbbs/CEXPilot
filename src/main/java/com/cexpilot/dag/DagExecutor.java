@@ -65,6 +65,8 @@ public class DagExecutor {
     void shutdown() {
         pool.shutdown();
     }
+    /** 独立后台执行器的生命周期入口，不共享问答执行池。 */
+    public void close() { shutdown(); }
 
     /** 执行结果：节点产出上下文 + 拓扑层数（作为 ExecutionResult.steps）+ 本轮真实 HTTP 请求数。 */
     public record ExecutionOutcome(DagContext context, int layers, int httpRequests) {
@@ -95,12 +97,25 @@ public class DagExecutor {
     public ExecutionOutcome execute(DagPlan plan, String traceId, TraceSink sink,
                                     RequestContext requestContext,
                                     com.cexpilot.metric.ExecutionBindings bindings) {
+        return executeInternal(plan,traceId,sink,requestContext,bindings,Map.of(),(node,result)->{});
+    }
+
+    /** 监控执行恢复：种子必须由调用方校验来源、新鲜度与依赖；每个完成节点可持久化检查点。 */
+    public ExecutionOutcome executeResumable(DagPlan plan,String traceId,TraceSink sink,RequestContext requestContext,
+            Map<String,ToolResult> seeds,java.util.function.BiConsumer<PlanNode,ToolResult> completed) {
+        return executeInternal(plan,traceId,sink,requestContext,null,seeds,completed);
+    }
+    private ExecutionOutcome executeInternal(DagPlan plan,String traceId,TraceSink sink,RequestContext requestContext,
+            com.cexpilot.metric.ExecutionBindings bindings,Map<String,ToolResult> seeds,
+            java.util.function.BiConsumer<PlanNode,ToolResult> completed) {
         DagContext ctx = new DagContext();
+        seeds.forEach(ctx::put);
         // 本轮共享的 HTTP 请求计数器：工作线程进入节点执行前绑定到线程，
         // BinanceClient/OkxClient 每次真实发请求递增（一个节点分页多次请求会记多次）
         java.util.concurrent.atomic.AtomicInteger httpRequests = new java.util.concurrent.atomic.AtomicInteger();
         List<List<PlanNode>> levels = topoLevels(plan);
-        for (List<PlanNode> level : levels) {
+        for (List<PlanNode> fullLevel : levels) {
+            List<PlanNode> level=fullLevel.stream().filter(node->ctx.get(node.id())==null).toList();
             List<Future<NodeOutcome>> futures = new ArrayList<>();
             List<NodeTraceCollector.Session> sessions = new ArrayList<>();
             for (PlanNode node : level) {
@@ -108,8 +123,14 @@ public class DagExecutor {
                 sessions.add(session);
                 futures.add(pool.submit(() -> runNode(node, ctx, traceId, requestContext, bindings, httpRequests, session)));
             }
-            for (int i = 0; i < level.size(); i++) {
-                collect(level.get(i), futures.get(i), sessions.get(i), ctx, traceId, sink, bindings);
+            try {
+                for (int i = 0; i < level.size(); i++) {
+                    collect(level.get(i), futures.get(i), sessions.get(i), ctx, traceId, sink, bindings);
+                    completed.accept(level.get(i),ctx.get(level.get(i).id()));
+                }
+            } finally {
+                for(var future:futures) if(!future.isDone()) future.cancel(true);
+                sessions.forEach(NodeTraceCollector.Session::freezeAndSnapshot);
             }
         }
         return new ExecutionOutcome(ctx, levels.size(), httpRequests.get());
