@@ -90,9 +90,9 @@ class MonitorExecutionServiceTest {
     @Test void aFutureCycleCannotBeClaimedBeforeItsPublicationTime() {
         String id=active(); f.evaluate(id,Result.NO_MATCH); var old=first(id);
         f.jdbc.update("""
-                INSERT INTO monitor_execution (execution_id,rule_id,rule_version,spec_hash,scheduled_at,deadline_at,status,created_at,updated_at)
-                VALUES ('future',?,1,?,?,?,'PENDING',?,?)
-                """,id,old.specHash(),MonitorRepository.utc(old.scheduledAt().plusSeconds(300)),MonitorRepository.utc(old.deadlineAt().plusSeconds(300)),
+                INSERT INTO monitor_execution (execution_id,rule_id,rule_version,scheduled_at,deadline_at,status,created_at,updated_at)
+                VALUES ('future',?,1,?,?,'PENDING',?,?)
+                """,id,MonitorRepository.utc(old.scheduledAt().plusSeconds(300)),MonitorRepository.utc(old.deadlineAt().plusSeconds(300)),
                 MonitorRepository.utc(f.clock.instant()),MonitorRepository.utc(f.clock.instant()));
         f.clock.advance(280); assertNull(f.executions.claim("future"));
         f.clock.advance(20); assertNotNull(f.executions.claim("future"));

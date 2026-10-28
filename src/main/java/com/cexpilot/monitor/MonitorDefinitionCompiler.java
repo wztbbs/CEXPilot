@@ -17,7 +17,6 @@ public class MonitorDefinitionCompiler {
     private final MonitorPlanValidator validator;
     private final MetricCatalog catalog;
     public MonitorDefinitionCompiler(MonitorPlanValidator validator,MetricCatalog catalog) { this.validator=validator; this.catalog=catalog; }
-    public MonitorPlanValidator.Validated validate(JsonNode candidate) { return validator.validate(candidate); }
     public ObjectNode compile(JsonNode candidate,String timezone) {
         var checked=validator.validate(candidate);
         // 自动粒度固定为5m，随确认内容持久化，避免后台按窗口自动切换粒度。
@@ -30,6 +29,7 @@ public class MonitorDefinitionCompiler {
         var result=JSON.createObjectNode().put("schemaVersion",2).put("timezone",java.time.ZoneId.of(timezone).getId())
                 .put("catalogVersion",catalog.version()).put("requiredHits",checked.candidate().at("/monitor/consecutive_hits").asInt());
         result.set("candidate",checked.candidate());
+        result.set("dag",MonitorDag.write(checked.compiled().dagPlan()));
         var rules=result.putArray("rules");
         int index=0;
         for(var condition:checked.candidate().at("/monitor/conditions")) {
@@ -37,6 +37,7 @@ public class MonitorDefinitionCompiler {
             String physical=ReferenceResolver.findRefs(JSON.getNodeFactory().textNode(checked.resolvedRefs().get(ref))).get(0).nodeId();
             String unit=unit(physical,checked.compiled(),new HashSet<>());
             var rule=rules.addObject().put("id","condition_"+(++index)).put("valueRef",ref)
+                    .put("resolvedValueRef",checked.resolvedRefs().get(ref))
                     .put("operator",condition.path("operator").asText()).put("unit",unit)
                     .put("expression",expression(physical,checked.compiled()));
             rule.set("threshold",condition.path("threshold"));

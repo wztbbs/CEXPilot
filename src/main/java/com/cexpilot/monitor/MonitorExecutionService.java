@@ -27,7 +27,7 @@ public class MonitorExecutionService {
         var value=rs.getObject(column,LocalDateTime.class); return value==null?null:value.toInstant(ZoneOffset.UTC);
     }
     private MonitorExecution map(ResultSet rs,int row) throws SQLException {
-        return new MonitorExecution(rs.getString("execution_id"),rs.getString("rule_id"),rs.getInt("rule_version"),rs.getString("spec_hash"),
+        return new MonitorExecution(rs.getString("execution_id"),rs.getString("rule_id"),rs.getInt("rule_version"),
                 time(rs,"scheduled_at"),time(rs,"deadline_at"),MonitorExecution.State.valueOf(rs.getString("status")),rs.getInt("attempt_count"),
                 rs.getLong("lease_token"),time(rs,"lease_until"),json.read(rs.getString("checkpoint_json")),
                 rs.getString("result"),rs.getString("last_error"),time(rs,"started_at"),time(rs,"finished_at"));
@@ -57,9 +57,9 @@ public class MonitorExecutionService {
                 boolean expired=!now.isBefore(deadline);
                 String state=!completed.isEmpty()?"DONE":expired?"FAILED":"PENDING";
                 jdbc.update("""
-                        INSERT INTO monitor_execution (execution_id,rule_id,rule_version,spec_hash,scheduled_at,deadline_at,status,result,last_error,finished_at,created_at,updated_at)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE execution_id=execution_id
-                        """,UUID.randomUUID().toString(),ruleId,version.version(),version.specHash(),utc(slot),utc(deadline),state,
+                        INSERT INTO monitor_execution (execution_id,rule_id,rule_version,scheduled_at,deadline_at,status,result,last_error,finished_at,created_at,updated_at)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE execution_id=execution_id
+                        """,UUID.randomUUID().toString(),ruleId,version.version(),utc(slot),utc(deadline),state,
                         completed.isEmpty()?null:completed.get(0),completed.isEmpty() && expired?"EXECUTION_EXPIRED":null,
                         !"PENDING".equals(state)?utc(now):null,utc(now),utc(now));
                 if(completed.isEmpty() && expired) breakHits(ruleId,slot);
@@ -95,7 +95,6 @@ public class MonitorExecutionService {
             if(execution.status()==RUNNING && execution.leaseUntil()!=null && execution.leaseUntil().isAfter(now)) return null;
             if(execution.attemptCount()>=config.getMaxExecutionAttempts()) { finish(execution,"FAILED","ATTEMPTS_EXHAUSTED",now); return null; }
             var version=rules.version(rule.ruleId(),execution.ruleVersion());
-            if(!execution.specHash().equals(version.specHash())) { finish(execution,"CANCELLED","DEFINITION_CHANGED",now); return null; }
             long token=execution.leaseToken()+1;
             Instant lease=now.plusSeconds(config.getWorkTimeoutSeconds());
             if(lease.isAfter(execution.deadlineAt())) lease=execution.deadlineAt();

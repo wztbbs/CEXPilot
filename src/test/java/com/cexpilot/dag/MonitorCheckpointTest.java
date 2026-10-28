@@ -40,7 +40,7 @@ class MonitorCheckpointTest {
         String hash=MonitorJson.hash(definition.toString());
         var rule=new Rule("rule","owner","request","ACTIVE",1,current.get(),null,0,"ARMED",JSON.createArrayNode(),current.get(),current.get());
         var version=new Version("rule",1,"question",hash,"APPROVED",slot,slot,definition);
-        var execution=new MonitorExecution("execution","rule",1,hash,slot,slot.plusSeconds(300),MonitorExecution.State.RUNNING,attempt,attempt,
+        var execution=new MonitorExecution("execution","rule",1,slot,slot.plusSeconds(300),MonitorExecution.State.RUNNING,attempt,attempt,
                 current.get().plusSeconds(60),checkpoint,null,null,slot,null);
         return new MonitorWork("work-"+attempt,execution,new Claim(rule,version,slot),current.get());
     }
@@ -57,16 +57,47 @@ class MonitorCheckpointTest {
         });
         var providers=new MetricProviderRegistry(List.of(provider((q,c)->{ priceCalls.incrementAndGet(); return metricResult(q,c,12,true); }),oi));
         var saved=new AtomicReference<JsonNode>();
-        try(var runner=new Runner(new MonitorPlanRunner(compiler,catalog,tools,providers,clock))) {
+        try(var runner=new Runner(new MonitorPlanRunner(catalog,tools,providers,clock))) {
             assertThrows(MonitorWorkFailure.class,()->runner.value.run(work(definition,null,1),saved::set));
             assertTrue(saved.get().path("nodes").has("metric_0")); assertTrue(saved.get().path("nodes").has("c1"));
             assertFalse(saved.get().path("nodes").has("metric_1"));
             var check=runner.value.run(work(definition,saved.get(),2),saved::set);
             assertEquals(Result.MATCH,check.result()); assertEquals(2,check.evidence().path("reused_node_count").asInt());
             assertEquals(1,priceCalls.get()); assertEquals(2,oiCalls.get());
-            ((ObjectNode)saved.get()).put("specHash","wrong-version");
+            assertEquals(2,saved.get().path("schemaVersion").asInt());
+            assertFalse(saved.get().has("specHash")); assertFalse(saved.get().has("slot")); assertFalse(saved.get().has("catalogVersion"));
+            assertFalse(saved.get().at("/nodes/metric_0").has("signature"));
+            // 完整性与窗口是动态条件；即使固定节点id不变，也必须让旧下游计算一起失效。
+            for(String invalid:List.of("incomplete","wrong-window")) {
+                ObjectNode bad=saved.get().deepCopy();
+                if(invalid.equals("incomplete")) ((ObjectNode)bad.at("/nodes/metric_0/data/coverage")).put("range_complete",false);
+                else ((ObjectNode)bad.at("/nodes/metric_0/data/requested_range")).put("start_inclusive","2026-10-27 04:00:00");
+                ((ObjectNode)bad.at("/nodes/c1/data")).put("value",999);
+                var refreshed=runner.value.run(work(definition,bad,3),saved::set);
+                assertEquals(1,refreshed.evidence().path("reused_node_count").asInt(),"独立且有效的OI结果仍应复用");
+                assertNotEquals(new BigDecimal("999"),refreshed.evidence().at("/values/0/value").decimalValue());
+            }
+            assertEquals(3,priceCalls.get()); assertEquals(2,oiCalls.get());
+            ((ObjectNode)saved.get()).put("schemaVersion",1);
             var fresh=runner.value.run(work(definition,saved.get(),3),saved::set);
-            assertEquals(0,fresh.evidence().path("reused_node_count").asInt()); assertEquals(2,priceCalls.get());
+            assertEquals(0,fresh.evidence().path("reused_node_count").asInt()); assertEquals(4,priceCalls.get());
+        }
+    }
+    @Test void incompleteMetricAndItsDependentCalculationAreNotSavedButIndependentSuccessIsSaved() {
+        var p=plan(rolling("m1","price.change_pct"),rolling("m2","oi.change_pct"));
+        calculation(p,"c1","difference","{\"left\":\"{{m1.binance.value}}\",\"right\":1}");
+        var definition=compiler.compile(envelope(p,"{{c1.value}}","{{m2.binance.value}}"),"UTC");
+        var providers=new MetricProviderRegistry(List.of(provider((q,c)->metricResult(q,c,12,false)),
+                namedProvider(OiMetricProvider.NAME,OiMetric::valueOf,(q,c)->{
+                    var range=new com.cexpilot.time.TimeRange(slot.minusSeconds(3600),slot,ZoneOffset.UTC);
+                    var coverage=new com.cexpilot.market.series.SeriesCoverage(13,13,List.of(),List.of(),List.of(),false,false,null,slot.toEpochMilli(),false);
+                    return new MetricResult.SampledScalar(new MetricResult.SeriesMetadata(range,range,coverage,"5m",false,13),BigDecimal.TEN,range.startInclusive(),slot);
+                })));
+        var saved=new AtomicReference<JsonNode>();
+        try(var runner=new Runner(new MonitorPlanRunner(catalog,tools,providers,clock))) {
+            assertThrows(MonitorWorkFailure.class,()->runner.value.run(work(definition,null,1),saved::set));
+            assertNotNull(saved.get()); assertTrue(saved.get().path("nodes").has("metric_1"));
+            assertFalse(saved.get().path("nodes").has("metric_0")); assertFalse(saved.get().path("nodes").has("c1"));
         }
     }
     @Test void staleSnapshotInvalidatesDependentCalculationAndIsFetchedAgain() {
@@ -83,7 +114,7 @@ class MonitorCheckpointTest {
             if(priceCalls.incrementAndGet()==1) throw new IllegalStateException("transient"); return metricResult(q,c,12,true);
         })));
         var saved=new AtomicReference<JsonNode>();
-        try(var runner=new Runner(new MonitorPlanRunner(compiler,catalog,tools,providers,clock))) {
+        try(var runner=new Runner(new MonitorPlanRunner(catalog,tools,providers,clock))) {
             assertThrows(MonitorWorkFailure.class,()->runner.value.run(work(definition,null,1),saved::set));
             assertTrue(saved.get().path("nodes").has("c1"));
             current.set(slot.plusSeconds(80));
@@ -114,7 +145,7 @@ class MonitorCheckpointTest {
         jdbc.update("INSERT INTO monitor_rule_version (rule_id,version,rule_spec_json,spec_hash,status,created_at) VALUES ('rule',1,?,?,'APPROVED',?)",json.write(definition),hash,utc);
         var executions=new MonitorExecutionService(jdbc,repository,config,json,clock,new MonitorTriggerService());
         var pool=new MonitorExecutors();
-        try(var runner=new Runner(new MonitorPlanRunner(compiler,catalog,tools,providers,clock))) {
+        try(var runner=new Runner(new MonitorPlanRunner(catalog,tools,providers,clock))) {
             var worker=new MonitorWorker(runner.value);
             var manager=new MonitorWorkManager(executions,worker,pool,clock);
             assertEquals(1,executions.materialize("rule")); manager.dispatch();

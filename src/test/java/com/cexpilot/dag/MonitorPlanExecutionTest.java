@@ -32,13 +32,45 @@ class MonitorPlanExecutionTest {
         var description=definition.at("/rules/0/description").asText();
         assertTrue(description.contains("left=100"),description); assertTrue(description.contains("right=Binance"),description);
         assertEquals("percentage_point",definition.at("/rules/0/unit").asText());
+        assertEquals("5m",definition.at("/dag/nodes/0/args/interval").asText());
+        assertEquals("metric_0",definition.at("/dag/nodes/0/id").asText());
+        assertTrue(definition.at("/rules/0/resolvedValueRef").asText().contains("c1"));
+    }
+    @Test void storedPhysicalDagExecutesWithoutTheCandidateAndKeepsRollingTimeBoundToEachExecution() throws Exception {
+        var c=candidate(); calculation((ObjectNode)c.path("plan"),"c1","difference","{\"left\":\"{{m1.binance.value}}\",\"right\":1}");
+        ((ObjectNode)c.at("/monitor/conditions/0")).put("value_ref","{{c1.value}}");
+        ObjectNode definition=(ObjectNode)JSON.readTree(compiler.compile(c,"UTC").toString());
+        definition.remove("candidate"); // 确认运行不再解析候选计划，也不重新决定节点id或默认参数。
+        var nodes=(ArrayNode)definition.at("/dag/nodes"); var first=nodes.remove(0); nodes.add(first); // 拓扑恢复不依赖JSON排列。
+        var fixed=definition.path("dag").deepCopy(); var cutoffs=new java.util.ArrayList<Instant>();
+        try(Runner r=new Runner(new MonitorPlanRunner(catalog,tools,providers(provider((q,ctx)->{
+            assertEquals("5m",((TimeRangeQuery)q).intervalCode()); assertEquals("CHANGE_PCT",q.binding().selector().name());
+            cutoffs.add(ctx.requestTime()); return metricResult(q,ctx,12,true);
+        }))))) {
+            assertEquals(Result.MATCH,r.value.run(definition,slot,slot.plusSeconds(20)).result());
+            assertEquals(Result.MATCH,r.value.run(definition,slot.plusSeconds(300),slot.plusSeconds(320)).result());
+        }
+        assertEquals(java.util.List.of(slot,slot.plusSeconds(300)),cutoffs); assertEquals(fixed,definition.path("dag"));
+    }
+    @Test void legacyOrUnknownDagFormatsAndIncompatibleCatalogAreRejectedBeforeMarketCalls() {
+        var definition=compiler.compile(candidate(),"UTC"); var calls=new java.util.concurrent.atomic.AtomicInteger();
+        try(Runner r=new Runner(new MonitorPlanRunner(catalog,tools,providers(provider((q,ctx)->{
+            calls.incrementAndGet(); return metricResult(q,ctx,12,true);
+        }))))) {
+            var legacy=definition.deepCopy(); legacy.remove("dag");
+            assertTrue(assertThrows(IllegalArgumentException.class,()->r.value.validateRunnable(legacy)).getMessage().contains("重新创建"));
+            var future=definition.deepCopy(); ((ObjectNode)future.path("dag")).put("schemaVersion",99);
+            assertThrows(IllegalArgumentException.class,()->r.value.validateRunnable(future));
+            definition.put("catalogVersion","old"); assertThrows(IllegalArgumentException.class,()->r.value.validateRunnable(definition));
+            assertEquals(0,calls.get());
+        }
     }
     @Test void andConditionsUseOneCompiledDagAndPreserveEvidenceWithDecimalCalculations() {
         var c=candidate();
         calculation((ObjectNode)c.path("plan"),"c1","difference","{\"left\":\"{{m1.binance.value}}\",\"right\":1}");
         ((ArrayNode)c.at("/monitor/conditions")).addObject().put("value_ref","{{c1.value}}").put("operator","GT").put("threshold",5);
         var definition=compiler.compile(c,"Asia/Shanghai");
-        try(Runner runner=new Runner(new MonitorPlanRunner(compiler,catalog,tools,providers(provider((q,ctx)->metricResult(q,ctx,12,true)))))) {
+        try(Runner runner=new Runner(new MonitorPlanRunner(catalog,tools,providers(provider((q,ctx)->metricResult(q,ctx,12,true)))))) {
             var result=runner.value.run(definition,slot,slot.plusSeconds(20));
             assertEquals(Result.MATCH,result.result(),result.evidence().toString());
             assertEquals(2,result.evidence().path("values").size()); assertEquals(2,result.evidence().path("facts").size());
@@ -48,11 +80,11 @@ class MonitorPlanExecutionTest {
     }
     @Test void missingPartialStaleDataIsUnknownInsteadOfNoMatch() {
         var definition=compiler.compile(candidate(),"UTC");
-        try(Runner r=new Runner(new MonitorPlanRunner(compiler,catalog,tools,providers(provider((q,ctx)->metricResult(q,ctx,11,false)))))) {
+        try(Runner r=new Runner(new MonitorPlanRunner(catalog,tools,providers(provider((q,ctx)->metricResult(q,ctx,11,false)))))) {
             var result=r.value.run(definition,slot,slot.plusSeconds(20));
             assertEquals(Result.UNKNOWN,result.result()); assertEquals("PLAN_DATA_UNAVAILABLE",result.errorCode());
         }
-        try(Runner r=new Runner(new MonitorPlanRunner(compiler,catalog,tools,providers()))) {
+        try(Runner r=new Runner(new MonitorPlanRunner(catalog,tools,providers()))) {
             assertEquals(Result.UNKNOWN,r.value.run(definition,slot,slot.plusSeconds(301)).result());
             definition.put("catalogVersion","old");
             assertThrows(IllegalArgumentException.class,()->r.value.validateRunnable(definition));
@@ -75,7 +107,7 @@ class MonitorPlanExecutionTest {
             return new MetricResult.SampledScalar(metadata,new java.math.BigDecimal("5"),range.startInclusive(),slot);
         });
         var providers=new MetricProviderRegistry(java.util.List.of(provider((q,ctx)->metricResult(q,ctx,12,true)),oiProvider));
-        try(Runner r=new Runner(new MonitorPlanRunner(compiler,catalog,tools,providers))) {
+        try(Runner r=new Runner(new MonitorPlanRunner(catalog,tools,providers))) {
             var check=r.value.run(definition,slot,slot.plusSeconds(20));
             assertEquals(Result.MATCH,check.result(),check.evidence().toString());
             assertEquals(slot.toString(),check.evidence().at("/facts/1/data/end_sample_at").asText());
@@ -90,7 +122,7 @@ class MonitorPlanExecutionTest {
         var observed=new java.util.concurrent.atomic.AtomicReference<>(slot.plusSeconds(30));
         var providers=new MetricProviderRegistry(java.util.List.of(namedProvider(OiMetricProvider.NAME,OiMetric::valueOf,(q,ctx)->
                 new MetricResult.Point(new MetricResult.SnapshotMetadata(observed.get(),ZoneOffset.UTC),java.math.BigDecimal.TEN))));
-        try(Runner r=new Runner(new MonitorPlanRunner(compiler,catalog,tools,providers,Clock.fixed(slot.plusSeconds(40),ZoneOffset.UTC)))) {
+        try(Runner r=new Runner(new MonitorPlanRunner(catalog,tools,providers,Clock.fixed(slot.plusSeconds(40),ZoneOffset.UTC)))) {
             assertEquals(Result.MATCH,r.value.run(definition,slot,slot.plusSeconds(20)).result());
             observed.set(slot.minusSeconds(301));
             assertEquals(Result.UNKNOWN,r.value.run(definition,slot,slot.plusSeconds(20)).result());
@@ -99,14 +131,14 @@ class MonitorPlanExecutionTest {
     @Test void explicitIncompatibleGrainCannotBeEnabled() {
         var c=candidate(); ((ObjectNode)c.at("/plan/metrics/0")).put("interval","15m");
         var definition=compiler.compile(c,"UTC");
-        try(Runner r=new Runner(new MonitorPlanRunner(compiler,catalog,tools,providers()))) {
+        try(Runner r=new Runner(new MonitorPlanRunner(catalog,tools,providers()))) {
             assertThrows(IllegalArgumentException.class,()->r.value.validateRunnable(definition));
         }
     }
     @Test void networkFailureIsReportedDuringExecutionRatherThanPlanValidation() {
         var definition=compiler.compile(candidate(),"UTC");
         var failing=providers(provider((q,ctx)->{ throw new IllegalStateException("network unavailable"); }));
-        try(Runner r=new Runner(new MonitorPlanRunner(compiler,catalog,tools,failing))) {
+        try(Runner r=new Runner(new MonitorPlanRunner(catalog,tools,failing))) {
             assertDoesNotThrow(()->r.value.validateRunnable(definition));
             var check=r.value.run(definition,slot,slot.plusSeconds(20));
             assertEquals(Result.UNKNOWN,check.result()); assertEquals("PLAN_DATA_UNAVAILABLE",check.errorCode());

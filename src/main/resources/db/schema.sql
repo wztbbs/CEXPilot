@@ -346,7 +346,6 @@ CREATE TABLE IF NOT EXISTS monitor_execution (
     execution_id VARCHAR(64) NOT NULL PRIMARY KEY,
     rule_id VARCHAR(64) NOT NULL,
     rule_version INT NOT NULL,
-    spec_hash CHAR(64) NOT NULL,
     scheduled_at DATETIME(6) NOT NULL,
     deadline_at DATETIME(6) NOT NULL,
     status VARCHAR(24) NOT NULL,
