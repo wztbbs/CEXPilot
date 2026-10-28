@@ -6,8 +6,15 @@
 <title>CEXPilot</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; }
+  html, body { height: 100%; overflow: hidden; }
   body {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    max-height: 100%;
     font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif;
     background: #f7f7f8;
     color: #1f1f1f;
@@ -18,6 +25,8 @@
   /* ── 初始态：输入框居中 ───────────────────── */
   #app {
     flex: 1;
+    min-height: 0;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
     max-width: 800px;
@@ -36,7 +45,9 @@
   #messages {
     display: none;
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
+    overscroll-behavior-y: contain;
     padding: 32px 0 24px;
   }
   #app.chatting #messages { display: block; }
@@ -84,7 +95,12 @@
   }
 
   /* ── 输入区 ─────────────────────────────── */
-  #input-area { padding: 12px 0 20px; }
+  #input-area {
+    flex: 0 0 auto;
+    padding: 12px 0 max(20px, env(safe-area-inset-bottom, 0px));
+    max-height: 65%;
+    overflow-y: auto;
+  }
   #app.empty #input-area { padding-bottom: 0; }
   #input-box {
     display: flex;
@@ -100,6 +116,7 @@
   #input-box:focus-within { border-color: #1f1f1f; }
   #question {
     flex: 1;
+    min-width: 0;
     border: none;
     outline: none;
     resize: none;
@@ -191,6 +208,48 @@
   var historyLoading = true;
   var contextConflict = false;
   var pending = false;
+  var followLatest = true;
+
+  // 用户离开底部阅读历史后，流式回复和异步卡片更新都不能抢回滚动位置。
+  messages.addEventListener('scroll', function () {
+    followLatest = messages.scrollHeight - messages.clientHeight - messages.scrollTop <= 48;
+  }, {passive:true});
+  messages.addEventListener('wheel', function (event) {
+    if (event.deltaY < 0) followLatest = false;
+  }, {passive:true});
+  var touchY = null;
+  messages.addEventListener('touchstart', function (event) {
+    touchY = event.touches.length ? event.touches[0].clientY : null;
+  }, {passive:true});
+  messages.addEventListener('touchmove', function (event) {
+    var y = event.touches.length ? event.touches[0].clientY : null;
+    if (touchY !== null && y !== null && y > touchY) followLatest = false;
+    touchY = y;
+  }, {passive:true});
+
+  // 软键盘可能只缩小可视视口；同时跟随其偏移，保持输入框可见。
+  if (window.visualViewport) {
+    function syncViewport() {
+      var viewport = window.visualViewport;
+      // 缩放时保留浏览器原生的放大/平移行为。
+      document.body.style.height = viewport.scale === 1 ? viewport.height + 'px' : '';
+      document.body.style.top = viewport.scale === 1 ? viewport.offsetTop + 'px' : '';
+    }
+    window.visualViewport.addEventListener('resize', syncViewport);
+    window.visualViewport.addEventListener('scroll', syncViewport);
+    window.addEventListener('resize', syncViewport);
+    syncViewport();
+  }
+  if (window.ResizeObserver) {
+    var layoutObserver = new window.ResizeObserver(function () { scrollToBottom(); });
+    layoutObserver.observe(messages);
+    layoutObserver.observe(document.getElementById('input-area'));
+  }
+  if (window.MutationObserver) {
+    // Monitor确认卡片会在请求完成后异步刷新；仍跟随底部时一并跟随。
+    new window.MutationObserver(function () { scrollToBottom(); })
+      .observe(messages, {childList:true,subtree:true,characterData:true});
+  }
 
   // 执行进度框：请求期间显示在输入框上方，逐行追加阶段文案，结束后隐藏
   function showProgress() {
@@ -216,9 +275,9 @@
     sendBtn.disabled = pending || historyLoading || contextConflict || textarea.value.trim() === '';
   }
 
-  function scrollToBottom() {
-    messages.scrollTop = messages.scrollHeight;
-    window.scrollTo(0, document.body.scrollHeight);
+  function scrollToBottom(force) {
+    if (force) followLatest = true;
+    if (followLatest) messages.scrollTop = messages.scrollHeight;
   }
 
   function addMessage(role, text) {
@@ -247,6 +306,7 @@
     if (!question || pending || historyLoading || contextConflict) return;
 
     app.className = 'chatting';
+    followLatest = true; // 用户主动发送新问题时回到本轮回复。
     pending = true;
     textarea.value = '';
     autoResize();
@@ -254,6 +314,7 @@
 
     addMessage('user', question);
     var loadingEl = addLoading();
+    scrollToBottom(true);
     var answerDiv = null;
     var answerBubble = null;
     var terminalReceived = false;
@@ -351,7 +412,7 @@
       .finally(function () {
         pending = false;
         autoResize();
-        textarea.focus();
+        if (followLatest) textarea.focus({preventScroll:true});
       });
   }
 
@@ -439,7 +500,7 @@
   });
 
   loadHistory();
-  textarea.focus();
+  textarea.focus({preventScroll:true});
 })();
 </script>
 </body>
