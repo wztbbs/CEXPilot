@@ -20,7 +20,7 @@
 #   --match <pattern>  用 pgrep -f 找进程，例如 cexpilot / 'java -jar'
 #   --max-wait <秒>    最长等待，默认 480（够跨 1~2 个 5 分钟周期）
 #   --observe          只报告 RUNNING 时刻，不杀进程
-#   --grace <秒>       命中后倒计时几秒再杀，默认 2（留出 Ctrl-C 的机会）
+#   --grace <秒>       命中后等几秒再杀，默认 0。执行只持续约 0.5s，任何等待都会错过窗口
 set -u
 
 BASE="${BASE:-https://cex.hrscrm.net}"
@@ -30,9 +30,9 @@ RULE=""
 PID=""
 MATCH=""
 MAXWAIT=480
-POLL=0.2
+POLL=0.1
 OBSERVE=0
-GRACE=2
+GRACE=0
 
 usage() {
   sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
@@ -83,24 +83,28 @@ while :; do
     exit 4
   fi
 
-  case "$body" in
-    *'"status":"RUNNING"'*)
-      stamp=$(date -u +%H:%M:%SZ)
+  # 只看最新一条（列表按 scheduled_at DESC）：若历史遗留孤儿 RUNNING，用「任意一条 RUNNING」
+  # 判断会立刻误触发，把 kill 打在错误的时刻上。
+  newest=$(echo "$body" | grep -o '"status":"[A-Z]*"' | head -1 | sed 's/.*"status":"//;s/"$//')
+
+  if [ "$newest" = "RUNNING" ]; then
+      stamp=$(date -u +%H:%M:%S.%3NZ 2>/dev/null || date -u +%H:%M:%SZ)
       echo "[$stamp] 捕获 RUNNING"
       echo "$body" > /tmp/monitor_kill_snapshot.json
       echo "  快照已存 /tmp/monitor_kill_snapshot.json"
-      echo "$body" | grep -o '"scheduledAt":"[^"]*","deadlineAt":"[^"]*"[^}]*"status":"RUNNING"' | head -1
+      echo "$body" | grep -o '"scheduledAt":"[^"]*","deadlineAt":"[^"]*"' | head -1
       if [ "$OBSERVE" -eq 1 ]; then
         echo "  --observe 模式：不杀进程，退出"
         exit 0
       fi
-      echo "  ${GRACE}s 后 kill -9 $PID（Ctrl-C 可放弃）"
-      sleep "$GRACE"
-      kill -9 "$PID" && echo "  已发送 SIGKILL 到 $PID"
+      if [ "$GRACE" -gt 0 ]; then
+        echo "  ${GRACE}s 后 kill -9 $PID（Ctrl-C 可放弃）"
+        sleep "$GRACE"
+      fi
+      kill -9 "$PID" && echo "  [$(date -u +%H:%M:%S.%3NZ 2>/dev/null || date -u +%H:%M:%SZ)] 已发送 SIGKILL 到 $PID"
       echo "  现在请在 5 分钟内重启（slot 截止 = scheduledAt + 300s，超时该 slot 记 EXECUTION_EXPIRED）"
       exit 0
-      ;;
-  esac
+  fi
 
   now=$(date +%s)
   elapsed=$((now - start))
