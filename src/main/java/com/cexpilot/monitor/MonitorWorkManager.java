@@ -53,12 +53,12 @@ public class MonitorWorkManager {
                 try {
                     var result=worker.run(work,data->{
                         if(!executions.checkpoint(work,data)) {
-                            boolean timedOut=!clock.instant().isBefore(work.execution().attemptDeadline());
+                            boolean timedOut=!clock.instant().isBefore(work.execution().leaseUntil());
                             throw new MonitorWorkFailure(timedOut?"WORK_TIMEOUT":"EXECUTION_FENCED","检查点执行权已失效",timedOut);
                         }
                     });
                     if(!executions.complete(work,result)) {
-                        boolean timedOut=!clock.instant().isBefore(work.execution().attemptDeadline());
+                        boolean timedOut=!clock.instant().isBefore(work.execution().leaseUntil());
                         retry=executions.fail(work,new MonitorWorkFailure(timedOut?"WORK_TIMEOUT":"EXECUTION_FENCED","本次结果未提交",timedOut));
                     }
                 } catch(MonitorWorkFailure failure) { retry=executions.fail(work,failure); }
@@ -76,7 +76,7 @@ public class MonitorWorkManager {
         active.forEach((ruleId,ticket)->{
             synchronized(ticket) {
                 var work=ticket.work;
-                if(work!=null && !clock.instant().isBefore(work.execution().attemptDeadline())) {
+                if(work!=null && !clock.instant().isBefore(work.execution().leaseUntil())) {
                     executions.fail(work,new MonitorWorkFailure("WORK_TIMEOUT","执行超过本次尝试期限",true));
                     ticket.cancelled=true;
                     if(ticket.future!=null) ticket.future.cancel(true);

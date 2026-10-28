@@ -42,7 +42,7 @@ public class MonitorRepository {
         return new Rule(rs.getString("rule_id"), rs.getString("owner_id"), rs.getString("request_id"),
                 rs.getString("status"), (Integer) rs.getObject("active_version"), instant(rs,"next_check_at"),
                 instant(rs,"last_evaluated_slot"), rs.getInt("consecutive_hits"), rs.getString("trigger_state"),
-                json.read(rs.getString("hit_evidence_json")), instant(rs,"lease_until"), rs.getLong("lease_token"),
+                json.read(rs.getString("hit_evidence_json")),
                 instant(rs,"created_at"), instant(rs,"updated_at"),rs.getInt("pending_version"),rs.getString("source_conversation_id"),rs.getString("recipient"));
     }
     public Rule find(String owner, String id, boolean lock) {
@@ -60,13 +60,13 @@ public class MonitorRepository {
     }
     public void activate(String id, int version, Instant now) {
         jdbc.update("UPDATE monitor_rule_version SET status='APPROVED',approved_at=? WHERE rule_id=? AND version=?", utc(now), id, version);
-        jdbc.update("UPDATE monitor_rule SET status='ACTIVE',active_version=?,next_check_at=?,lease_token=lease_token+1,updated_at=? WHERE rule_id=?",
+        jdbc.update("UPDATE monitor_rule SET status='ACTIVE',active_version=?,next_check_at=?,updated_at=? WHERE rule_id=?",
                 version, utc(now), utc(now), id);
     }
     public void stop(String id, Instant now) {
-        jdbc.update("UPDATE monitor_rule SET status='DELETED',next_check_at=NULL,lease_until=NULL,lease_token=lease_token+1,consecutive_hits=0,hit_evidence_json=NULL,updated_at=? WHERE rule_id=?",
+        jdbc.update("UPDATE monitor_rule SET status='DELETED',next_check_at=NULL,consecutive_hits=0,hit_evidence_json=NULL,updated_at=? WHERE rule_id=?",
                 utc(now), id);
-        jdbc.update("UPDATE monitor_execution SET status='CANCELLED',lease_until=NULL,attempt_deadline=NULL,finished_at=?,updated_at=?,last_error='RULE_STOPPED' WHERE rule_id=? AND status IN ('PENDING','RUNNING')",utc(now),utc(now),id);
+        jdbc.update("UPDATE monitor_execution SET status='CANCELLED',lease_until=NULL,finished_at=?,updated_at=?,last_error='RULE_STOPPED' WHERE rule_id=? AND status IN ('PENDING','RUNNING')",utc(now),utc(now),id);
     }
     public JsonNode latestEvaluation(String id) {
         var rows = jdbc.query("SELECT * FROM monitor_evaluation WHERE rule_id=? ORDER BY scheduled_at DESC LIMIT 1", (rs,n) -> {
@@ -109,12 +109,12 @@ public class MonitorRepository {
                 ORDER BY next_check_at LIMIT 20
                 """, String.class, utc(now));
     }
+    /** 仅由ExecutionService在同一事务锁定Rule/Execution并验证执行权后调用。 */
     boolean commit(Claim claim, Check check, Instant started, MonitorTriggerService trigger) {
         return transaction(() -> {
             Rule r = find(claim.rule().ownerId(), claim.rule().ruleId(), true);
             Instant now = clock.instant();
             if (r == null || !"ACTIVE".equals(r.status()) || !r.activeVersion().equals(claim.version().version())
-                    || r.leaseToken()!=claim.rule().leaseToken() || r.leaseUntil()==null || !r.leaseUntil().isAfter(now)
                     || (r.lastEvaluatedSlot()!=null && !claim.slot().isAfter(r.lastEvaluatedSlot()))) return false;
             // 唯一检查记录先写入，同一事务里才能推进计数和创建业务事件。
             String evaluationId = UUID.randomUUID().toString();
@@ -144,7 +144,7 @@ public class MonitorRepository {
             }
             jdbc.update("""
                     UPDATE monitor_rule SET last_evaluated_slot=?,consecutive_hits=?,trigger_state=?,
-                    hit_evidence_json=?,lease_until=NULL,updated_at=? WHERE rule_id=?
+                    hit_evidence_json=?,updated_at=? WHERE rule_id=?
                     """,utc(claim.slot()),next.trigger()?0:next.hits(),next.state(),json.write(next.trigger()?List.of():next.hitEvidence()),utc(now),r.ruleId());
             return true;
         });
@@ -204,7 +204,7 @@ public class MonitorRepository {
             int updated = jdbc.update("""
                     UPDATE notification_delivery SET status='SENDING',attempt_count=attempt_count+1,
                     lease_token=lease_token+1,lease_until=?,updated_at=? WHERE delivery_id=? AND status='PENDING' AND next_retry_at<=?
-                    """,utc(now.plusSeconds(config.getLeaseSeconds())),utc(now),id,utc(now));
+                    """,utc(now.plusSeconds(config.getDeliveryLeaseSeconds())),utc(now),id,utc(now));
             if (updated==0) return null;
             return jdbc.queryForObject("""
                     SELECT d.*,e.evidence_snapshot FROM notification_delivery d JOIN monitor_event e ON e.event_id=d.event_id

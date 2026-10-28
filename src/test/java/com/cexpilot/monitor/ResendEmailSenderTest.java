@@ -37,11 +37,32 @@ class ResendEmailSenderTest {
         sender=new EmailNotificationSender(config,f.config,f.clock,sdk);
     }
     @AfterEach void close() { server.stop(0); f.close(); }
-    Delivery delivery() {
-        String id=f.active(1).rule().ruleId(); f.evaluate(id,Result.MATCH);
+    Delivery delivery() { return delivery("pilot@example.com"); }
+    Delivery delivery(String recipient) {
+        String id=f.active(1).rule().ruleId();
+        f.jdbc.update("UPDATE monitor_rule SET recipient=? WHERE rule_id=?",recipient,id);
+        f.evaluate(id,Result.MATCH);
         return f.repository.claimDelivery(f.repository.dueDeliveries().get(0));
     }
     void error(int code,String name) { responses.add(new Response(code,"{\"name\":\""+name+"\",\"message\":\"sensitive-provider-echo\"}")); }
+    @Test void defaultSmokeRecipientNeverCallsHttpEvenWithRealModeAndAnAvailableSdk() {
+        assertFalse(config.isDryRun()); assertTrue(sender.isAvailable());
+        var smoke=delivery("MONITOR-SMOKE@hrscrm.net"); var result=sender.send(smoke);
+        assertEquals("SENT",result.status()); assertEquals("dry-run:"+smoke.deliveryId(),result.messageId());
+        assertTrue(requests.isEmpty());
+        f.repository.finishDelivery(smoke,result.status(),result.messageId(),result.error());
+        assertTrue(f.repository.events(f.jdbc.queryForObject("SELECT rule_id FROM monitor_event WHERE event_id=?",String.class,smoke.eventId()))
+                .get(0).path("simulated").asBoolean());
+        assertEquals("SENT",sender.send(delivery()).status());
+        assertEquals(1,requests.size()); assertTrue(requests.get(0).body().contains("pilot@example.com"));
+    }
+    @Test void configuredSmokeRecipientSkipsHttpAndStillValidatesFrozenRequestAndExpiry() {
+        config.setDryRunRecipient("custom-smoke@example.com");
+        var smoke=delivery("custom-smoke@example.com"); assertEquals("SENT",sender.send(smoke).status());
+        ((ObjectNode)smoke.snapshot()).remove("resend_request");
+        assertEquals("UNKNOWN",sender.send(smoke).status());
+        f.clock.advance(23*3600); assertEquals("UNKNOWN",sender.send(smoke).status()); assertTrue(requests.isEmpty());
+    }
     @Test void sendsFrozenPayloadAndPersistsReturnedProviderId() throws Exception {
         var delivery=delivery(); f.config.setMailFrom("changed@example.com");
         var result=sender.send(delivery);

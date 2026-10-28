@@ -49,7 +49,7 @@ class MonitorExecutionServiceTest {
         var second=f.executions.claim(first.executionId());
         assertNotEquals(first.workId(),second.workId()); assertEquals(first.executionId(),second.executionId());
         assertEquals(first.slot(),second.slot()); assertEquals(first.version().version(),second.version().version());
-        assertEquals(checkpoint,second.execution().checkpoint()); assertTrue(second.rule().leaseToken()>first.rule().leaseToken());
+        assertEquals(checkpoint,second.execution().checkpoint()); assertTrue(second.execution().leaseToken()>first.execution().leaseToken());
         assertFalse(f.executions.checkpoint(first,f.mapper.createObjectNode().put("stale",true)));
         assertFalse(f.executions.fail(first,new MonitorWorkFailure("OLD","old",true)));
         assertFalse(f.executions.complete(first,f.check(Result.MATCH)));
@@ -62,6 +62,40 @@ class MonitorExecutionServiceTest {
         var next=restored.claim(first.executionId()); assertNotNull(next);
         assertEquals(2,next.execution().attemptCount()); assertEquals(1,next.execution().checkpoint().path("saved").asInt());
         assertFalse(f.executions.complete(first,f.check(Result.MATCH))); assertTrue(restored.complete(next,f.check(Result.MATCH)));
+    }
+    @Test void executionLeaseIsTheAttemptTimeoutAndNeverExceedsTheCycleDeadline() {
+        String id=active(); f.clock.advance(250); var work=f.claim(id);
+        assertEquals(work.execution().deadlineAt(),work.execution().leaseUntil());
+        assertEquals(30,Duration.between(f.clock.instant(),work.execution().leaseUntil()).toSeconds());
+        f.clock.advance(29); assertTrue(f.executions.checkpoint(work,f.mapper.createObjectNode().put("saved",true)));
+        f.clock.advance(1);
+        assertFalse(f.executions.checkpoint(work,f.mapper.createObjectNode()));
+        assertFalse(f.executions.complete(work,f.check(Result.MATCH)));
+        assertEquals(0,f.count("monitor_evaluation"));
+    }
+    @Test void aNewCycleDoesNotNeedARuleLeaseAndAnOldCycleCannotModifyItsResults() {
+        String id=f.active(2).rule().ruleId(); var old=f.claim(id);
+        assertEquals(f.clock.instant().plusSeconds(60),old.execution().leaseUntil());
+        f.clock.advance(300); var next=f.claim(id);
+        assertNotNull(next); assertNotEquals(old.executionId(),next.executionId());
+        assertEquals(old.execution().leaseToken(),next.execution().leaseToken(),"token只需在各自Execution内递增");
+        assertFalse(f.executions.checkpoint(old,f.mapper.createObjectNode().put("late",true)));
+        assertFalse(f.executions.complete(old,f.check(Result.MATCH)));
+        assertTrue(f.executions.complete(next,f.check(Result.MATCH)));
+        assertFalse(f.executions.fail(old,new MonitorWorkFailure("LATE","old work",true)));
+        assertEquals(1,f.detail(id).rule().consecutiveHits());
+        assertEquals(next.slot(),f.detail(id).rule().lastEvaluatedSlot());
+        assertEquals(DONE,f.executions.find(next.executionId()).status()); assertEquals(1,f.count("monitor_evaluation"));
+    }
+    @Test void aFutureCycleCannotBeClaimedBeforeItsPublicationTime() {
+        String id=active(); f.evaluate(id,Result.NO_MATCH); var old=first(id);
+        f.jdbc.update("""
+                INSERT INTO monitor_execution (execution_id,rule_id,rule_version,spec_hash,scheduled_at,deadline_at,status,created_at,updated_at)
+                VALUES ('future',?,1,?,?,?,'PENDING',?,?)
+                """,id,old.specHash(),MonitorRepository.utc(old.scheduledAt().plusSeconds(300)),MonitorRepository.utc(old.deadlineAt().plusSeconds(300)),
+                MonitorRepository.utc(f.clock.instant()),MonitorRepository.utc(f.clock.instant()));
+        f.clock.advance(280); assertNull(f.executions.claim("future"));
+        f.clock.advance(20); assertNotNull(f.executions.claim("future"));
     }
     @Test void exhaustedPermanentAndExpiredFailuresDoNotCreateAlertOrClearAnotherOwnersLease() {
         String id=active(); var work=f.claim(id);

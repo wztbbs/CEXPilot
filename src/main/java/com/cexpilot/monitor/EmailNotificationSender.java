@@ -49,8 +49,9 @@ public class EmailNotificationSender {
                 || !delivery.recipient().equals(request.at("/to/0").asText()) || !request.path("subject").isTextual() || !request.path("text").isTextual()
                 || !delivery.eventId().equals(request.at("/headers/X-CEXPilot-Event").asText()))
             return new Outcome("UNKNOWN",null,"缺少一致的冻结邮件请求，未发送",true);
-        if(config.isDryRun()) {
-            log.info("邮件模拟发送成功 deliveryId={} eventId={} mode=DRY_RUN，不发送真实邮件",delivery.deliveryId(),delivery.eventId());
+        if(config.isDryRun() || config.isDryRunRecipient(delivery.recipient())) {
+            log.info("邮件模拟发送成功 deliveryId={} eventId={} mode={}，不发送真实邮件",delivery.deliveryId(),delivery.eventId(),
+                    config.isDryRun()?"DRY_RUN":"RECIPIENT_DRY_RUN");
             return new Outcome("SENT","dry-run:"+delivery.deliveryId(),null);
         }
         var params=CreateEmailOptions.builder().from(request.path("from").asText()).to(delivery.recipient())

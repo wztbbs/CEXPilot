@@ -29,7 +29,7 @@ public class MonitorExecutionService {
     private MonitorExecution map(ResultSet rs,int row) throws SQLException {
         return new MonitorExecution(rs.getString("execution_id"),rs.getString("rule_id"),rs.getInt("rule_version"),rs.getString("spec_hash"),
                 time(rs,"scheduled_at"),time(rs,"deadline_at"),MonitorExecution.State.valueOf(rs.getString("status")),rs.getInt("attempt_count"),
-                rs.getLong("lease_token"),time(rs,"lease_until"),time(rs,"attempt_deadline"),json.read(rs.getString("checkpoint_json")),
+                rs.getLong("lease_token"),time(rs,"lease_until"),json.read(rs.getString("checkpoint_json")),
                 rs.getString("result"),rs.getString("last_error"),time(rs,"started_at"),time(rs,"finished_at"));
     }
     public MonitorExecution find(String id) { return find(id,false); }
@@ -73,7 +73,7 @@ public class MonitorExecutionService {
         var now=utc(clock.instant());
         return jdbc.queryForList("""
                 SELECT e.execution_id FROM monitor_execution e JOIN monitor_rule r ON r.rule_id=e.rule_id
-                WHERE e.status='PENDING' OR (e.status='RUNNING' AND (e.lease_until<=? OR e.attempt_deadline<=?))
+                WHERE e.status='PENDING' OR (e.status='RUNNING' AND (e.lease_until IS NULL OR e.lease_until<=? OR e.deadline_at<=?))
                 ORDER BY e.scheduled_at LIMIT 100
                 """,String.class,now,now);
     }
@@ -85,28 +85,24 @@ public class MonitorExecutionService {
             var committed=jdbc.queryForList("SELECT result FROM monitor_evaluation WHERE rule_id=? AND rule_version=? AND scheduled_at=?",String.class,
                     execution.ruleId(),execution.ruleVersion(),utc(execution.scheduledAt()));
             if(!committed.isEmpty()) {
-                jdbc.update("UPDATE monitor_execution SET status='DONE',result=?,lease_until=NULL,attempt_deadline=NULL,finished_at=?,updated_at=? WHERE execution_id=?",
+                jdbc.update("UPDATE monitor_execution SET status='DONE',result=?,lease_until=NULL,finished_at=?,updated_at=? WHERE execution_id=?",
                         committed.get(0),utc(now),utc(now),execution.executionId());
-                release(rule,execution.leaseToken(),now); return null;
+                return null;
             }
-            if(!current(rule,execution)) { finish(execution,"CANCELLED","RULE_OR_VERSION_CHANGED",now); release(rule,execution.leaseToken(),now); return null; }
-            if(!now.isBefore(execution.deadlineAt())) { finish(execution,"FAILED","EXECUTION_EXPIRED",now); release(rule,execution.leaseToken(),now); return null; }
-            if(execution.status()==RUNNING && execution.leaseUntil().isAfter(now) && execution.attemptDeadline().isAfter(now)) return null;
-            if(execution.status()==RUNNING) release(rule,execution.leaseToken(),now);
+            if(!current(rule,execution)) { finish(execution,"CANCELLED","RULE_OR_VERSION_CHANGED",now); return null; }
+            if(!now.isBefore(execution.deadlineAt())) { finish(execution,"FAILED","EXECUTION_EXPIRED",now); return null; }
+            if(execution.scheduledAt().plusSeconds(config.getPublicationDelaySeconds()).isAfter(now)) return null;
+            if(execution.status()==RUNNING && execution.leaseUntil()!=null && execution.leaseUntil().isAfter(now)) return null;
             if(execution.attemptCount()>=config.getMaxExecutionAttempts()) { finish(execution,"FAILED","ATTEMPTS_EXHAUSTED",now); return null; }
-            rule=rules.findAny(rule.ruleId(),false);
-            if(rule.leaseUntil()!=null && rule.leaseUntil().isAfter(now)) return null; // 同一Rule只运行一个周期
             var version=rules.version(rule.ruleId(),execution.ruleVersion());
             if(!execution.specHash().equals(version.specHash())) { finish(execution,"CANCELLED","DEFINITION_CHANGED",now); return null; }
-            long token=rule.leaseToken()+1;
-            Instant lease=now.plusSeconds(config.getLeaseSeconds());
-            Instant attemptDeadline=now.plusSeconds(config.getWorkTimeoutSeconds());
-            if(attemptDeadline.isAfter(execution.deadlineAt())) attemptDeadline=execution.deadlineAt();
-            jdbc.update("UPDATE monitor_rule SET lease_token=?,lease_until=? WHERE rule_id=?",token,utc(lease),rule.ruleId());
+            long token=execution.leaseToken()+1;
+            Instant lease=now.plusSeconds(config.getWorkTimeoutSeconds());
+            if(lease.isAfter(execution.deadlineAt())) lease=execution.deadlineAt();
             jdbc.update("""
-                    UPDATE monitor_execution SET status='RUNNING',attempt_count=attempt_count+1,lease_token=?,lease_until=?,attempt_deadline=?,
+                    UPDATE monitor_execution SET status='RUNNING',attempt_count=attempt_count+1,lease_token=?,lease_until=?,
                     started_at=COALESCE(started_at,?),updated_at=? WHERE execution_id=?
-                    """,token,utc(lease),utc(attemptDeadline),utc(now),utc(now),id);
+                    """,token,utc(lease),utc(now),utc(now),id);
             return new MonitorWork(UUID.randomUUID().toString(),find(id,false),new Claim(rules.findAny(rule.ruleId(),false),version,execution.scheduledAt()),now);
         });
     }
@@ -124,7 +120,7 @@ public class MonitorExecutionService {
             if(!owns(rule,execution,work,true)) return false;
             if(!rules.commit(work.claim(),check,work.startedAt(),trigger)) return false;
             jdbc.update("""
-                    UPDATE monitor_execution SET status='DONE',result=?,last_error=?,lease_until=NULL,attempt_deadline=NULL,finished_at=?,updated_at=?
+                    UPDATE monitor_execution SET status='DONE',result=?,last_error=?,lease_until=NULL,finished_at=?,updated_at=?
                     WHERE execution_id=?
                     """,check.result().name(),check.errorCode(),utc(clock.instant()),utc(clock.instant()),execution.executionId());
             return true;
@@ -137,28 +133,25 @@ public class MonitorExecutionService {
             if(!owns(rule,execution,work,false)) return false;
             boolean retry=failure.retryable() && execution.attemptCount()<config.getMaxExecutionAttempts() && now.isBefore(execution.deadlineAt());
             String error=failure.code()+": "+String.valueOf(failure.getMessage()); if(error.length()>1000) error=error.substring(0,1000);
-            if(retry) jdbc.update("UPDATE monitor_execution SET status='PENDING',lease_until=NULL,attempt_deadline=NULL,last_error=?,updated_at=? WHERE execution_id=?",error,utc(now),execution.executionId());
+            if(retry) jdbc.update("UPDATE monitor_execution SET status='PENDING',lease_until=NULL,last_error=?,updated_at=? WHERE execution_id=?",error,utc(now),execution.executionId());
             else finish(execution,"FAILED",error,now);
-            release(rule,work.rule().leaseToken(),now); return retry;
+            return retry;
         });
     }
     private boolean owns(Rule rule,MonitorExecution execution,MonitorWork work,boolean live) {
-        if(execution==null || execution.status()!=RUNNING || execution.leaseToken()!=work.rule().leaseToken()
-                || !current(rule,execution) || rule.leaseToken()!=work.rule().leaseToken()) return false;
-        return !live || execution.leaseUntil().isAfter(clock.instant()) && execution.attemptDeadline().isAfter(clock.instant()) && execution.deadlineAt().isAfter(clock.instant());
+        if(execution==null || execution.status()!=RUNNING || execution.leaseToken()!=work.execution().leaseToken()
+                || !current(rule,execution)) return false;
+        return !live || execution.leaseUntil()!=null && execution.leaseUntil().isAfter(clock.instant()) && execution.deadlineAt().isAfter(clock.instant());
     }
     private boolean current(Rule rule,MonitorExecution execution) { return rule!=null && "ACTIVE".equals(rule.status()) && Objects.equals(rule.activeVersion(),execution.ruleVersion()); }
     private boolean terminal(MonitorExecution execution) { return execution.status()==DONE || execution.status()==FAILED || execution.status()==CANCELLED; }
     private void finish(MonitorExecution execution,String status,String error,Instant now) {
-        jdbc.update("UPDATE monitor_execution SET status=?,last_error=?,lease_until=NULL,attempt_deadline=NULL,finished_at=?,updated_at=? WHERE execution_id=?",status,error,utc(now),utc(now),execution.executionId());
+        jdbc.update("UPDATE monitor_execution SET status=?,last_error=?,lease_until=NULL,finished_at=?,updated_at=? WHERE execution_id=?",status,error,utc(now),utc(now),execution.executionId());
         if("FAILED".equals(status)) breakHits(execution.ruleId(),execution.scheduledAt());
     }
     private void breakHits(String ruleId,Instant slot) {
         // 执行失败打断连续命中，但不解除 WAITING_RESET；补记历史过期周期不能清掉更新周期的命中。
         jdbc.update("UPDATE monitor_rule SET consecutive_hits=0,hit_evidence_json=NULL WHERE rule_id=? AND (last_evaluated_slot IS NULL OR last_evaluated_slot<=?)",ruleId,utc(slot));
-    }
-    private void release(Rule rule,long token,Instant now) {
-        if(rule!=null) jdbc.update("UPDATE monitor_rule SET lease_until=NULL,lease_token=lease_token+1,updated_at=? WHERE rule_id=? AND lease_token=?",utc(now),rule.ruleId(),token);
     }
     public int cleanup() {
         return jdbc.update("DELETE FROM monitor_execution WHERE finished_at<? AND status IN ('DONE','FAILED','CANCELLED') LIMIT 1000",utc(clock.instant().minusSeconds(7*86400L)));

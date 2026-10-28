@@ -61,14 +61,14 @@ class MonitorHealthServiceTest {
         f.clock.advance(25*3600); scans();
         var report=service.inspect(1,id);
         assertEquals(0L,report.counts().get("executionsInWindow")); assertTrue(has(report,"EXECUTION_STALLED"));
-        f.jdbc.update("UPDATE monitor_execution SET status='RUNNING',lease_until=NULL,attempt_deadline=NULL");
+        f.jdbc.update("UPDATE monitor_execution SET status='RUNNING',lease_until=NULL");
         assertTrue(has(service.inspect(1,id),"EXECUTION_STALLED"));
     }
     @Test void ownershipUsesLiveLeaseAndAcceptsExpiredLeaseAwaitingTakeover() {
         String id=f.active(1).rule().ruleId(); f.claim(id);
         assertFalse(has(inspect(),"EXECUTION_OWNERSHIP_INVALID"));
-        f.jdbc.update("UPDATE monitor_rule SET lease_token=lease_token+1 WHERE rule_id=?",id);
-        assertTrue(has(inspect(),"EXECUTION_OWNERSHIP_INVALID")); assertTrue(has(inspect(),"RULE_LEASE_ORPHAN"));
+        f.jdbc.update("UPDATE monitor_rule SET active_version=2 WHERE rule_id=?",id);
+        assertTrue(has(inspect(),"EXECUTION_OWNERSHIP_INVALID"));
         f.clock.advance(400); scans(); assertFalse(has(inspect(),"EXECUTION_OWNERSHIP_INVALID"));
     }
     @Test void completedExecutionMustHaveConsistentEvaluation() {

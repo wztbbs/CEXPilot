@@ -55,7 +55,7 @@ class MonitorRepositoryTest {
         var old=f.claim(id); f.clock.advance(121);
         assertFalse(f.executions.complete(old,f.check(Result.MATCH)));
         var takeover=f.claim(id); assertNotNull(takeover);
-        assertTrue(takeover.rule().leaseToken()>old.rule().leaseToken());
+        assertTrue(takeover.execution().leaseToken()>old.execution().leaseToken());
         assertFalse(f.executions.complete(old,f.check(Result.MATCH)));
         f.stop(id);
         assertFalse(f.executions.complete(takeover,f.check(Result.MATCH)));

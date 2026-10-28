@@ -38,10 +38,10 @@ class MonitorCheckpointTest {
     }
     MonitorWork work(JsonNode definition,JsonNode checkpoint,int attempt) {
         String hash=MonitorJson.hash(definition.toString());
-        var rule=new Rule("rule","owner","request","ACTIVE",1,current.get(),null,0,"ARMED",JSON.createArrayNode(),current.get().plusSeconds(120),attempt,current.get(),current.get());
+        var rule=new Rule("rule","owner","request","ACTIVE",1,current.get(),null,0,"ARMED",JSON.createArrayNode(),current.get(),current.get());
         var version=new Version("rule",1,"question",hash,"APPROVED",slot,slot,definition);
         var execution=new MonitorExecution("execution","rule",1,hash,slot,slot.plusSeconds(300),MonitorExecution.State.RUNNING,attempt,attempt,
-                current.get().plusSeconds(120),current.get().plusSeconds(60),checkpoint,null,null,slot,null);
+                current.get().plusSeconds(60),checkpoint,null,null,slot,null);
         return new MonitorWork("work-"+attempt,execution,new Claim(rule,version,slot),current.get());
     }
     @Test void retryReusesCompletedMetricAndCalculationWhileFetchingOnlyFailedOi() {

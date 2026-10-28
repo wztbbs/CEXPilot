@@ -21,7 +21,7 @@ monitor:
   access-token: ${MONITOR_ACCESS_TOKEN:}
   mail-from: ${MONITOR_MAIL_FROM:support@hrscrm.net}
   publication-delay-seconds: 20
-  lease-seconds: 120
+  delivery-lease-seconds: 120
   max-delivery-attempts: 3
   max-execution-attempts: 3
   work-timeout-seconds: 60
@@ -35,6 +35,8 @@ resend:
   base-url: ${RESEND_BASE_URL:}
   # 显式开启才模拟成功；不调用Resend，投递ID带dry-run前缀。
   dry-run: ${RESEND_DRY_RUN:false}
+  # 命中该收件地址时单独模拟成功，即使全局dry-run=false也不调用Resend；留空关闭。
+  dry-run-recipient: ${RESEND_DRY_RUN_RECIPIENT:monitor-smoke@hrscrm.net}
 
 llm:
   normal:

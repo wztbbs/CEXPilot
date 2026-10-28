@@ -15,7 +15,7 @@ class MonitorConfigTest {
         config.setMailFrom("from@example.com"); assertDoesNotThrow(config::validate);
         config.setAccessToken("short"); assertThrows(IllegalArgumentException.class,config::validate);
         config.setAccessToken("01234567890123456789012345678901"); assertDoesNotThrow(config::validate);
-        config.setWorkTimeoutSeconds(config.getLeaseSeconds()); assertThrows(IllegalArgumentException.class,config::validate);
+        config.setWorkTimeoutSeconds(301); assertThrows(IllegalArgumentException.class,config::validate);
     }
     @Test void enabledMonitorAcceptsDeploymentConfiguredExchangeEndpoints() {
         new ApplicationContextRunner()

@@ -13,7 +13,7 @@ class MonitorTriggerServiceTest {
     Rule rule(int hits,String state,Instant lastSlot,boolean evidence) {
         var array=JsonNodeFactory.instance.arrayNode();
         if(evidence) array.addObject().put("slot",lastSlot.toString());
-        return new Rule("r","o","q","ACTIVE",1,SLOT,lastSlot,hits,state,array,null,0,SLOT,SLOT);
+        return new Rule("r","o","q","ACTIVE",1,SLOT,lastSlot,hits,state,array,SLOT,SLOT);
     }
     Check check(Result result) { return new Check(result,JsonNodeFactory.instance.objectNode().put("value","-3"),null); }
 

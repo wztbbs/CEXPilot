@@ -12,7 +12,7 @@ public class MonitorConfig {
     private String accessToken = "";
     private String mailFrom = "";
     private int publicationDelaySeconds = 20;
-    private int leaseSeconds = 120;
+    private int deliveryLeaseSeconds = 120;
     private int maxDeliveryAttempts = 3;
     private int maxExecutionAttempts = 3;
     private int workTimeoutSeconds = 60;
@@ -23,9 +23,9 @@ public class MonitorConfig {
         if (!MonitorEmailAddress.valid(mailFrom)) {
             throw new IllegalArgumentException("监控需配置有效 MONITOR_MAIL_FROM");
         }
-        if (publicationDelaySeconds < 1 || publicationDelaySeconds > 120 || leaseSeconds < 60
+        if (publicationDelaySeconds < 1 || publicationDelaySeconds > 120 || deliveryLeaseSeconds < 60
                 || maxDeliveryAttempts < 1 || maxDeliveryAttempts > 10
-                || maxExecutionAttempts < 1 || maxExecutionAttempts > 10 || workTimeoutSeconds < 1 || workTimeoutSeconds >= leaseSeconds) throw new IllegalArgumentException("monitor 时间/重试配置无效");
+                || maxExecutionAttempts < 1 || maxExecutionAttempts > 10 || workTimeoutSeconds < 1 || workTimeoutSeconds > 300) throw new IllegalArgumentException("monitor 时间/重试配置无效");
     }
 
     public int getMaxExecutionAttempts() { return maxExecutionAttempts; }
@@ -40,8 +40,8 @@ public class MonitorConfig {
     public void setMailFrom(String value) { mailFrom = value; }
     public int getPublicationDelaySeconds() { return publicationDelaySeconds; }
     public void setPublicationDelaySeconds(int value) { publicationDelaySeconds = value; }
-    public int getLeaseSeconds() { return leaseSeconds; }
-    public void setLeaseSeconds(int value) { leaseSeconds = value; }
+    public int getDeliveryLeaseSeconds() { return deliveryLeaseSeconds; }
+    public void setDeliveryLeaseSeconds(int value) { deliveryLeaseSeconds = value; }
     public int getMaxDeliveryAttempts() { return maxDeliveryAttempts; }
     public void setMaxDeliveryAttempts(int value) { maxDeliveryAttempts = value; }
 }

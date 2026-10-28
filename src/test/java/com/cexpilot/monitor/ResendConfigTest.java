@@ -11,10 +11,12 @@ class ResendConfigTest {
                 .withUserConfiguration(ResendConfig.class,MonitorConfig.class,EmailNotificationSender.class)
                 .withBean(java.time.Clock.class,java.time.Clock::systemUTC)
                 .withPropertyValues("resend.dry-run=true","resend.api-key=","resend.base-url=unused-invalid-url",
+                        "resend.dry-run-recipient=custom-smoke@example.com",
                         "monitor.mail-from=test@example.com")
                 .run(context->{
                     assertNull(context.getStartupFailure());
                     assertTrue(context.getBean(ResendConfig.class).isDryRun());
+                    assertTrue(context.getBean(ResendConfig.class).isDryRunRecipient("custom-smoke@example.com"));
                     assertTrue(context.getBean(EmailNotificationSender.class).isAvailable());
                 });
     }
@@ -35,5 +37,22 @@ class ResendConfigTest {
         var config=new ResendConfig(); config.setApiKey("re_secret\nsecond_line");
         var error=assertThrows(IllegalArgumentException.class,config::validate);
         assertFalse(error.getMessage().contains("re_secret"));
+    }
+    @Test void smokeRecipientDefaultsToExactCaseInsensitiveAddressAndCanBeOverriddenOrDisabled() {
+        var config=new ResendConfig(); assertDoesNotThrow(config::validate);
+        assertEquals("monitor-smoke@hrscrm.net",config.getDryRunRecipient());
+        assertTrue(config.isDryRunRecipient(" MONITOR-SMOKE@HRSCRM.NET "));
+        assertFalse(config.isDryRunRecipient(null)); assertFalse(config.isDryRunRecipient("other@hrscrm.net"));
+        assertFalse(config.isDryRunRecipient("monitor-smoke+tag@hrscrm.net"));
+        assertFalse(config.isDryRunRecipient("monitor-smoke@hrscrm.net.example.com"));
+        config.setDryRunRecipient(" custom-smoke@example.com "); assertDoesNotThrow(config::validate);
+        assertTrue(config.isDryRunRecipient("CUSTOM-SMOKE@example.com")); assertFalse(config.isDryRunRecipient("monitor-smoke@hrscrm.net"));
+        config.setDryRunRecipient(""); assertFalse(config.isDryRunRecipient("custom-smoke@example.com"));
+        config.setDryRunRecipient(null); assertDoesNotThrow(config::validate);
+    }
+    @Test void invalidSmokeRecipientConfigurationFailsWithoutEchoingTheAddress() {
+        var config=new ResendConfig(); config.setDryRunRecipient("private@example.com,other@example.com");
+        var error=assertThrows(IllegalArgumentException.class,config::validate);
+        assertTrue(error.getMessage().contains("RESEND_DRY_RUN_RECIPIENT")); assertFalse(error.getMessage().contains("private@example.com"));
     }
 }

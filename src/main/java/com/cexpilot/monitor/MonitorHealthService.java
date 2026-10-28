@@ -136,8 +136,8 @@ public class MonitorHealthService {
     }
     private Findings executionHealth(Scope s) {
         if(!monitor.isEnabled()) return findings();
-        var rows=sqlFindings("SELECT e.rule_id,e.execution_id,e.status,e.attempt_count FROM monitor_execution e WHERE ((e.status='PENDING' AND e.scheduled_at<?) OR (e.status='RUNNING' AND (e.lease_until IS NULL OR e.attempt_deadline IS NULL OR e.lease_until<? OR e.attempt_deadline<? OR e.deadline_at<?)) OR (e.status='FAILED' AND e.finished_at>=? AND e.finished_at<=?))"+filter(s,"e"),
-                args(s,utc(s.now.minusSeconds(config.getGraceSeconds()+monitor.getPublicationDelaySeconds())),utc(s.now.minusSeconds(config.getGraceSeconds())),utc(s.now.minusSeconds(config.getGraceSeconds())),utc(s.now.minusSeconds(config.getGraceSeconds())),utc(s.since),utc(s.now)),"status='FAILED'",row->{
+        var rows=sqlFindings("SELECT e.rule_id,e.execution_id,e.status,e.attempt_count FROM monitor_execution e WHERE ((e.status='PENDING' AND e.scheduled_at<?) OR (e.status='RUNNING' AND (e.lease_until IS NULL OR e.lease_until<? OR e.deadline_at<?)) OR (e.status='FAILED' AND e.finished_at>=? AND e.finished_at<=?))"+filter(s,"e"),
+                args(s,utc(s.now.minusSeconds(config.getGraceSeconds()+monitor.getPublicationDelaySeconds())),utc(s.now.minusSeconds(config.getGraceSeconds())),utc(s.now.minusSeconds(config.getGraceSeconds())),utc(s.since),utc(s.now)),"status='FAILED'",row->{
                     String status=str(row,"status");
                     return v(status.equals("FAILED")?"EXECUTION_FAILED":"EXECUTION_STALLED",status.equals("FAILED")?"WARN":"ERROR",str(row,"rule_id"),str(row,"execution_id"),"状态 "+status+"，尝试 "+number(row,"attempt_count")+" 次");
                 });
@@ -146,9 +146,8 @@ public class MonitorHealthService {
     private Findings ownership(Scope s) {
         var out=findings();
         out.merge(sqlFindings("SELECT r.rule_id FROM monitor_rule r LEFT JOIN monitor_rule_version v ON v.rule_id=r.rule_id AND v.version=r.active_version WHERE r.status='ACTIVE' AND (r.active_version IS NULL OR v.rule_id IS NULL OR v.status<>'APPROVED' OR v.approved_at IS NULL)"+filter(s,"r"),args(s),row->v("RULE_VERSION_INVALID","ERROR",str(row,"rule_id"),null,"启用版本不存在或未批准")));
-        out.merge(sqlFindings("SELECT e.rule_id,e.execution_id FROM monitor_execution e LEFT JOIN monitor_rule r ON r.rule_id=e.rule_id WHERE e.status='RUNNING' AND e.lease_until>? AND e.attempt_deadline>? AND e.deadline_at>? AND (r.rule_id IS NULL OR r.status<>'ACTIVE' OR r.active_version<>e.rule_version OR r.lease_token<>e.lease_token OR r.lease_until IS NULL OR r.lease_until<>e.lease_until)"+filter(s,"e"),args(s,utc(s.now),utc(s.now),utc(s.now)),row->v("EXECUTION_OWNERSHIP_INVALID","ERROR",str(row,"rule_id"),str(row,"execution_id"),"有效执行与任务占用或版本不一致")));
-        out.merge(sqlFindings("SELECT r.rule_id FROM monitor_rule r WHERE r.status='ACTIVE' AND r.lease_until>? AND NOT EXISTS (SELECT 1 FROM monitor_execution e WHERE e.rule_id=r.rule_id AND e.status='RUNNING' AND e.lease_token=r.lease_token)"+filter(s,"r"),args(s,utc(s.now)),row->v("RULE_LEASE_ORPHAN","ERROR",str(row,"rule_id"),null,"任务有有效租约，但没有对应执行者")));
-        out.merge(sqlFindings("SELECT e.rule_id FROM monitor_execution e WHERE e.status='RUNNING' AND e.lease_until>? AND e.attempt_deadline>? AND e.deadline_at>?"+filter(s,"e")+" GROUP BY e.rule_id HAVING COUNT(*)>1",args(s,utc(s.now),utc(s.now),utc(s.now)),row->v("MULTIPLE_EXECUTION_OWNERS","ERROR",str(row,"rule_id"),null,"同一任务存在多个有效执行者")));
+        out.merge(sqlFindings("SELECT e.rule_id,e.execution_id FROM monitor_execution e LEFT JOIN monitor_rule r ON r.rule_id=e.rule_id WHERE e.status='RUNNING' AND e.lease_until>? AND e.deadline_at>? AND (r.rule_id IS NULL OR r.status<>'ACTIVE' OR r.active_version IS NULL OR r.active_version<>e.rule_version OR e.lease_token<=0 OR e.lease_until>e.deadline_at)"+filter(s,"e"),args(s,utc(s.now),utc(s.now)),row->v("EXECUTION_OWNERSHIP_INVALID","ERROR",str(row,"rule_id"),str(row,"execution_id"),"有效执行的任务状态、版本或执行租约不合法")));
+        out.merge(sqlFindings("SELECT e.rule_id FROM monitor_execution e WHERE e.status='RUNNING' AND e.lease_until>? AND e.deadline_at>?"+filter(s,"e")+" GROUP BY e.rule_id HAVING COUNT(*)>1",args(s,utc(s.now),utc(s.now)),row->v("MULTIPLE_EXECUTION_OWNERS","ERROR",str(row,"rule_id"),null,"同一任务存在多个有效执行者")));
         return out;
     }
     private Findings evaluations(Scope s) {
