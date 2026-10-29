@@ -55,6 +55,17 @@ class DagRuntimeTest {
         assertTrue(r.clarify().contains("币种"));
     }
 
+    @Test void emptyClarificationRepairExhaustionIsFailedWithoutFetchingOrAnswering() {
+        var llm = new Script("{\"in_domain\":true,\"needs_clarification\":true,\"clarify\":[],\"plan\":null}", "{\"clarify\":[]}");
+        var r = runtime(llm, registry(), provider((q,c) -> { throw new AssertionError("无效澄清不得取数"); }))
+                .execute("比较两所Funding", "", "t", e -> {});
+        assertEquals("FAILED", r.turnStatus());
+        assertEquals(2, r.plannerLlmCalls());
+        assertEquals(0, r.answerLlmCalls());
+        assertEquals(0, r.toolCallCount());
+        assertNull(r.agentPayload());
+    }
+
     @Test void groupedQueryCalculatesAndAnswerReceivesStandardFactsWithDirection() {
         var p=plan(metric("m1","trade.turnover","range_statistic","binance","okx"));
         calculation(p,"c1","relative_change","{\"current\":\"{{m1.binance.value}}\",\"baseline\":\"{{m1.okx.value}}\"}");

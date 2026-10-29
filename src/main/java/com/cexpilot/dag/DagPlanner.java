@@ -39,8 +39,6 @@ public class DagPlanner {
     private static final String TRACE_NAME = "dag_planner";
     /** 透传 reply 的长度上限：合法追问/边界话术都很短，超长基本是把推理过程倒进了 reply。 */
     private static final int REPLY_MAX_LENGTH = 100;
-    /** 模型举了澄清旗但没写 clarify/reply 文案时的兜底话术（不得编造具体歧义内容）。 */
-    private static final String CLARIFY_FALLBACK_TEXT = "这个问题我需要再确认一下，请补充说明您想查询的对象或条件。";
 
     private final LlmClient llm;
     private final LlmClient repairLlm;
@@ -179,6 +177,7 @@ public class DagPlanner {
         List<LlmUsage> usages = new ArrayList<>();
         String lastError = null;
         boolean bindingRetried = false;
+        boolean repairingClarification = false;
         // R4：首次绑定失败后，逐项保留历史输入的条件及计算用途；修复改名不影响约束。
         PinnedRequirements pinnedRequirements = new PinnedRequirements();
         int attempts = dagConfig.getPlannerMaxRetries() + 1;
@@ -197,8 +196,10 @@ public class DagPlanner {
                 promptTokens += response.promptTokens() == null ? 0 : response.promptTokens();
                 completionTokens += response.completionTokens() == null ? 0 : response.completionTokens();
 
-                PlanDecision decision = evaluateResponse(response.content(), maxToolCalls, traceId, sink,
-                        activeFrame, requestContext, evidenceContext, attempt, pinnedRequirements, taskIndex, currentTask, question);
+                PlanDecision decision = repairingClarification
+                        ? evaluateClarificationRepair(response.content(), traceId, sink).withScope(lastScope)
+                        : evaluateResponse(response.content(), maxToolCalls, traceId, sink,
+                                activeFrame, requestContext, evidenceContext, attempt, pinnedRequirements, taskIndex, currentTask, question);
                 if (decision.taskScope() != null) lastScope = decision.taskScope();
                 if (decision.error() == null) {
                     if (!pinnedRequirements.isEmpty() && decision.plan() != null
@@ -217,6 +218,23 @@ public class DagPlanner {
                     recordAttempt(traceId, sink, attempt, lastError, "SUCCEEDED",
                             decision.plan() == null ? "NOT_APPLICABLE" : "PASSED", result, null, decision.plan());
                     return decision.toOutcome(promptTokens, completionTokens, llmCalls, usages);
+                }
+                if (repairingClarification) {
+                    // 专项修复只有一次；即使配置允许更多 planner 重试，也不能循环补表单。
+                    recordAttempt(traceId, sink, attempt, lastError, "SUCCEEDED", "FAILED", "REPAIR_EXHAUSTED",
+                            decision.error(), null);
+                    lastError = decision.error();
+                    break;
+                }
+                if (decision.needsClarification()) {
+                    recordAttempt(traceId, sink, attempt, lastError, "SUCCEEDED", "FAILED",
+                            attempt == attempts ? "REPAIR_EXHAUSTED" : "REPAIR_REQUIRED", decision.error(), null);
+                    lastError = decision.error();
+                    if (attempt == attempts) break;
+                    repairingClarification = true;
+                    messages = clarificationRepairMessages(question, conversationContext, response.content(), lastError);
+                    responseFormat = clarificationRepairFormat(responseFormat);
+                    continue;
                 }
                 if (decision.bindingFailure()) {
                     // 绑定失败只修复一次；仍不行则澄清"原快照不可恢复"，禁止重查当前值冒充（F21）
@@ -308,6 +326,47 @@ public class DagPlanner {
         }
     }
 
+    private PlanDecision clarificationError(String traceId, TraceSink sink, String output, String error) {
+        sink.record(new TraceEvent(traceId, "CLARIFY_INVALID", TRACE_NAME, null, output,
+                null, null, null, null, null, error));
+        return new PlanDecision(true, null, null, error, true, null, false, null);
+    }
+
+    private PlanDecision evaluateClarificationRepair(String content, String traceId, TraceSink sink) {
+        try {
+            JsonNode parsed = LlmJson.parse(content);
+            List<ClarificationField> fields = ClarificationField.parse(parsed.path("clarify"));
+            if (fields.isEmpty()) throw new IllegalArgumentException("澄清表单修复仍未返回任何有效字段");
+            // 专项响应只接受字段列表；不能借修复文案改任务、执行计划或绕回取数。
+            recordPlanDropped(traceId, sink, parsed, "澄清表单修复不得携带执行计划，服务端已丢弃");
+            sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
+            return PlanDecision.clarification(fields);
+        } catch (Exception e) {
+            return clarificationError(traceId, sink, content, "澄清表单修复失败: " + e.getMessage());
+        }
+    }
+
+    private List<ChatMessage> clarificationRepairMessages(String question, String context, String output, String error) {
+        ObjectNode input = MAPPER.createObjectNode().put("question", question)
+                .put("conversation_context", context == null ? "" : context)
+                .put("invalid_output", output).put("validation_error", error);
+        return new ArrayList<>(List.of(ChatMessage.system(prompts.render("clarification_repair", Map.of(
+                "concepts", catalog.concepts(), "metrics", catalog.describeMetrics()))), ChatMessage.user(input.toString())));
+    }
+
+    private JsonNode clarificationRepairFormat(JsonNode original) {
+        if (original == null || !"json_schema".equals(original.path("type").asText())) return original;
+        ObjectNode format = MAPPER.createObjectNode().put("type", "json_schema");
+        ObjectNode contract = format.putObject("json_schema").put("name", "clarification_fields").put("strict", true);
+        ObjectNode schema = contract.putObject("schema").put("type", "object").put("additionalProperties", false);
+        schema.putArray("required").add("clarify");
+        ObjectNode fields = ((ObjectNode) original.at("/json_schema/schema/properties/clarify")).deepCopy();
+        fields.put("minItems", 1);
+        fields.put("description", "必须给出至少一个具体待补条件，不允许空数组");
+        schema.putObject("properties").set("clarify", fields);
+        return format;
+    }
+
     private PlanDecision evaluateResponse(String content, int maxToolCalls,
                                           String traceId, TraceSink sink,
                                           com.cexpilot.conversation.QueryFrame activeFrame,
@@ -362,22 +421,16 @@ public class DagPlanner {
                     return PlanDecision.clarification(fields).withScope(selected);
                 }
             } catch (IllegalArgumentException e) {
-                // 意图已明确，不为格式或文案再调用模型；保留原输出和错误供 trace 排查。
-                sink.record(new TraceEvent(traceId, "CLARIFY_FALLBACK", TRACE_NAME,
-                        parsed.toString(), null, null, null, null, null, null, e.getMessage()));
-                return PlanDecision.clarification(CLARIFY_FALLBACK_TEXT).withScope(selected);
+                return clarificationError(traceId, sink, parsed.toString(), e.getMessage()).withScope(selected);
             }
-            // 兼容历史字符串协议。有澄清旗但文案缺失时立即兜底，不再重试补文案。
+            // 兼容有文字的旧协议；空数组/缺字段是必要数据缺失，不能当成可选文案吞掉。
             String legacy = textOrNull(clarifyNode);
-            String text = legacy != null && !legacy.isBlank() ? legacy : reply;
-            if (text == null || text.isBlank()) {
-                sink.record(new TraceEvent(traceId, "CLARIFY_FALLBACK", TRACE_NAME,
-                        parsed.toString(), null, null, null, null, null, null, null));
-                text = CLARIFY_FALLBACK_TEXT;
-            } else {
+            if (legacy != null && !legacy.isBlank()) {
                 sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
+                return PlanDecision.clarification(legacy).withScope(selected);
             }
-            return PlanDecision.clarification(text).withScope(selected);
+            return clarificationError(traceId, sink, parsed.toString(),
+                    "needs_clarification=true 但 clarify 未提供任何有效字段；必须输出至少一个待补条件").withScope(selected);
         }
         JsonNode planNode = parsed.path("plan");
         if (!planNode.isObject()) {
@@ -702,7 +755,7 @@ public class DagPlanner {
 
     /** 不含每轮历史的有效规划提示词版本，包含指标目录（含绑定）、算子配置。 */
     public String promptVersion() {
-        return PromptStore.fingerprint(systemPrompt("") + catalog.version());
+        return PromptStore.fingerprint(systemPrompt("") + catalog.version() + prompts.version("clarification_repair"));
     }
 
     private void appendRepair(List<ChatMessage> messages, String badOutput, String error) {
