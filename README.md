@@ -1,8 +1,12 @@
-# CEXPilot
+# MarketPilot
 
-CEXPilot 是面向加密货币行情查询的 AI Copilot。用户用自然语言描述查询对象、时间和计算需求；Planner 生成指标逻辑计划，Java 编译并执行有界 DAG，回答模型根据本轮事实组织答案。取数、时间消解、完整性检查和数值计算由代码完成。
+MarketPilot 是面向加密货币行情查询的 AI Copilot。用户用自然语言描述查询对象、时间和计算需求；Planner 生成指标逻辑计划，Java 编译并执行有界 DAG，回答模型根据本轮事实组织答案。取数、时间消解、完整性检查和数值计算由代码完成。
+
+项目仓库：[wztbbs/MarketPilot](https://github.com/wztbbs/MarketPilot)。
 
 本文及 `docs/` 描述当前工作树的实现。`importants/` 保存文章、设计过程和实验产物；其中的历史计划、能力表和示例不作为当前接口契约。
+
+项目更名后，现有 Java 包名 `com.cexpilot`、Maven artifactId `cexpilot`、数据库名、环境变量和 Cookie 等技术标识继续沿用，文档中的命令及源码链接与当前实现保持一致。线上地址仍为 [cex.hrscrm.net](https://cex.hrscrm.net/)。
 
 ## 文档入口
 
@@ -76,6 +80,13 @@ flowchart TD
 指标事实统一包含身份、单位和来源；时间查询还包含覆盖状态。区间不完整时 Provider 可返回 `statistics_omitted` 而不返回 `value`，因此 `ok=true` 只表示执行成功。依赖失败或不完整数据的计算不会补算；独立分支可以继续返回结果。Answer 的提示词要求只引用已有指标和算子结果，不能自行补出差值、均值、年化等结论。
 
 ## 本地启动
+
+先克隆仓库并进入项目目录：
+
+```bash
+git clone git@github.com:wztbbs/MarketPilot.git
+cd MarketPilot
+```
 
 依赖：JDK 17、Maven、MySQL 8，以及可用的 OpenAI 兼容模型服务。版本和依赖见 [pom.xml](pom.xml)，配置见 [application.yml](src/main/resources/application.yml)。公共行情查询不需要交易所账户 Key。
 

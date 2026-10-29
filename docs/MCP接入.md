@@ -1,6 +1,6 @@
 # 行情 MCP 接入：调用链、协议与生命周期
 
-本文面向维护 CEXPilot 的开发者，也用于从一次具体接入中理解 MCP。说明以当前工作树为准：Java 17、Spring Boot 3.3.5、MCP Java SDK 0.18.4；传输采用 Streamable HTTP，服务端目前只提供币安永续已结算资金费率历史工具。
+本文面向维护 MarketPilot 的开发者，也用于从一次具体接入中理解 MCP。说明以当前工作树为准：Java 17、Spring Boot 3.3.5、MCP Java SDK 0.18.4；传输采用 Streamable HTTP，服务端目前只提供币安永续已结算资金费率历史工具。
 
 **本次接入的核心：把已有的资金费率单页取数能力，通过标准 MCP 协议交给另一个进程调用。规划、时间消解、分页组织和确定性计算仍由主应用负责。**
 
@@ -21,7 +21,7 @@
 
 | 角色 | 当前实现 | 职责 |
 | --- | --- | --- |
-| Host | CEXPilot 主应用 | 接收请求，维护对话，调用模型，编译与执行计划，组织答案 |
+| Host | MarketPilot 主应用 | 接收请求，维护对话，调用模型，编译与执行计划，组织答案 |
 | MCP Client | 主应用内的 FundingMcpClient，内部持有 SDK 的 McpSyncClient | 连接指定 Server，完成协议初始化、远程工具调用和响应解析 |
 | MCP Server | 独立启动的 FundingMcpServerApplication | 注册工具描述与执行器，通过 /mcp 接收消息，调用币安客户端 |
 | 上游数据源 | 交易所代理后的 Binance 公共行情接口 | 提供资金费率结算记录 |
@@ -51,7 +51,7 @@ Client 是 Host 内的一部分，不需要单独启动第三个进程。本项�
 
 当行情能力需要被不同应用消费时，标准工具协议有复用价值；独立进程也可以单独部署和排查。代价是增加协议适配、序列化、通信、会话管理和运维工作。
 
-**当前只有 CEXPilot 一个主要消费者时，进程内调用仍然更简单。** 本次实现验证标准能力暴露与消费的完整链路，不代表 MCP 能提高行情准确性、替代业务语义校验或自动改进 Planner。是否迁移更多指标，应由消费者和部署需求决定。
+**当前只有 MarketPilot 一个主要消费者时，进程内调用仍然更简单。** 本次实现验证标准能力暴露与消费的完整链路，不代表 MCP 能提高行情准确性、替代业务语义校验或自动改进 Planner。是否迁移更多指标，应由消费者和部署需求决定。
 
 ## 2. 一张图看清进程、调用层级和切换点
 
@@ -214,7 +214,7 @@ SDK 0.18.4 自动初始化钩子读取首页，当前 Server 只有一个工具�
 
 | 对象 | 本项目中的用途 | 需要区分的边界 |
 | --- | --- | --- |
-| /api/ask/stream | 向前端流式传送问答进度与答案 | CEXPilot 自己的业务 SSE 协议 |
+| /api/ask/stream | 向前端流式传送问答进度与答案 | MarketPilot 自己的业务 SSE 协议 |
 | /mcp 的 SSE | 承载 MCP 协议消息 | 使用 SSE 不等于采用旧式 HTTP+SSE MCP 传输 |
 | MCP 会话 | 管理 Client 与 Server 的协议交互 | 不保存用户的多轮问答历史 |
 
@@ -311,7 +311,7 @@ SDK：发现并缓存远端 outputSchema
   → 构造 List<FundingRatePoint>，完整业务 JSON 进入 Trace
 ```
 
-**Schema 描述与校验不等于自动理解业务。** 远端声明能告诉客户端 points 是数组，但不能决定它在 CEXPilot 中应该映射成什么领域类型；count 与数组长度、symbol 与本次请求等跨字段、跨请求约束也仍需业务代码检查。parsePoints() 因此保留为资金费率适配器，不作为所有 MCP 工具的通用解析器。
+**Schema 描述与校验不等于自动理解业务。** 远端声明能告诉客户端 points 是数组，但不能决定它在 MarketPilot 中应该映射成什么领域类型；count 与数组长度、symbol 与本次请求等跨字段、跨请求约束也仍需业务代码检查。parsePoints() 因此保留为资金费率适配器，不作为所有 MCP 工具的通用解析器。
 
 本次 Client 与 Server 的输出契约一起更新，部署时也应同时更新两侧。文本兼容块帮助旧消费者读取新 Server 的结果，不代表新 Client 支持缺少 structuredContent 的旧 Server。
 
@@ -704,7 +704,7 @@ mvn test -Dtest=FundingMcpClientTest,FundingMcpServerConfigTest,FundingMcpProtoc
 ### 12.1 建议先讲链路，再讲工程细节
 
 1. **动机与范围**：给已有行情能力增加 MCP 接口，验证跨应用消费；目前只迁移币安资金费率，保留 local 模式。
-2. **角色与链路**：CEXPilot 是 Host，内部 Client 调独立 Server；Planner 生成领域计划，Java 执行时选择 MCP 通道。
+2. **角色与链路**：MarketPilot 是 Host，内部 Client 调独立 Server；Planner 生成领域计划，Java 执行时选择 MCP 通道。
 3. **协议交互**：SDK 初始化协商后调用工具；通用客户端可以发现工具，主应用目前使用固定工具适配。
 4. **业务边界**：Server 只拉一页；分页、最近 N 期、样本语义和均值计算在主应用。
 5. **生命周期细节**：初始化成功才发布，失败由创建方清理；迟到失败按实例身份清理旧会话。
@@ -713,7 +713,7 @@ mvn test -Dtest=FundingMcpClientTest,FundingMcpServerConfigTest,FundingMcpProtoc
 
 ### 12.2 可以直接练习的一段表述
 
-> 我在 CEXPilot 中把币安资金费率单页查询封装成独立 MCP Server，并让主应用通过 MCP Client 消费。Server 通过工具定义发布 inputSchema、outputSchema，用 structuredContent 返回结构化结果，同时提供等价文本兼容块。Client 由 SDK 发现并缓存输出 Schema，先做结构校验，再由资金费率适配器检查请求与结果一致性、映射领域对象。Planner 和计算链路继续使用原来的指标计划，切换发生在 FundingRateSource，因此两种模式共用分页和样本处理逻辑。Client 初始化成功后才发布共享实例，初始化失败由创建方清理；单次调用失败保留共享 Client，避免关闭并发在途请求。Trace 通过节点级收集器回到主线程写入，超时后冻结。当前单体规模下本地调用更简单，这次实现验证的是标准契约、协议接入的边界与代价。
+> 我在 MarketPilot 中把币安资金费率单页查询封装成独立 MCP Server，并让主应用通过 MCP Client 消费。Server 通过工具定义发布 inputSchema、outputSchema，用 structuredContent 返回结构化结果，同时提供等价文本兼容块。Client 由 SDK 发现并缓存输出 Schema，先做结构校验，再由资金费率适配器检查请求与结果一致性、映射领域对象。Planner 和计算链路继续使用原来的指标计划，切换发生在 FundingRateSource，因此两种模式共用分页和样本处理逻辑。Client 初始化成功后才发布共享实例，初始化失败由创建方清理；单次调用失败保留共享 Client，避免关闭并发在途请求。Trace 通过节点级收集器回到主线程写入，超时后冻结。当前单体规模下本地调用更简单，这次实现验证的是标准契约、协议接入的边界与代价。
 
 这段话应与实际演示证据一起使用。不要补上尚未实现的“动态发现后自动注册 Planner”“所有行情都走 MCP”“完整分布式 Trace”或“已完成真实问答等价验证”。
 

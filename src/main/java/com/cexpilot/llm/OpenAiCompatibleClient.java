@@ -162,10 +162,12 @@ public class OpenAiCompatibleClient implements LlmClient {
         Integer cachedTokens = usage.path("prompt_tokens_details").path("cached_tokens").isInt()
                 ? usage.path("prompt_tokens_details").path("cached_tokens").asInt() : null;
 
-        log.info("LLM 响应 {}ms model={} content={} promptTokens={} completionTokens={} cachedTokens={}",
+        ChatResponse result = new ChatResponse(content, toolCalls, promptTokens, completionTokens, cachedTokens, null);
+        // 与 trace 使用同一序列化：完整保留正文和工具调用，换行转义，便于按行检索。
+        log.info("LLM 响应 {}ms model={} promptTokens={} completionTokens={} cachedTokens={} response={}",
                 System.currentTimeMillis() - start, config.getModel(),
-                abbreviate(content, 500), promptTokens, completionTokens, cachedTokens);
-        return new ChatResponse(content, toolCalls, promptTokens, completionTokens, cachedTokens, null);
+                promptTokens, completionTokens, cachedTokens, LlmTraceSerializer.responseToJson(result));
+        return result;
     }
 
     /**
@@ -245,11 +247,12 @@ public class OpenAiCompatibleClient implements LlmClient {
             throw new LlmException("LLM 流式调用失败: " + e.getMessage(), e);
         }
 
-        log.info("LLM 流式响应 {}ms model={} promptTokens={} completionTokens={} cachedTokens={} ttft={}ms",
+        ChatResponse result = new ChatResponse(content.toString(), List.of(), tokens[0], tokens[1], tokens[2],
+                ttftMs[0] < 0 ? null : ttftMs[0]);
+        log.info("LLM 流式响应 {}ms model={} promptTokens={} completionTokens={} cachedTokens={} ttft={}ms response={}",
                 System.currentTimeMillis() - start, config.getModel(), tokens[0], tokens[1], tokens[2],
-                ttftMs[0] < 0 ? null : ttftMs[0]);
-        return new ChatResponse(content.toString(), List.of(), tokens[0], tokens[1], tokens[2],
-                ttftMs[0] < 0 ? null : ttftMs[0]);
+                result.ttftMs(), LlmTraceSerializer.responseToJson(result));
+        return result;
     }
 
     @Override
