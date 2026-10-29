@@ -201,7 +201,8 @@ public class DagRuntime {
         // 没有获准执行的计划，就没有 Answer 调用；拒答也走同一个 SSE 返回路径。
         if (outcome.plan().isEmpty()) {
             String answer = outcome.lastError() != null
-                    ? "暂时无法可靠生成查询计划，本次未执行查询。请明确交易对和时间要求后重试。"
+                    ? outcome.reply() != null && !outcome.reply().isBlank() ? outcome.reply()
+                    : "暂时无法可靠生成查询计划，本次未执行查询。请明确交易对和时间要求后重试。"
                     : outcome.reply() != null && !outcome.reply().isBlank() ? outcome.reply()
                     : "当前没有能够可靠回答此问题的查询计划，暂时无法处理。";
             if (answerDelta != null) {

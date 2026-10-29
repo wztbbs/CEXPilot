@@ -38,6 +38,16 @@ class ClarificationFieldTest {
         assertThrows(IllegalArgumentException.class, () -> ClarificationField.parse(node));
     }
 
+    @Test void missingOptionsAndDuplicateKeysHaveSpecificErrors() throws Exception {
+        var noOptions = json.readTree("[{\"key\":\"comparison\",\"label\":\"比较方式\",\"type\":\"select\"}]");
+        var missing = assertThrows(IllegalArgumentException.class, () -> ClarificationField.parse(noOptions));
+        assertTrue(missing.getMessage().contains("comparison"));
+        assertTrue(missing.getMessage().contains("options"));
+        var duplicate = json.readTree("[{\"key\":\"comparison\",\"label\":\"比较方式\",\"type\":\"select\",\"options\":[\"一期\"]},{\"key\":\"comparison\",\"label\":\"比较方式\",\"type\":\"select\",\"options\":[\"一期\"]}]");
+        assertTrue(assertThrows(IllegalArgumentException.class, () -> ClarificationField.parse(duplicate))
+                .getMessage().contains("key 重复: comparison"));
+    }
+
     @Test void duplicateKeysAndOversizedListsAreRejected() throws Exception {
         var item = json.readTree("{\"key\":\"x\",\"label\":\"币种\",\"type\":\"text\"}");
         var list = json.createArrayNode().add(item).add(item);

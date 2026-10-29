@@ -64,6 +64,7 @@ class DagRuntimeTest {
         assertEquals(0, r.answerLlmCalls());
         assertEquals(0, r.toolCallCount());
         assertNull(r.agentPayload());
+        assertTrue(r.answer().contains("澄清表单生成失败"));
     }
 
     @Test void groupedQueryCalculatesAndAnswerReceivesStandardFactsWithDirection() {

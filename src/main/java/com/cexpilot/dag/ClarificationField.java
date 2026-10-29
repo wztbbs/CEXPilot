@@ -26,8 +26,9 @@ public record ClarificationField(String key, String label, String type, String p
         var keys = new HashSet<String>();
         for (JsonNode item : node) {
             String key = text(item, "key", 40, true);
-            if (!key.matches("[A-Za-z][A-Za-z0-9_]*") || !keys.add(key))
-                throw new IllegalArgumentException("澄清字段 key 不合法或重复");
+            if (!key.matches("[A-Za-z][A-Za-z0-9_]*"))
+                throw new IllegalArgumentException("澄清字段 key 不合法: " + key);
+            if (!keys.add(key)) throw new IllegalArgumentException("澄清字段 key 重复: " + key);
             String label = text(item, "label", 24, true);
             String type = text(item, "type", 10, true);
             if (!List.of("text", "number", "date", "select").contains(type))
@@ -42,8 +43,11 @@ public record ClarificationField(String key, String label, String type, String p
                     options.add(value.asText());
                 }
             }
-            if ("select".equals(type) != !options.isEmpty())
-                throw new IllegalArgumentException("选择框必须有选项，其他输入不带选项");
+            if ("select".equals(type) && options.isEmpty())
+                throw new IllegalArgumentException("澄清字段 " + key + "（" + label
+                        + "）的 select 缺少非空 options；必须提供具体选项，或改用 text 并说明填写内容");
+            if (!"select".equals(type) && !options.isEmpty())
+                throw new IllegalArgumentException("澄清字段 " + key + " 不是选择框，不能带选项");
             BigDecimal min = number(item, "min"), max = number(item, "max");
             if ((min != null || max != null) && !"number".equals(type)
                     || min != null && max != null && min.compareTo(max) > 0)

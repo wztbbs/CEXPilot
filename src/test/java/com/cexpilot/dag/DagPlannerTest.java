@@ -359,6 +359,37 @@ class DagPlannerTest {
         assertTrue(shadow.get(0).inputJson().contains("metric"));
     }
 
+    @Test void 选择框必须有选项的约束同时下发给首轮和修复轮() {
+        var invalid = "{\"in_domain\":true,\"needs_clarification\":true,\"plan\":null,\"clarify\":[{\"key\":\"basis\",\"label\":\"比较方式\",\"type\":\"select\"}]}";
+        var valid = "{\"clarify\":[{\"key\":\"comparison\",\"label\":\"比较方式\",\"type\":\"select\",\"options\":[\"最近一期已结算费率\",\"最近几期已结算费率的平均值\"]}]}";
+        var llm = new Script(invalid, valid);
+        var config = new DagConfig(); config.setPlannerResponseFormat("json_schema");
+        var events = new ArrayList<TraceEvent>();
+        var result = planner(llm, registry(), config).plan("两所Funding谁更高", "", "t", events::add);
+        assertTrue(result.needsClarification());
+        assertEquals(2, result.clarificationFields().get(0).options().size());
+        for (var event : events.stream().filter(e -> "LLM_CALL".equals(e.eventType())).toList()) {
+            var branches = json(event.inputJson()).at("/response_format/json_schema/schema/properties/clarify/items/anyOf");
+            assertEquals(3, branches.size());
+            var select = branches.get(2);
+            assertTrue(select.path("required").toString().contains("options"));
+            assertEquals(1, select.at("/properties/options/minItems").asInt());
+            assertEquals("array", select.at("/properties/options/type").asText());
+        }
+    }
+
+    @Test void 用户日志中的缺选项和重复字段导致明确失败而不是缓存问题() {
+        var initial = "{\"changes\":[],\"clarify\":[{\"key\":\"base\",\"label\":\"币种\",\"type\":\"text\"},{\"key\":\"basis\",\"label\":\"比较方式\",\"type\":\"select\"}],\"in_domain\":true,\"needs_clarification\":true,\"plan\":{\"calculations\":[],\"metrics\":[]},\"reply\":null,\"task_action\":\"NEW\"}";
+        var repair = "{\"clarify\":[{\"key\":\"base\",\"label\":\"币种\",\"type\":\"text\"},{\"key\":\"comparison\",\"label\":\"比较方式\",\"type\":\"select\"},{\"key\":\"comparison\",\"label\":\"比较方式\",\"type\":\"select\"}]}";
+        var llm = new Script(initial, repair);
+        var result = planner(llm, registry(), new DagConfig()).plan("两所Funding谁更高", "", "t", e -> {});
+        assertFalse(result.needsClarification());
+        assertTrue(result.clarificationFields().isEmpty());
+        assertNotNull(result.lastError());
+        assertTrue(result.reply().contains("澄清表单生成失败"));
+        assertEquals(2, llm.calls.size());
+    }
+
     @Test void 空澄清列表定向修复后返回表单且保留上下文() {
         String empty = "{\"clarify\":[],\"in_domain\":true,\"needs_clarification\":true,\"plan\":{\"calculations\":[],\"metrics\":[]},\"reply\":null,\"task_action\":\"CONTINUE\",\"task_ref\":null}";
         var llm = new Script(empty, "{\"clarify\":[{\"key\":\"base\",\"label\":\"币种\",\"type\":\"text\"}]}");

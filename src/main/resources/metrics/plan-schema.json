@@ -227,77 +227,193 @@
       "description": "待用户填写的必要条件；每项只问一个值，已知条件不重复问。无需澄清时为 []。",
       "maxItems": 8,
       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "key",
-          "label",
-          "type"
-        ],
-        "properties": {
-          "key": {
-            "type": "string",
-            "pattern": "^[A-Za-z][A-Za-z0-9_]{0,39}$"
-          },
-          "label": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 24,
-            "description": "简短中文标签，如币种、期数；不用内部术语"
-          },
-          "type": {
-            "type": "string",
-            "enum": [
-              "text",
-              "number",
-              "date",
-              "select"
-            ]
-          },
-          "placeholder": {
-            "type": [
-              "string",
-              "null"
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "key",
+              "label",
+              "type"
             ],
-            "minLength": 1,
-            "maxLength": 80
+            "properties": {
+              "key": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_]{0,39}$"
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 24,
+                "description": "简短中文标签，如币种、期数；不用内部术语"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "text",
+                  "date"
+                ]
+              },
+              "placeholder": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "hint": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "options": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "maxItems": 0,
+                "description": "非选择框不带选项"
+              },
+              "min": {
+                "type": "null"
+              },
+              "max": {
+                "type": "null"
+              }
+            }
           },
-          "hint": {
-            "type": [
-              "string",
-              "null"
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "key",
+              "label",
+              "type"
             ],
-            "minLength": 1,
-            "maxLength": 120
+            "properties": {
+              "key": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_]{0,39}$"
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 24,
+                "description": "简短中文标签，如币种、期数；不用内部术语"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "number"
+                ]
+              },
+              "placeholder": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "hint": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "options": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "maxItems": 0,
+                "description": "非选择框不带选项"
+              },
+              "min": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "max": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            }
           },
-          "options": {
-            "type": [
-              "array",
-              "null"
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "key",
+              "label",
+              "type",
+              "options"
             ],
-            "maxItems": 12,
-            "uniqueItems": true,
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 80
-            },
-            "description": "select 必填非空选项，其他类型省略"
-          },
-          "min": {
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "max": {
-            "type": [
-              "number",
-              "null"
-            ]
+            "properties": {
+              "key": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_]{0,39}$"
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 24,
+                "description": "简短中文标签，如币种、期数；不用内部术语"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "select"
+                ]
+              },
+              "placeholder": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "hint": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "options": {
+                "type": "array",
+                "maxItems": 12,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "description": "必须给出用户可以选择的具体选项",
+                "minItems": 1
+              },
+              "min": {
+                "type": "null"
+              },
+              "max": {
+                "type": "null"
+              }
+            }
           }
-        }
-      }
+        ]
+      },
+      "uniqueItems": true
     },
     "state_ref": {
       "type": [

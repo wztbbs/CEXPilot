@@ -34,6 +34,7 @@ import java.util.Set;
 @Component
 public class DagPlanner {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(DagPlanner.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final String PROMPT_NAME = "dag_planner";
     private static final String TRACE_NAME = "dag_planner";
@@ -178,6 +179,7 @@ public class DagPlanner {
         String lastError = null;
         boolean bindingRetried = false;
         boolean repairingClarification = false;
+        boolean clarificationFailed = false;
         // R4：首次绑定失败后，逐项保留历史输入的条件及计算用途；修复改名不影响约束。
         PinnedRequirements pinnedRequirements = new PinnedRequirements();
         int attempts = dagConfig.getPlannerMaxRetries() + 1;
@@ -227,6 +229,7 @@ public class DagPlanner {
                     break;
                 }
                 if (decision.needsClarification()) {
+                    clarificationFailed = true;
                     recordAttempt(traceId, sink, attempt, lastError, "SUCCEEDED", "FAILED",
                             attempt == attempts ? "REPAIR_EXHAUSTED" : "REPAIR_REQUIRED", decision.error(), null);
                     lastError = decision.error();
@@ -258,7 +261,9 @@ public class DagPlanner {
             throw new PlanningFailure(e, llmCalls, lastScope, usages);
         }
         // repair 耗尽：runtime 直接返回固定失败话术，禁止继续生成无事实答案。
-        return new PlanOutcome(true, null,
+        String failureReply = clarificationFailed
+                ? "澄清表单生成失败，本次未执行查询。请在输入框直接补充具体查询要求，或稍后重试。" : null;
+        return new PlanOutcome(true, failureReply,
                 Optional.empty(), promptTokens, completionTokens, lastError, false, null, llmCalls, lastScope, usages);
     }
 
@@ -327,6 +332,7 @@ public class DagPlanner {
     }
 
     private PlanDecision clarificationError(String traceId, TraceSink sink, String output, String error) {
+        log.warn("澄清表单校验失败 traceId={} error={}", traceId, error);
         sink.record(new TraceEvent(traceId, "CLARIFY_INVALID", TRACE_NAME, null, output,
                 null, null, null, null, null, error));
         return new PlanDecision(true, null, null, error, true, null, false, null);
