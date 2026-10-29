@@ -94,7 +94,8 @@ class RoutedAskServiceTest {
         payload.putArray("clarify").addObject().put("key","base").put("label","币种").put("type","text").put("reason","confirm").put("message","您填写了两个币种，请确认一个").put("value","BTC和ETH");
         var response=new AskResponse("c","trace","请补充币种",null,0,0,1,"turn",false,1,0,0,0,0,0,"query",payload,1);
         when(ask.ask(any(),any(),any(),any(),any(),any(),any())).thenAnswer(inv->{
-            assertEquals(java.util.Map.of("base","BTC和ETH"), inv.getArgument(6));
+            java.util.Map<String, com.fasterxml.jackson.databind.JsonNode> submitted = inv.getArgument(6);
+            assertEquals("BTC和ETH", submitted.get("base").asText());
             AskService.AskStreamListener listener=inv.getArgument(5);
             listener.onMeta("c","trace","turn"); listener.onDelta("请补充币种"); listener.onDone(response); return response;
         });
@@ -106,6 +107,32 @@ class RoutedAskServiceTest {
         assertTrue(body.contains("\"reason\":\"confirm\""));
         assertTrue(body.contains("您填写了两个币种，请确认一个"));
         assertTrue(body.contains("BTC和ETH"));
+    }
+
+    @Test void multiSelectArraysSurviveRequestSseAndHistory() throws Exception {
+        var ask=mock(AskService.class);
+        var payload=json.readTree("""
+                {"status":"NEEDS_CLARIFICATION","clarify":[{"key":"exchange","label":"交易所","type":"multiselect",
+                "reason":"confirm","message":"请选择两家交易所","options":["币安","OKX"],"minSelections":2,"maxSelections":2,"value":["币安","OKX"]}]}
+                """);
+        var response=new AskResponse("c","trace","请选择两家",null,0,0,1,"turn",false,1,0,0,0,0,0,"query",payload,1);
+        when(ask.ask(any(),any(),any(),any(),any(),any(),any())).thenAnswer(inv->{
+            java.util.Map<String, com.fasterxml.jackson.databind.JsonNode> submitted=inv.getArgument(6);
+            assertTrue(submitted.get("exchange").isArray());
+            assertEquals("OKX",submitted.get("exchange").get(1).asText());
+            AskService.AskStreamListener listener=inv.getArgument(5);listener.onDone(response);return response;
+        });
+        var mvc=MockMvcBuilders.standaloneSetup(new AskController(ask,new SyncTaskExecutor())).build();
+        var pending=mvc.perform(post("/api/ask/stream").contentType("application/json").content("""
+                {"question":"补充交易所","parentTurnId":"parent","clarificationAnswers":{"exchange":["币安","OKX"]}}
+                """)).andExpect(request().asyncStarted()).andReturn();
+        var body=mvc.perform(asyncDispatch(pending)).andExpect(status().isOk()).andReturn().getResponse()
+                .getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(body.contains("\"value\":[\"币安\",\"OKX\"]"));
+        var history=new ConversationController.QueryMessage("比较两所","请选择两家","trace",null,"turn","NEEDS_CLARIFICATION","query",payload);
+        var historyJson=json.readTree(json.writeValueAsString(history));
+        assertTrue(historyJson.at("/clarify/0/value").isArray());
+        assertEquals(2,historyJson.at("/clarify/0/minSelections").asInt());
     }
 
     @Test void sseDoneCarriesRouteAndPlanningPayload() throws Exception {

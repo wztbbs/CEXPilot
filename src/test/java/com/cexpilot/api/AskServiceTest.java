@@ -99,7 +99,7 @@ class AskServiceTest {
         when(runtime.execute(anyString(),anyString(),anyString(),any(),any(),any(),any(),any(),any(),any())).thenAnswer(inv -> {
             com.cexpilot.conversation.PlannerInput input = inv.getArgument(8);
             assertTrue(input.clarificationSubmission());
-            assertEquals("200",input.currentTask().clarificationAnswers().get(0).value());
+            assertEquals("200",input.currentTask().clarificationAnswers().get(0).value().asText());
             assertTrue(input.contextText().contains("count（期数）=200"));
             return new ExecutionResult("最多100期，您填写200",null,0,0,10,5,"NEEDS_CLARIFICATION","最多100期，您填写200")
                     .withTaskScope(com.cexpilot.conversation.TaskScope.current(input.currentTask())).withAgent("query",correction);
@@ -109,7 +109,7 @@ class AskServiceTest {
         var response = service.ask("conv-1","补充本轮查询条件：期数200","v1",null,"parent",null,java.util.Map.of("count","200"));
         assertEquals("invalid",response.clarify().get(0).reason());
         assertTrue(response.clarify().get(0).message().contains("最多100期"));
-        assertEquals("200",response.clarify().get(0).value());
+        assertEquals("200",response.clarify().get(0).value().asText());
     }
 
     @Test

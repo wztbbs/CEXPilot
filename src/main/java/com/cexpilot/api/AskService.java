@@ -118,7 +118,7 @@ public class AskService {
     }
 
     public AskResponse ask(String conversationId, String question, String visitorId, String timezone,
-                           String parentTurnId, AskStreamListener listener, java.util.Map<String, String> answers) {
+                           String parentTurnId, AskStreamListener listener, java.util.Map<String, ?> answers) {
         if (question == null || question.isBlank()) {
             throw new IllegalArgumentException("question 不能为空");
         }

@@ -12,19 +12,25 @@ import java.util.List;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ClarificationField(String key, String label, String type, String placeholder,
                                  String hint, List<String> options, BigDecimal min, BigDecimal max,
-                                 String reason, String message, String value) {
+                                 String reason, String message, JsonNode value,
+                                 Integer minSelections, Integer maxSelections) {
     public ClarificationField(String key, String label, String type, String placeholder, String hint,
             List<String> options, BigDecimal min, BigDecimal max) {
-        this(key, label, type, placeholder, hint, options, min, max, "missing", null, null);
+        this(key, label, type, placeholder, hint, options, min, max, "missing", null, null, null, null);
     }
 
-    public ClarificationField withValue(String previous) {
-        return new ClarificationField(key, label, type, placeholder, hint, options, min, max, reason, message, previous);
+    public ClarificationField withValue(JsonNode previous) {
+        return new ClarificationField(key, label, type, placeholder, hint, options, min, max, reason, message, previous, minSelections, maxSelections);
     }
 
     public ClarificationField {
+        value = parseValue(value);
         reason = reason == null ? "missing" : reason;
         options = options == null ? List.of() : List.copyOf(options);
+        if ("multiselect".equals(type)) {
+            minSelections = minSelections == null ? 1 : minSelections;
+            maxSelections = maxSelections == null ? options.size() : maxSelections;
+        }
         min = min == null ? null : min.stripTrailingZeros();
         max = max == null ? null : max.stripTrailingZeros();
     }
@@ -41,8 +47,8 @@ public record ClarificationField(String key, String label, String type, String p
                 throw new IllegalArgumentException("澄清字段 key 不合法: " + key);
             if (!keys.add(key)) throw new IllegalArgumentException("澄清字段 key 重复: " + key);
             String label = text(item, "label", 24, true);
-            String type = text(item, "type", 10, true);
-            if (!List.of("text", "number", "date", "select").contains(type))
+            String type = text(item, "type", 16, true);
+            if (!List.of("text", "number", "date", "select", "multiselect").contains(type))
                 throw new IllegalArgumentException("不支持的澄清输入类型");
             var options = new ArrayList<String>();
             JsonNode values = item.path("options");
@@ -54,10 +60,11 @@ public record ClarificationField(String key, String label, String type, String p
                     options.add(value.asText());
                 }
             }
-            if ("select".equals(type) && options.isEmpty())
+            boolean choice = "select".equals(type) || "multiselect".equals(type);
+            if (choice && options.isEmpty())
                 throw new IllegalArgumentException("澄清字段 " + key + "（" + label
-                        + "）的 select 缺少非空 options；必须提供具体选项，或改用 text 并说明填写内容");
-            if (!"select".equals(type) && !options.isEmpty())
+                        + "）的选择框缺少非空 options；必须提供具体选项，或改用 text 并说明填写内容");
+            if (!choice && !options.isEmpty())
                 throw new IllegalArgumentException("澄清字段 " + key + " 不是选择框，不能带选项");
             BigDecimal min = number(item, "min"), max = number(item, "max");
             if ((min != null || max != null) && !"number".equals(type)
@@ -68,14 +75,43 @@ public record ClarificationField(String key, String label, String type, String p
             if (!List.of("missing", "invalid", "confirm").contains(reason))
                 throw new IllegalArgumentException("不支持的澄清原因: " + reason);
             String message = text(item, "message", 200, !"missing".equals(reason));
-            JsonNode previous = item.path("value");
-            String value = previous.isMissingNode() || previous.isNull() ? null : previous.asText();
-            if (value != null && (!previous.isTextual() && !previous.isNumber() || value.length() > 200))
-                throw new IllegalArgumentException("澄清回显值必须是简短文字或数值");
+            JsonNode value = parseValue(item.path("value"));
+            Integer minSelections = selectionLimit(item, "minSelections"), maxSelections = selectionLimit(item, "maxSelections");
+            if (!"multiselect".equals(type) && (minSelections != null || maxSelections != null))
+                throw new IllegalArgumentException("只有多选框可指定选择数量");
+            if ("multiselect".equals(type)) {
+                int lower = minSelections == null ? 1 : minSelections;
+                int upper = maxSelections == null ? options.size() : maxSelections;
+                if (lower < 1 || upper < lower || upper > options.size())
+                    throw new IllegalArgumentException("多选数量必须在1到选项数之间，且下限不能大于上限");
+            }
             fields.add(new ClarificationField(key, label, type, text(item, "placeholder", 80, false),
-                    text(item, "hint", 120, false), options, min, max, reason, message, value));
+                    text(item, "hint", 120, false), options, min, max, reason, message, value, minSelections, maxSelections));
         }
         return List.copyOf(fields);
+    }
+
+    /** 原值可为一个值或字符串数组；回显可跨输入类型，不能丢掉用户此前的多选。 */
+    public static JsonNode parseValue(JsonNode value) {
+        if (value == null || value.isMissingNode() || value.isNull()) return null;
+        if (value.isTextual() || value.isNumber()) {
+            if (value.asText().length() > 200) throw new IllegalArgumentException("澄清回显值过长");
+            return com.fasterxml.jackson.databind.node.TextNode.valueOf(value.asText());
+        }
+        if (!value.isArray() || value.size() > 12) throw new IllegalArgumentException("澄清原值必须是文字、数值或字符串数组");
+        var seen = new HashSet<String>();
+        for (JsonNode item : value) {
+            if (!item.isTextual() || item.asText().isBlank() || item.asText().length() > 200 || !seen.add(item.asText()))
+                throw new IllegalArgumentException("多选原值必须是非空且不重复的文字");
+        }
+        return value.deepCopy();
+    }
+
+    private static Integer selectionLimit(JsonNode item, String key) {
+        JsonNode value = item.path(key);
+        if (value.isMissingNode() || value.isNull()) return null;
+        if (!value.isIntegralNumber() || !value.canConvertToInt()) throw new IllegalArgumentException("多选数量必须是整数");
+        return value.intValue();
     }
 
     private static String text(JsonNode item, String key, int max, boolean required) {

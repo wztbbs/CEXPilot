@@ -302,12 +302,26 @@
                 "description": "向用户说明需要填写、修改或确认什么；invalid/confirm 必须指出具体原因，不能只说请补充信息"
               },
               "value": {
-                "type": [
-                  "string",
-                  "number",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  },
+                  {
+                    "type": "array",
+                    "maxItems": 12,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    }
+                  }
                 ],
-                "description": "需修改或确认时回显用户已经提供的原值；不编造默认值"
+                "description": "用户此前原值：单值或字符串数组；不要默认替用户选择"
               }
             }
           },
@@ -390,12 +404,26 @@
                 "description": "向用户说明需要填写、修改或确认什么；invalid/confirm 必须指出具体原因，不能只说请补充信息"
               },
               "value": {
-                "type": [
-                  "string",
-                  "number",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  },
+                  {
+                    "type": "array",
+                    "maxItems": 12,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    }
+                  }
                 ],
-                "description": "需修改或确认时回显用户已经提供的原值；不编造默认值"
+                "description": "用户此前原值：单值或字符串数组；不要默认替用户选择"
               }
             }
           },
@@ -477,12 +505,141 @@
                 "description": "向用户说明需要填写、修改或确认什么；invalid/confirm 必须指出具体原因，不能只说请补充信息"
               },
               "value": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  },
+                  {
+                    "type": "array",
+                    "maxItems": 12,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    }
+                  }
+                ],
+                "description": "用户此前原值：单值或字符串数组；不要默认替用户选择"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "key",
+              "label",
+              "type",
+              "options",
+              "reason",
+              "message",
+              "minSelections",
+              "maxSelections"
+            ],
+            "properties": {
+              "key": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_]{0,39}$"
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 24,
+                "description": "简短中文标签，如币种、期数；不用内部术语"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "multiselect"
+                ]
+              },
+              "placeholder": {
                 "type": [
                   "string",
-                  "number",
                   "null"
                 ],
-                "description": "需修改或确认时回显用户已经提供的原值；不编造默认值"
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "hint": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "options": {
+                "type": "array",
+                "maxItems": 12,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "description": "可多选的具体选项；不得把需要选择两个对象的任务做成单选",
+                "minItems": 1
+              },
+              "min": {
+                "type": "null"
+              },
+              "max": {
+                "type": "null"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "missing",
+                  "invalid",
+                  "confirm"
+                ],
+                "description": "missing=尚未提供；invalid=值不合法；confirm=有歧义或需要用户确认"
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "description": "向用户说明需要填写、修改或确认什么；invalid/confirm 必须指出具体原因，不能只说请补充信息"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  },
+                  {
+                    "type": "array",
+                    "maxItems": 12,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    }
+                  }
+                ],
+                "description": "用户此前原值：单值或字符串数组；不要默认替用户选择"
+              },
+              "minSelections": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 12,
+                "description": "需要恰好选择N项时，minSelections与maxSelections均为N"
+              },
+              "maxSelections": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 12,
+                "description": "需要恰好选择N项时，minSelections与maxSelections均为N"
               }
             }
           }

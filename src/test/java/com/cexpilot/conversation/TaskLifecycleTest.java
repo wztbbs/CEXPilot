@@ -60,6 +60,18 @@ class TaskLifecycleTest {
         assertTrue(done.clarificationAnswers().isEmpty());
     }
 
+    @Test void 多选值随任务版本保存和更新且旧字符串快照仍可读取() throws Exception {
+        var pending=finish("两所Funding比较","NEEDS_CLARIFICATION",null,new TaskScope(TaskScope.Action.NEW,null),"请选择两家");
+        var values=JSON.readTree("[\"币安\",\"OKX\"]");
+        var supplied=pending.withClarificationAnswers(List.of(new ClarificationAnswer("exchange","交易所",values)));
+        var next=finish("币安和OKX","NEEDS_CLARIFICATION",null,TaskScope.current(supplied),"请补期数");
+        assertEquals(next,TaskState.fromJson(next.toJson()));
+        assertTrue(context.buildPlannerInput("c1").currentTask().clarificationAnswers().get(0).value().isArray());
+        var legacy=JSON.readTree(next.toJson());
+        ((com.fasterxml.jackson.databind.node.ObjectNode)legacy.at("/clarificationAnswers/0")).put("value","币安");
+        assertEquals("币安",TaskState.fromJson(legacy.toString()).clarificationAnswers().get(0).value().asText());
+    }
+
     @Test void 同一任务追问稳定ID并逐轮追加版本() {
         TaskState a = fresh("BTC 当前价", "BTC");
         TaskState b = finish("那 ETH 呢", "SUCCEEDED", plan("price.last", "ETH", "binance"), TaskScope.current(a), null);

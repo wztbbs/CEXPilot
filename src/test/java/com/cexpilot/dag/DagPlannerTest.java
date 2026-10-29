@@ -373,8 +373,8 @@ class DagPlannerTest {
                 priceHighFrame(), FOLLOWUP_CTX, null, List.of(), state, true);
         assertTrue(result.needsClarification());
         assertEquals(2, result.clarificationFields().size(), "同key纠错和确认项均必须保留");
-        assertEquals("200", result.clarificationFields().get(0).value());
-        assertEquals("BTC和ETH", result.clarificationFields().get(1).value());
+        assertEquals("200", result.clarificationFields().get(0).value().asText());
+        assertEquals("BTC和ETH", result.clarificationFields().get(1).value().asText());
         assertTrue(result.reply().contains("最多100期"));
         assertEquals(1, llm.calls.size());
     }
@@ -386,7 +386,7 @@ class DagPlannerTest {
                 "{\"clarify\":[{\"key\":\"count\",\"label\":\"期数\",\"type\":\"number\",\"reason\":\"invalid\",\"message\":\"期数最多100，请修改200\"}]}");
         var result = planner(llm, registry(), new DagConfig()).plan("200", "", "t", e -> {},
                 priceHighFrame(), FOLLOWUP_CTX, null, List.of(), state, true);
-        assertEquals("200", result.clarificationFields().get(0).value());
+        assertEquals("200", result.clarificationFields().get(0).value().asText());
         assertEquals("invalid", result.clarificationFields().get(0).reason());
         assertEquals(2, llm.calls.size());
     }
@@ -402,11 +402,17 @@ class DagPlannerTest {
         assertEquals(2, result.clarificationFields().get(0).options().size());
         for (var event : events.stream().filter(e -> "LLM_CALL".equals(e.eventType())).toList()) {
             var branches = json(event.inputJson()).at("/response_format/json_schema/schema/properties/clarify/items/anyOf");
-            assertEquals(3, branches.size());
+            assertEquals(4, branches.size());
             for (var branch : branches) {
                 assertTrue(branch.path("required").toString().contains("reason"));
                 assertTrue(branch.path("required").toString().contains("message"));
             }
+            var multi = branches.get(3);
+            assertEquals("multiselect", multi.at("/properties/type/enum/0").asText());
+            assertTrue(multi.path("required").toString().contains("options"));
+            assertTrue(multi.path("required").toString().contains("minSelections"));
+            assertTrue(multi.path("required").toString().contains("maxSelections"));
+            assertTrue(multi.path("properties").has("minSelections"));
             var select = branches.get(2);
             assertTrue(select.path("required").toString().contains("options"));
             assertEquals(1, select.at("/properties/options/minItems").asInt());

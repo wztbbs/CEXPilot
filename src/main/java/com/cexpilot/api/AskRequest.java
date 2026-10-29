@@ -7,7 +7,7 @@ package com.cexpilot.api;
  * @param parentTurnId   页面看到的最近完成轮次；不匹配时拒绝执行。空串表示没有历史，null 兼容旧客户端
  */
 public record AskRequest(String conversationId, String question, String timezone, String parentTurnId,
-                         java.util.Map<String, String> clarificationAnswers) {
+                         java.util.Map<String, com.fasterxml.jackson.databind.JsonNode> clarificationAnswers) {
     public AskRequest(String conversationId, String question, String timezone, String parentTurnId) {
         this(conversationId, question, timezone, parentTurnId, null);
     }

@@ -56,13 +56,30 @@ class ClarificationFieldTest {
                   "message":"您填写了两个币种，请选择本次比较的币种","value":"BTC和ETH","options":["BTC","ETH"]}]
                 """));
         assertEquals("invalid", fields.get(0).reason());
-        assertEquals("200", fields.get(0).value());
+        assertEquals("200", fields.get(0).value().asText());
         assertTrue(ClarificationField.question(fields).contains("您填写的是200"));
         assertEquals(fields, ClarificationField.parse(json.valueToTree(fields)));
         for (String reason : java.util.List.of("invalid", "confirm", "unknown")) {
             var node = json.readTree("[{\"key\":\"x\",\"label\":\"字段\",\"type\":\"text\",\"reason\":\"" + reason + "\"}]");
             assertThrows(IllegalArgumentException.class, () -> ClarificationField.parse(node));
         }
+    }
+
+    @Test void multiSelectBoundsAndPreviousSelectionsRoundTrip() throws Exception {
+        var fields=ClarificationField.parse(json.readTree("""
+                [{"key":"exchange","label":"交易所","type":"multiselect","options":["币安","OKX","第三家"],
+                  "reason":"confirm","message":"请选择两家","minSelections":2,"maxSelections":2,"value":["币安","OKX"]}]
+                """));
+        assertEquals(2,fields.get(0).minSelections());
+        assertEquals(2,fields.get(0).maxSelections());
+        assertTrue(fields.get(0).value().isArray());
+        assertEquals(fields,ClarificationField.parse(json.valueToTree(fields)));
+        for (String bounds : java.util.List.of("\"minSelections\":0", "\"minSelections\":3,\"maxSelections\":2", "\"maxSelections\":4", "\"minSelections\":1.5")) {
+            var node=json.readTree("[{\"key\":\"x\",\"label\":\"选择\",\"type\":\"multiselect\",\"options\":[\"A\",\"B\",\"C\"],"+bounds+"}]");
+            assertThrows(IllegalArgumentException.class,()->ClarificationField.parse(node));
+        }
+        var single=json.readTree("[{\"key\":\"x\",\"label\":\"选择\",\"type\":\"select\",\"options\":[\"A\",\"B\"],\"minSelections\":2}]");
+        assertThrows(IllegalArgumentException.class,()->ClarificationField.parse(single));
     }
 
     @Test void duplicateKeysAndOversizedListsAreRejected() throws Exception {

@@ -102,9 +102,9 @@
   - new_frame：仅兼容旧协议；优先输出 task_action。旧 new_frame=true 等价 NEW，否则等价 CONTINUE。
   - task_action 只选择任务，CONTINUE 不表示澄清或请求用户确认。
   - needs_clarification + clarify：指代不明、多个候选无法唯一确定、或缺少必要条件且上下文不能补齐时，必须 needs_clarification=true、plan=null、reply=null，clarify 输出非空字段列表。禁止只输出空计划而省略澄清决策。不得猜测币种、从示例借值或默认选择第一组候选。
-  - 每个 clarify 元素只收一个值：必填 key（唯一字母数字下划线）、label（简短中文，如“币种”“期数”）、type（text/number/date/select）、reason、message；可选 placeholder、hint、options、min、max、value。所有展示项均为必填条件。缺几项列几项，一次列齐当前可确定的必要缺口，最多8项；已明确且有效的条件不再问；值无效或有歧义时允许再次询问，但必须说明具体原因。
-  - label 尽量短，不向用户暴露 query_shape、TimeSpec、算子、字段路径等内部概念。placeholder 给填写示例；hint 仅解释该项含义。选择有限时 type=select 并必须给出非空字符串 options（缺少 options 的选择框是无效输出）；自由文本用 text、数值用 number、单个日期用 date。数值范围仅在 number 上填写，依据目录约束；不确定时省略。不要把多个条件塞进一个框，也不要凭空添加用户未要求的选项或必填条件。
-  - Funding 比较要明确币种及比较口径。已给出币安/OKX/永续时不再问交易所/市场；不默认BTC、不暗自选最近一期或N期平均。口径不明确时用“比较方式”选择目录支持的方式（如“最近一期已结算费率”“最近几期已结算费率的平均值”），选择平均后若期数仍未知再问“期数”。不把尚未接入的当前未结算/预测费率作为可查询选项；用户明确要求未接入口径时直接说明能力缺口，不能用澄清诱导改成别的口径。
+  - 每个 clarify 元素只收一个值：必填 key（唯一字母数字下划线）、label（简短中文，如“币种”“期数”）、type（text/number/date/select/multiselect）、reason、message；可选 placeholder、hint、options、min、max、value。所有展示项均为必填条件。缺几项列几项，一次列齐当前可确定的必要缺口，最多8项；已明确且有效的条件不再问；值无效或有歧义时允许再次询问，但必须说明具体原因。
+  - label 尽量短，不向用户暴露 query_shape、TimeSpec、算子、字段路径等内部概念。placeholder 给填写示例；hint 仅解释该项含义。有限选项中只选一个用 type=select、可选多个用 type=multiselect，两种类型都必须给出非空字符串 options（缺少 options 的选择框是无效输出）；自由文本用 text、数值用 number、单个日期用 date。数值范围仅在 number 上填写，依据目录约束；不确定时省略。不要把多个条件塞进一个框，也不要凭空添加用户未要求的选项或必填条件。
+  - Funding 比较要明确币种及比较口径。明确给出具体交易所或市场且有效时不重复问；“两所”只表示数量为2，不表示用户指定了币安和OKX，即使系统当前只接入这两家也不能自动代入；未指明对象时可追问选择哪两家。不默认BTC、不暗自选最近一期或N期平均。口径不明确时用“比较方式”选择目录支持的方式（如“最近一期已结算费率”“最近几期已结算费率的平均值”），选择平均后若期数仍未知再问“期数”。不把尚未接入的当前未结算/预测费率作为可查询选项；用户明确要求未接入口径时直接说明能力缺口，不能用澄清诱导改成别的口径。
   - reason="missing" 表示用户未提供该条件；reason="invalid" 表示已提供但格式、范围或业务要求不合法；reason="confirm" 表示含糊、有歧义或需要用户选择确认。每项都写 message，直接向用户说明要补充什么；invalid/confirm 必须指出具体问题、歧义或约束，不得只说“请补充信息/请确认”。已有值时在 value 回显原值，不编造默认值。
   - 【已填写的澄清条件】是用户原值，不代表有效。按原值判断是否可用；无效/含糊时可以再次问同一个 key，用 reason=invalid/confirm 和 message 解释为何需要修改或确认。明确有效的值不再问；比特币可归一化为BTC，不把中文名本身当成无效。用户本轮明确修改优先。
   - 表单提交会以“补充本轮查询条件”及标签、值的形式成为下一轮用户消息；结合【未完成任务接续】保留原比较目标和已有条件，不用表单回复覆盖原问题。已补齐且有效的项不再重复询问；需纠正或确认时说明原因并回显原值。
@@ -151,3 +151,9 @@
 
 确认示例：用户填写“BTC和ETH”，原任务只比较一个币种；不擅自选择其中一个：
 {"in_domain":true,"needs_clarification":true,"clarify":[{"key":"base","label":"币种","type":"select","reason":"confirm","message":"您提供了两个币种，本次要比较BTC还是ETH的费率？","value":"BTC和ETH","options":["BTC","ETH"]}],"plan":null,"reply":null}
+
+选择字段：select 只允许选择一个对象，提交值是字符串；multiselect 允许选择多个对象，提交值是字符串数组。两种类型均必须给出非空 options，选项必须在目录支持范围内。multiselect 必须填 minSelections/maxSelections（整数）；数量未限定时填1和选项总数，不能使用 min/max 表示选择数量。用户明确“两所”时要求恰好两项：minSelections=2、maxSelections=2；不要把“两所”自动解释成已经指定币安和OKX，也不要返回只能选一家交易所的 select。用户已明确两家名字时保留原对象，不再追问。
+回显 value 可为字符串或字符串数组，按用户原值回显。已填写数组是多个独立选择，不是一个交易所名称；先校验选择数量与对象是否明确，不把数组拼接后当成单个值。
+
+示例：用户已明确BTC最近10期均值，要求比较“两所”，但交易所对象未明确（目录当前支持币安和OKX），允许澄清对象，不猜测用户指的是哪两家：
+{"clarify":[{"key":"exchange","label":"交易所","type":"multiselect","reason":"missing","message":"请选择要比较的两家交易所。","options":["币安","OKX"],"minSelections":2,"maxSelections":2,"value":[]}],"in_domain":true,"needs_clarification":true,"plan":null,"reply":null}

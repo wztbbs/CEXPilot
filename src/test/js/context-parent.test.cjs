@@ -138,3 +138,33 @@ test('纠错和确认原因回显在输入框旁，保留原值且同key仍可�
   assert.equal(a.requests.length,1);
   assert.deepEqual(a.requests[0].clarificationAnswers,{count:'10',base:'BTC'});
 });
+
+test('多选从三项中恰选两项，数组回显并提交，少选或多选时解释数量限制', async () => {
+  const fields=[{key:'exchange',label:'交易所',type:'multiselect',reason:'confirm',message:'请选择要比较的两家交易所',
+    options:['币安','OKX','第三家'],minSelections:2,maxSelections:2,value:['币安']}];
+  const a=await tab('current',[[['done',{turnId:'next',busy:false}]]],
+    [{question:'两所比较',answer:'请选择两家',turnId:'current',clarify:fields}]);
+  const form=all(a.elements.messages).find(n=>n.tag==='form');
+  const boxes=all(form).filter(n=>n.tag==='input'&&n.type==='checkbox');
+  assert.equal(boxes.length,3);assert.equal(boxes[0].checked,true);assert.equal(boxes[1].checked,false);
+  assert.ok(all(form).some(n=>n.textContent==='上次填写：币安'));
+  await form.events.submit({preventDefault(){}});assert.equal(a.requests.length,0);
+  assert.ok(all(form).some(n=>n.textContent.includes('请选择2项，当前已选1项')));
+  boxes[1].checked=true;boxes[1].events.change();boxes[2].checked=true;boxes[2].events.change();
+  await form.events.submit({preventDefault(){}});assert.equal(a.requests.length,0);
+  assert.ok(all(form).some(n=>n.textContent.includes('当前已选3项')));
+  boxes[2].checked=false;boxes[2].events.change();
+  await form.events.submit({preventDefault(){}});await tick();
+  assert.equal(a.requests.length,1);assert.deepEqual(a.requests[0].clarificationAnswers,{exchange:['币安','OKX']});
+  assert.ok(a.requests[0].question.includes('交易所：币安、OKX'));
+  assert.ok(boxes.every(n=>n.disabled));
+});
+
+test('历史多选原值含未知项时保留原文，旧轮次复选框不可提交', async () => {
+  const fields=[{key:'exchange',label:'交易所',type:'multiselect',options:['币安','OKX'],value:['币安','未知'],reason:'invalid',message:'未知交易所尚未接入，请重新选择'}];
+  const a=await tab('current',[],[{question:'旧问题',answer:'重新选择',turnId:'old',clarify:fields}]);
+  const form=all(a.elements.messages).find(n=>n.tag==='form');
+  const boxes=all(form).filter(n=>n.type==='checkbox');assert.ok(boxes.every(n=>n.disabled));
+  assert.ok(all(form).some(n=>n.textContent==='上次填写：币安、未知'));
+  await form.events.submit({preventDefault(){}});assert.equal(a.requests.length,0);
+});
