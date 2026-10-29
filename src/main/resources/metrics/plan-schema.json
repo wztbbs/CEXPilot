@@ -199,11 +199,8 @@
       "description": "旧协议兼容字段；新代码使用 task_action，显式 task_action 优先"
     },
     "needs_clarification": {
-      "type": [
-        "boolean",
-        "null"
-      ],
-      "description": "指代不明或缺条件时置 true 并在 clarify 写澄清问题"
+      "type": "boolean",
+      "description": "缺必要条件或指代不明时必须 true，并给出非空 clarify 列表；不是 task_action=CONTINUE。"
     },
     "task_action": {
       "type": [
@@ -226,11 +223,81 @@
       "description": "RESUME 必填：任务索引提供的 task_ref 别名，不能编造数据库 ID"
     },
     "clarify": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "description": "needs_clarification=true 时给用户的澄清问题"
+      "type": "array",
+      "description": "待用户填写的必要条件；每项只问一个值，已知条件不重复问。无需澄清时为 []。",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "label",
+          "type"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_]{0,39}$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 24,
+            "description": "简短中文标签，如币种、期数；不用内部术语"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "text",
+              "number",
+              "date",
+              "select"
+            ]
+          },
+          "placeholder": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "hint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "options": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "maxItems": 12,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            "description": "select 必填非空选项，其他类型省略"
+          },
+          "min": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "max": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        }
+      }
     },
     "state_ref": {
       "type": [
@@ -292,6 +359,8 @@
   "required": [
     "in_domain",
     "reply",
-    "plan"
+    "plan",
+    "needs_clarification",
+    "clarify"
   ]
 }

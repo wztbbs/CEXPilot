@@ -191,9 +191,11 @@ public class DagRuntime {
             if (answerDelta != null) {
                 answerDelta.accept(answer);
             }
+            ObjectNode clarification = MAPPER.createObjectNode().put("status", "NEEDS_CLARIFICATION");
+            clarification.set("clarify", MAPPER.valueToTree(outcome.clarificationFields()));
             return new ExecutionResult(answer, MAPPER.createArrayNode(), 0, 0,
                     totalPromptTokens, totalCompletionTokens, "NEEDS_CLARIFICATION", outcome.reply(), 0,
-                    plannerLlmCalls, 0, 0, 0, 0, List.of()).withTaskScope(outcome.inDomain() ? outcome.taskScope() : null).withLlmUsages(usages);
+                    plannerLlmCalls, 0, 0, 0, 0, List.of()).withTaskScope(outcome.inDomain() ? outcome.taskScope() : null).withLlmUsages(usages).withAgent("query", clarification);
         }
 
         // 没有获准执行的计划，就没有 Answer 调用；拒答也走同一个 SSE 返回路径。

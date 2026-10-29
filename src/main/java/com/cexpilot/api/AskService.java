@@ -207,7 +207,11 @@ public class AskService {
                     || "FAILED".equals(turnStatus))) scope = taskScopeRef.get();
             if (scope != null) taskScopeRef.set(scope);
             var selectedContext = scope == null ? requestContext : scope.executionContext(requestContext);
-            var commit = dispatcher==null?conversation.finishTaskTurn(resolvedConversationId, turn, question, turnStatus,
+            var commit = dispatcher == null && result.agentPayload() != null
+                    ? conversation.finishQueryTurn(resolvedConversationId, turn, question, turnStatus,
+                            result.answer(), traceId, compiledPlan, result.evidence(), scope,
+                            selectedContext.requestTime(), selectedContext.userZone(), result.clarify(), result.agentPayload())
+                    : dispatcher==null?conversation.finishTaskTurn(resolvedConversationId, turn, question, turnStatus,
                     result.answer(), traceId, compiledPlan, result.evidence(), scope,
                     selectedContext.requestTime(), selectedContext.userZone(),
                     result.clarify() != null ? result.clarify() : "FAILED".equals(turnStatus) ? result.answer() : null)

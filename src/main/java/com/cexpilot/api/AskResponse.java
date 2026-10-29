@@ -26,6 +26,11 @@ public record AskResponse(String conversationId,
                           int reusedFactCount,
                           String type, JsonNode planning, int routerLlmCalls) {
 
+    @com.fasterxml.jackson.annotation.JsonProperty("clarify")
+    public java.util.List<com.cexpilot.dag.ClarificationField> clarify() {
+        return com.cexpilot.dag.ClarificationField.fromPayload(planning);
+    }
+
     public AskResponse(String conversationId,String traceId,String answer,JsonNode evidence,int toolCalls,int llmSteps,
                        long durationMs,String turnId,boolean busy,int plannerLlmCalls,int answerLlmCalls,int metricFetchCount,
                        int calculationCount,int httpRequestCount,int reusedFactCount) {

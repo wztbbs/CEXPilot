@@ -98,9 +98,16 @@ public class DagPlanner {
                               Optional<com.cexpilot.metric.CompiledPlan> plan, int promptTokens, int completionTokens,
                               String lastError, boolean needsClarification,
                               com.cexpilot.metric.ExecutionBindings bindings, int llmCalls, TaskScope taskScope,
-                              List<LlmUsage> llmUsages) {
+                              List<LlmUsage> llmUsages, List<ClarificationField> clarificationFields) {
         public PlanOutcome {
+            clarificationFields = clarificationFields == null ? List.of() : List.copyOf(clarificationFields);
             llmUsages = llmUsages == null ? List.of() : List.copyOf(llmUsages);
+        }
+        public PlanOutcome(boolean inDomain, String reply, Optional<com.cexpilot.metric.CompiledPlan> plan,
+                int promptTokens, int completionTokens, String lastError, boolean needsClarification,
+                com.cexpilot.metric.ExecutionBindings bindings, int llmCalls, TaskScope taskScope, List<LlmUsage> usages) {
+            this(inDomain, reply, plan, promptTokens, completionTokens, lastError, needsClarification,
+                    bindings, llmCalls, taskScope, usages, List.of());
         }
         public PlanOutcome(boolean inDomain, String reply, Optional<com.cexpilot.metric.CompiledPlan> plan,
                 int promptTokens, int completionTokens, String lastError, boolean needsClarification,
@@ -264,7 +271,16 @@ public class DagPlanner {
     /** 单轮判断不负责 token 累计；error 非空时由 plan 统一追加修复消息并重试。 */
     private record PlanDecision(boolean inDomain, String reply, com.cexpilot.metric.CompiledPlan plan,
                                 String error, boolean needsClarification,
-                                com.cexpilot.metric.ExecutionBindings bindings, boolean bindingFailure, TaskScope taskScope) {
+                                com.cexpilot.metric.ExecutionBindings bindings, boolean bindingFailure, TaskScope taskScope,
+                                List<ClarificationField> clarificationFields) {
+        private PlanDecision(boolean inDomain, String reply, com.cexpilot.metric.CompiledPlan plan,
+                String error, boolean needsClarification, com.cexpilot.metric.ExecutionBindings bindings,
+                boolean bindingFailure, TaskScope taskScope) {
+            this(inDomain, reply, plan, error, needsClarification, bindings, bindingFailure, taskScope, List.of());
+        }
+        private static PlanDecision clarification(List<ClarificationField> fields) {
+            return new PlanDecision(true, ClarificationField.question(fields), null, null, true, null, false, null, fields);
+        }
         private static PlanDecision accepted(boolean inDomain, String reply, com.cexpilot.metric.CompiledPlan plan) {
             return new PlanDecision(inDomain, reply, plan, null, false, null, false, null);
         }
@@ -283,12 +299,12 @@ public class DagPlanner {
         }
 
         private PlanDecision withScope(TaskScope scope) {
-            return new PlanDecision(inDomain, reply, plan, error, needsClarification, bindings, bindingFailure, scope);
+            return new PlanDecision(inDomain, reply, plan, error, needsClarification, bindings, bindingFailure, scope, clarificationFields);
         }
 
         private PlanOutcome toOutcome(int promptTokens, int completionTokens, int llmCalls, List<LlmUsage> usages) {
             return new PlanOutcome(inDomain, reply, Optional.ofNullable(plan),
-                    promptTokens, completionTokens, error, needsClarification, bindings, llmCalls, taskScope, usages);
+                    promptTokens, completionTokens, error, needsClarification, bindings, llmCalls, taskScope, usages, clarificationFields);
         }
     }
 
@@ -335,23 +351,32 @@ public class DagPlanner {
                             ? TaskScope.current(currentTask) : new TaskScope(TaskScope.Action.NEW, null));
         }
         String reply = textOrNull(parsed.path("reply"));
-        // 澄清决策（阶段一 c 协议增量字段，缺省按旧行为 false）：不执行、不落 frame，由程序落 NEEDS_CLARIFICATION
-        if (parsed.path("needs_clarification").asBoolean(false)) {
+        // 有效结构化列表本身就是澄清决策，兼容模型漏写 needs_clarification；绝不执行附带计划。
+        JsonNode clarifyNode = parsed.path("clarify");
+        if (parsed.path("needs_clarification").asBoolean(false) || clarifyNode.isArray() && !clarifyNode.isEmpty()) {
             recordPlanDropped(traceId, sink, parsed, "needs_clarification=true 时 plan 必须为空，服务端已丢弃");
-            String clarify = textOrNull(parsed.path("clarify"));
-            String text = clarify != null && !clarify.isBlank() ? clarify : reply;
-            if (text == null || text.isBlank()) {
-                if (attempt <= 1) {
-                    return repairDecision(traceId, sink, parsed.toString(),
-                            "needs_clarification=true 时必须在 clarify 写明要问用户的一句澄清问题");
+            try {
+                List<ClarificationField> fields = ClarificationField.parse(clarifyNode);
+                if (!fields.isEmpty()) {
+                    sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
+                    return PlanDecision.clarification(fields).withScope(selected);
                 }
-                // 模型举了澄清旗但文案字段为空（线上实测 qwen-plus 修复后仍逐字重发）：
-                // 澄清决策本身有效，用通用话术兜底并记审计事件，不因文案缺失丢掉澄清轮
-                sink.record(new TraceEvent(traceId, "CLARIFY_FALLBACK", "dag_planner",
-                        parsed.toString(), null, null, null, null, null, null, null));
+            } catch (IllegalArgumentException e) {
+                // 意图已明确，不为格式或文案再调用模型；保留原输出和错误供 trace 排查。
+                sink.record(new TraceEvent(traceId, "CLARIFY_FALLBACK", TRACE_NAME,
+                        parsed.toString(), null, null, null, null, null, null, e.getMessage()));
                 return PlanDecision.clarification(CLARIFY_FALLBACK_TEXT).withScope(selected);
             }
-            sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
+            // 兼容历史字符串协议。有澄清旗但文案缺失时立即兜底，不再重试补文案。
+            String legacy = textOrNull(clarifyNode);
+            String text = legacy != null && !legacy.isBlank() ? legacy : reply;
+            if (text == null || text.isBlank()) {
+                sink.record(new TraceEvent(traceId, "CLARIFY_FALLBACK", TRACE_NAME,
+                        parsed.toString(), null, null, null, null, null, null, null));
+                text = CLARIFY_FALLBACK_TEXT;
+            } else {
+                sink.record(TraceEvent.plan(traceId, parsed.toString(), null));
+            }
             return PlanDecision.clarification(text).withScope(selected);
         }
         JsonNode planNode = parsed.path("plan");

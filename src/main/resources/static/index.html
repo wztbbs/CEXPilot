@@ -80,6 +80,17 @@
   .msg.assistant .meta a:hover { color: #1f1f1f; }
   .msg.error .bubble { color: #c0392b; }
 
+  .clarification-form { margin-top: 16px; padding: 20px; border: 1px solid #e5e5e5; border-radius: 12px; background: #fafafa; max-width: 480px; }
+  .clarification-form strong { display: block; margin-bottom: 16px; font-size: 14px; }
+  .clarification-form label { display: block; margin-bottom: 16px; }
+  .clarification-form label span { display: block; margin-bottom: 6px; font-size: 14px; }
+  .clarification-form input, .clarification-form select { box-sizing: border-box; width: 100%; min-height: 42px; padding: 9px 12px; border: 1px solid #d4d4d4; border-radius: 8px; background: #fff; color: #1f1f1f; font: inherit; font-size: 16px; }
+  .clarification-form input:focus, .clarification-form select:focus { outline: 2px solid #737373; outline-offset: 2px; }
+  .clarification-form small { display: block; margin-top: 5px; color: #666; font-size: 12px; }
+  .clarification-form button { min-height: 42px; padding: 10px 18px; border: 0; border-radius: 8px; background: #1f1f1f; color: white; cursor: pointer; }
+  .clarification-form :disabled { opacity: .5; cursor: default; }
+  .clarification-form p { margin-top: 10px; font-size: 12px; color: #666; }
+
   /* 加载动画 */
   .loading { display: inline-flex; gap: 5px; padding: 8px 0; }
   .loading span {
@@ -194,6 +205,7 @@
 </div>
 
 <script src="/monitor-confirmation.js"></script>
+<script src="/clarification-form.js"></script>
 <script>
 (function () {
   var app = document.getElementById('app');
@@ -208,6 +220,7 @@
   var historyLoading = true;
   var contextConflict = false;
   var pending = false;
+  var clarificationForms = [];
   var followLatest = true;
 
   // 用户离开底部阅读历史后，流式回复和异步卡片更新都不能抢回滚动位置。
@@ -269,10 +282,24 @@
     progressBox.value = '';
   }
 
+  function refreshClarifications() {
+    clarificationForms.forEach(function (form) { form.refresh(); });
+  }
+  function renderClarification(div, fields, turnId) {
+    if (!window.ClarificationForm) return;
+    var form = window.ClarificationForm.render(div, fields, {
+      isCurrent: function () { return !!turnId && turnId === parentTurnId && !contextConflict; },
+      canSubmit: function () { return !pending && !historyLoading && !contextConflict; },
+      onSubmit: function (question) { return send(question); }
+    });
+    if (form) clarificationForms.push(form);
+  }
+
   function autoResize() {
     textarea.style.height = 'auto';
     textarea.style.height = Math.min(textarea.scrollHeight, 180) + 'px';
     sendBtn.disabled = pending || historyLoading || contextConflict || textarea.value.trim() === '';
+    refreshClarifications();
   }
 
   function scrollToBottom(force) {
@@ -301,14 +328,14 @@
     return div;
   }
 
-  function send() {
-    var question = textarea.value.trim();
-    if (!question || pending || historyLoading || contextConflict) return;
+  function send(supplement) {
+    var question = typeof supplement === 'string' ? supplement.trim() : textarea.value.trim();
+    if (!question || pending || historyLoading || contextConflict) return Promise.resolve(false);
 
     app.className = 'chatting';
     followLatest = true; // 用户主动发送新问题时回到本轮回复。
     pending = true;
-    textarea.value = '';
+    if (typeof supplement !== 'string') textarea.value = '';
     autoResize();
     showProgress();
 
@@ -318,6 +345,7 @@
     var answerDiv = null;
     var answerBubble = null;
     var terminalReceived = false;
+    var requestCompleted = false;
 
     function appendDelta(text) {
       if (!answerDiv) {
@@ -348,6 +376,7 @@
         appendDelta(payload.text);
       } else if (name === 'done') {
         terminalReceived = true;
+        requestCompleted = !payload.busy;
         if (!payload.busy && payload.turnId) parentTurnId = payload.turnId;
         hideProgress();
         if (!answerDiv) {
@@ -355,6 +384,7 @@
           answerDiv = addMessage('assistant', '（无回答）');
         }
         appendMeta(answerDiv, payload.toolCalls, payload.durationMs, payload.traceId);
+        renderClarification(answerDiv, payload.clarify, payload.turnId);
         if (window.MonitorConfirmation) window.MonitorConfirmation.render(answerDiv,payload.planning);
       } else if (name === 'error') {
         terminalReceived = true;
@@ -384,7 +414,7 @@
       });
     }
 
-    fetch('/api/ask/stream', {
+    return fetch('/api/ask/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -404,6 +434,7 @@
         return pump(res.body.getReader(), new TextDecoder('utf-8'), '');
       })
       .catch(function (e) {
+        requestCompleted = false;
         requireHistoryRefresh();
         hideProgress();
         loadingEl.remove();
@@ -413,7 +444,7 @@
         pending = false;
         autoResize();
         if (followLatest) textarea.focus({preventScroll:true});
-      });
+      }).then(function () { return requestCompleted && !contextConflict; });
   }
 
   function requireHistoryRefresh() {
@@ -461,6 +492,7 @@
           if (m.answer) {
             var div = addMessage('assistant', m.answer);
             appendMeta(div, 0, 0, m.traceId);
+            renderClarification(div, m.clarify, m.turnId);
             if (window.MonitorConfirmation) window.MonitorConfirmation.render(div,m.planning);
           }
         });

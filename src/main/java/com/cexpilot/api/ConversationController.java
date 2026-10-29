@@ -48,5 +48,9 @@ public class ConversationController {
 
     public record QueryMessage(String question, String answer, String traceId, LocalDateTime createdAt,
                                String turnId, String turnStatus, String type, com.fasterxml.jackson.databind.JsonNode planning) {
+        @com.fasterxml.jackson.annotation.JsonProperty("clarify")
+        public java.util.List<com.cexpilot.dag.ClarificationField> clarify() {
+            return com.cexpilot.dag.ClarificationField.fromPayload(planning);
+        }
     }
 }

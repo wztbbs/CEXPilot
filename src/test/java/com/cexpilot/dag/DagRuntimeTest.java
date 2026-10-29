@@ -42,6 +42,19 @@ class DagRuntimeTest {
         for (JsonNode node:r.evidence()) if(id.equals(node.path("node_id").asText())) return node;
         throw new AssertionError("missing "+id);
     }
+    @Test void clarificationFieldsSurviveRuntimeAndRoutingWithoutFetchingOrAnswerLlm() {
+        var llm = new Script("{\"in_domain\":true,\"needs_clarification\":true,\"plan\":null,\"clarify\":[{\"key\":\"base\",\"label\":\"币种\",\"type\":\"text\"}]}");
+        var r = runtime(llm, registry(), provider((q,c) -> { throw new AssertionError("澄清不得取数"); }))
+                .execute("比较币安OKX的Funding", "", "t", e -> {}).withRouterUsages(List.of());
+        assertEquals("NEEDS_CLARIFICATION", r.turnStatus());
+        assertEquals(1, r.plannerLlmCalls());
+        assertEquals(0, r.answerLlmCalls());
+        assertEquals(0, r.toolCallCount());
+        assertEquals(1, llm.calls.size());
+        assertEquals("base", ClarificationField.fromPayload(r.agentPayload()).get(0).key());
+        assertTrue(r.clarify().contains("币种"));
+    }
+
     @Test void groupedQueryCalculatesAndAnswerReceivesStandardFactsWithDirection() {
         var p=plan(metric("m1","trade.turnover","range_statistic","binance","okx"));
         calculation(p,"c1","relative_change","{\"current\":\"{{m1.binance.value}}\",\"baseline\":\"{{m1.okx.value}}\"}");

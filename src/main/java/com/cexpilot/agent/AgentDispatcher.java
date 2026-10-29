@@ -57,7 +57,7 @@ public class AgentDispatcher {
         if("query".equals(decision.route())) {
             try {
                 return query.execute(question,history,traceId,sink,delta,request,progress,compiledPlanSink,queryInput(input,routingState),session)
-                        .withAgent("query",null).withRouterUsages(decision.usages());
+                        .withRouterUsages(decision.usages());
             } catch(DagRuntime.ExecutionFailure failure) {
                 throw new DagRuntime.ExecutionFailure(failure.getCause(),failure.counters.withRouterUsages(decision.usages()),failure.taskScope,failure.evidence);
             } catch(RuntimeException failure) {

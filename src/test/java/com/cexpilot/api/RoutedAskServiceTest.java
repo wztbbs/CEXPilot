@@ -71,6 +71,39 @@ class RoutedAskServiceTest {
         verify(conversation).finishRoutedTurn(eq("c"),eq(turn),eq("监控BTC"),eq("FAILED"),isNull(),any(),isNull(),any(),any(),any(),any(),eq("monitor timeout"),eq("monitor"),isNull());
         verifyNoInteractions(oldRuntime);
     }
+    @Test void queryClarificationIsPersistedAndExposedInOrdinaryResponseAndHistory() throws Exception {
+        var payload=json.createObjectNode().put("status","NEEDS_CLARIFICATION");
+        payload.putArray("clarify").addObject().put("key","base").put("label","币种").put("type","text");
+        var result=new ExecutionResult("请补充币种",json.createArrayNode(),0,0,10,5,"NEEDS_CLARIFICATION","请补充币种",0,1,0,0,0,0,List.of())
+                .withAgent("query",payload);
+        when(dispatcher.execute(any(),any(),any(),any(),any(),any(),any(),any(),any(),any(),any(),any(),any())).thenAnswer(inv->{
+            Consumer<String> selected=inv.getArgument(11); selected.accept("query"); return result;
+        });
+        var response=service.ask(null,"比较两所Funding","visitor");
+        assertEquals("base",response.clarify().get(0).key());
+        assertEquals("币种",json.readTree(json.writeValueAsString(response)).at("/clarify/0/label").asText());
+        verify(conversation).finishRoutedTurn(eq("c"),eq(turn),eq("比较两所Funding"),eq("NEEDS_CLARIFICATION"),
+                any(),any(),isNull(),any(),any(),any(),any(),eq("请补充币种"),eq("query"),eq(payload));
+        var message=new ConversationController.QueryMessage("比较两所Funding","请补充币种","trace",null,"turn","NEEDS_CLARIFICATION","query",payload);
+        assertEquals("base",json.readTree(json.writeValueAsString(message)).at("/clarify/0/key").asText());
+    }
+
+    @Test void querySseDoneIncludesClarificationFields() throws Exception {
+        var ask=mock(AskService.class);
+        var payload=json.createObjectNode().put("status","NEEDS_CLARIFICATION");
+        payload.putArray("clarify").addObject().put("key","base").put("label","币种").put("type","text");
+        var response=new AskResponse("c","trace","请补充币种",null,0,0,1,"turn",false,1,0,0,0,0,0,"query",payload,1);
+        when(ask.ask(any(),any(),any(),any(),any(),any())).thenAnswer(inv->{
+            AskService.AskStreamListener listener=inv.getArgument(5);
+            listener.onMeta("c","trace","turn"); listener.onDelta("请补充币种"); listener.onDone(response); return response;
+        });
+        var mvc=MockMvcBuilders.standaloneSetup(new AskController(ask,new SyncTaskExecutor())).build();
+        var pending=mvc.perform(post("/api/ask/stream").contentType("application/json").content("{\"question\":\"比较Funding\"}"))
+                .andExpect(request().asyncStarted()).andReturn();
+        var body=mvc.perform(asyncDispatch(pending)).andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertTrue(body.contains("\"clarify\":[{\"key\":\"base\""));
+    }
+
     @Test void sseDoneCarriesRouteAndPlanningPayload() throws Exception {
         var ask=mock(AskService.class);
         var planning=json.createObjectNode().put("status","PLANNED").put("execution_status","NOT_CREATED");

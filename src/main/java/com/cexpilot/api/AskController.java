@@ -118,6 +118,7 @@ public class AskController {
                                 done.put("durationMs", response.durationMs());
                                 done.put("busy", response.busy());
                                 done.put("type",response.type());
+                                done.put("clarify",response.clarify());
                                 done.put("routerLlmCalls",response.routerLlmCalls());
                                 if(response.planning()!=null) done.put("planning",response.planning());
                                 send(emitter, "done", done);

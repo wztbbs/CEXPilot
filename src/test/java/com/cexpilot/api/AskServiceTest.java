@@ -89,6 +89,22 @@ class AskServiceTest {
     }
 
     @Test
+    void 无路由兼容入口也一起提交澄清表单和任务() {
+        var payload = MAPPER.createObjectNode().put("status", "NEEDS_CLARIFICATION");
+        payload.putArray("clarify").addObject().put("key", "base").put("label", "币种").put("type", "text");
+        var result = new ExecutionResult("请补充币种", null, 0, 0, 10, 5, "NEEDS_CLARIFICATION", "请补充币种")
+                .withAgent("query", payload);
+        when(runtime.execute(anyString(), anyString(), anyString(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(result);
+        when(conversation.finishQueryTurn(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new ConversationService.TaskCommit(true, "frame", 1, null));
+        var response = service.ask("conv-1", "比较两所Funding", "v1");
+        assertEquals("base", response.clarify().get(0).key());
+        verify(conversation).finishQueryTurn(eq("conv-1"), eq(turn), eq("比较两所Funding"), eq("NEEDS_CLARIFICATION"),
+                eq("请补充币种"), any(), isNull(), isNull(), any(), any(), any(), eq("请补充币种"), eq(payload));
+    }
+
+    @Test
     void 混合模型费用按实际调用记录汇总而不是全部按普通模型单价() {
         var usages = List.of(new com.cexpilot.llm.LlmUsage("normal","one",10,5,0.02),
                 new com.cexpilot.llm.LlmUsage("flagship","two",10,5,0.2),

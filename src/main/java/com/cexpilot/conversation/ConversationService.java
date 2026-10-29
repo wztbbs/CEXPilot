@@ -173,6 +173,18 @@ public class ConversationService {
         return commit;
     }
 
+    /** 无 Dispatcher 的兼容入口也在同一事务内保存表单与轮次，刷新后可恢复。 */
+    @Transactional
+    public TaskCommit finishQueryTurn(String conversationId, TurnHandle turn, String question, String status,
+            String answer, String traceId, com.cexpilot.metric.CompiledPlan plan,
+            com.fasterxml.jackson.databind.JsonNode evidence, TaskScope scope, java.time.Instant requestTime,
+            java.time.ZoneId zone, String taskResponse, com.fasterxml.jackson.databind.JsonNode payload) {
+        var commit = finishTaskTurn(conversationId, turn, question, status, answer, traceId, plan,
+                evidence, scope, requestTime, zone, taskResponse);
+        repository.saveAgentOutcome(turn.turnId(), "query", payload);
+        return commit;
+    }
+
     /** 任务状态、轮次快照、活动指针和占用释放原子提交；来源版本与新增版本分开。 */
     @Transactional
     public TaskCommit finishTaskTurn(String conversationId, TurnHandle turn, String question, String status,

@@ -44,6 +44,21 @@ class AgentPlanningTest {
         var store=new PromptStore(LOADER);
         return new IntentRouter(new PlanningLlm(client,new LlmConfig(),store),store);
     }
+    @Test void dispatcherKeepsQueryClarificationPayload() {
+        var client=new Script("{\"route\":\"query\"}");
+        var query=mock(DagRuntime.class);
+        var payload=JSON.createObjectNode().put("status","NEEDS_CLARIFICATION");
+        payload.putArray("clarify").addObject().put("key","base").put("label","币种").put("type","text");
+        when(query.execute(any(),any(),any(),any(),any(),any(),any(),any(),any(),any()))
+                .thenReturn(new ExecutionResult("请补充币种",JSON.createArrayNode(),0,0,0,0,"NEEDS_CLARIFICATION","请补充币种")
+                        .withAgent("query",payload));
+        var dispatcher=new AgentDispatcher(router(client),query,monitor(client),new PromptStore(LOADER));
+        var result=dispatcher.execute("比较两所Funding","","t",e->{},null,REQUEST,null,null,
+                new PlannerInput("",null),null,JSON.createObjectNode(),agent->{});
+        assertEquals(payload,result.agentPayload());
+        assertEquals(1,result.routerLlmCalls());
+    }
+
     @Test void routingPromptOnlyClassifiesAndReceivesTaskContext() {
         var client=new Script("{\"route\":\"monitor\"}");
         var state=JSON.createObjectNode().put("current_agent","monitor");

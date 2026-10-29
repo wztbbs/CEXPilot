@@ -57,6 +57,12 @@ class DagPlannerTest {
         planner(llm, registry(), config).plan("问题", "", "test", events::add);
         var calls = events.stream().filter(e -> e.eventType().equals("LLM_CALL")).toList();
         assertEquals(2, calls.size());
+        if ("json_schema".equals(format)) {
+            var schema = llm.format.at("/json_schema/schema");
+            assertTrue(schema.path("required").toString().contains("needs_clarification"));
+            assertTrue(schema.path("required").toString().contains("clarify"));
+            assertEquals("array", schema.at("/properties/clarify/type").asText());
+        }
         for (int i = 0; i < calls.size(); i++) {
             var input = json(calls.get(i).inputJson());
             assertEquals(i + 1, input.path("attempt").asInt());
@@ -259,7 +265,7 @@ class DagPlannerTest {
             assertFalse(schema.path("properties").has("intent"));
             var required = new java.util.HashSet<String>();
             schema.path("required").forEach(field -> required.add(field.asText()));
-            assertEquals(java.util.Set.of("in_domain", "plan", "reply"), required);
+            assertEquals(java.util.Set.of("in_domain", "plan", "reply", "needs_clarification", "clarify"), required);
             var properties=llm.format.at("/json_schema/schema/properties/plan/properties");
             assertTrue(properties.has("metrics"));assertTrue(properties.has("calculations"));assertFalse(properties.has("nodes"));
             assertTrue(properties.at("/metrics/items/properties/metric/enum").toString().contains("price.close"));
@@ -353,9 +359,9 @@ class DagPlannerTest {
         assertTrue(shadow.get(0).inputJson().contains("metric"));
     }
 
-    @Test void 澄清旗缺文案修复仍缺时用通用话术兜底() {
+    @Test void 澄清旗缺文案立即兜底且不重试() {
         var noText = "{\"in_domain\":true,\"needs_clarification\":true,\"plan\":null,\"reply\":null}";
-        var llm = new Script(noText, noText); // 线上实测：举了旗但 clarify/reply 都空，修复后逐字重发
+        var llm = new Script(noText); // 线上曾逐字重发；不再为补文案多调用一次
         List<TraceEvent> events = new ArrayList<>();
 
         var result = planner(llm, registry(), new DagConfig())
@@ -364,8 +370,52 @@ class DagPlannerTest {
         assertTrue(result.needsClarification(), "澄清决策本身有效，不得因文案缺失变成拒答");
         assertNotNull(result.reply());
         assertFalse(result.reply().isBlank());
-        assertEquals(2, llm.calls.size());
+        assertEquals(1, llm.calls.size());
         assertTrue(events.stream().anyMatch(e -> "CLARIFY_FALLBACK".equals(e.eventType())));
+    }
+
+    @Test void 结构化澄清列表只调用一次且绝不执行附带计划() {
+        var env = JSON.createObjectNode().put("in_domain", true).put("needs_clarification", true);
+        env.set("plan", scalarPlan());
+        env.putArray("clarify").addObject().put("key", "base").put("label", "币种")
+                .put("type", "text").put("placeholder", "例如 BTC、ETH");
+        var llm = new Script(env.toString());
+        var events = new ArrayList<TraceEvent>();
+        var result = planner(llm, registry(), new DagConfig()).plan("两所Funding谁更高", "", "t", events::add);
+        assertTrue(result.needsClarification());
+        assertTrue(result.plan().isEmpty());
+        assertEquals("base", result.clarificationFields().get(0).key());
+        assertTrue(result.reply().contains("币种"));
+        assertEquals(1, result.llmCalls());
+        assertEquals(1, llm.calls.size());
+        assertTrue(events.stream().anyMatch(e -> "PLAN_DROPPED".equals(e.eventType())));
+    }
+
+    @Test void 有澄清列表但漏旗也立即交给用户不重试() {
+        var llm = new Script("{\"in_domain\":true,\"plan\":null,\"clarify\":[{\"key\":\"base\",\"label\":\"币种\",\"type\":\"text\"}]}");
+        var result = planner(llm, registry(), new DagConfig()).plan("两所Funding谁更高", "", "t", e -> {});
+        assertTrue(result.needsClarification());
+        assertEquals(1, llm.calls.size());
+        assertEquals(1, result.clarificationFields().size());
+    }
+
+    @Test void 非法表单整组兜底不执行不重试() {
+        var llm = new Script("{\"in_domain\":true,\"needs_clarification\":true,\"plan\":null,\"clarify\":[{\"key\":\"base\",\"label\":\"币种\",\"type\":\"text\"},{\"key\":\"base\",\"label\":\"期数\",\"type\":\"number\"}]}");
+        var events = new ArrayList<TraceEvent>();
+        var result = planner(llm, registry(), new DagConfig()).plan("两所Funding谁更高", "", "t", events::add);
+        assertTrue(result.needsClarification());
+        assertTrue(result.clarificationFields().isEmpty());
+        assertEquals(1, llm.calls.size());
+        assertTrue(events.stream().anyMatch(e -> "CLARIFY_FALLBACK".equals(e.eventType()) && e.error() != null));
+    }
+
+    @Test void 空计划首次修复可转为结构化澄清且不再生成回答() {
+        var llm = new Script("{\"in_domain\":true,\"plan\":{\"metrics\":[],\"calculations\":[]},\"reply\":null}",
+                "{\"in_domain\":true,\"needs_clarification\":true,\"plan\":null,\"clarify\":[{\"key\":\"base\",\"label\":\"币种\",\"type\":\"text\"}]}");
+        var result = planner(llm, registry(), new DagConfig()).plan("两所Funding谁更高", "", "t", e -> {});
+        assertTrue(result.needsClarification());
+        assertEquals(2, llm.calls.size());
+        assertEquals(1, result.clarificationFields().size());
     }
 
     // ===== 阶段二：reference_mode / evidence_ref 协议与绑定 =====

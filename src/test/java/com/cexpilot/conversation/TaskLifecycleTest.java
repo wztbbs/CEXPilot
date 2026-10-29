@@ -85,6 +85,28 @@ class TaskLifecycleTest {
         assertTrue(input.tasks().stream().anyMatch(t -> t.state().version() == 8));
     }
 
+    @Test void 表单补充写入任务链并保留原交易所和比较目标() throws Exception {
+        var fields = com.cexpilot.dag.ClarificationField.parse(JSON.readTree("""
+                [{"key":"base","label":"币种","type":"text"},
+                 {"key":"count","label":"期数","type":"number","hint":"比较最近多少期的平均费率","min":1,"max":100}]
+                """));
+        String question = "比较币安和OKX最近几期已结算Funding的平均值";
+        TaskState pending = finish(question, "NEEDS_CLARIFICATION", null,
+                new TaskScope(TaskScope.Action.NEW, null), com.cexpilot.dag.ClarificationField.question(fields));
+        TaskState partial = finish("补充本轮查询条件：\n币种：BTC", "NEEDS_CLARIFICATION", null,
+                TaskScope.current(pending), "请补充期数");
+        String text = context.buildPlannerInput("c1").contextText();
+        assertTrue(text.contains(question));
+        assertTrue(text.contains("币种：BTC"));
+        assertTrue(text.contains("期数"));
+        assertEquals(pending.frameId(), partial.frameId());
+        TaskState done = finish("补充本轮查询条件：\n期数（比较最近多少期的平均费率）：10", "SUCCEEDED",
+                plan("funding.rate_settled", "BTC", "binance"), TaskScope.current(partial), null);
+        assertEquals(question, done.originQuestion());
+        assertEquals(pending.frameId(), done.frameId());
+        assertTrue(done.dialogue().isEmpty());
+    }
+
     @Test void 首轮连续澄清保留原问题和全部补充条件() {
         TaskState p1 = finish("查 BTC 最近几期资金费率", "NEEDS_CLARIFICATION", null,
                 new TaskScope(TaskScope.Action.NEW, null), "哪家交易所？");
