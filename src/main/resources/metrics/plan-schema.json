@@ -227,423 +227,73 @@
       "description": "待用户填写的必要条件；每项只问一个值，已知条件不重复问。无需澄清时为 []。",
       "maxItems": 8,
       "items": {
-        "anyOf": [
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "key",
-              "label",
-              "type",
-              "reason",
-              "message"
-            ],
-            "properties": {
-              "key": {
-                "type": "string",
-                "pattern": "^[A-Za-z][A-Za-z0-9_]{0,39}$"
-              },
-              "label": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 24,
-                "description": "简短中文标签，如币种、期数；不用内部术语"
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "text",
-                  "date"
-                ]
-              },
-              "placeholder": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "minLength": 1,
-                "maxLength": 80
-              },
-              "hint": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "minLength": 1,
-                "maxLength": 120
-              },
-              "options": {
-                "type": [
-                  "array",
-                  "null"
-                ],
-                "maxItems": 0,
-                "description": "非选择框不带选项"
-              },
-              "min": {
-                "type": "null"
-              },
-              "max": {
-                "type": "null"
-              },
-              "reason": {
-                "type": "string",
-                "enum": [
-                  "missing",
-                  "invalid",
-                  "confirm"
-                ],
-                "description": "missing=尚未提供；invalid=值不合法；confirm=有歧义或需要用户确认"
-              },
-              "message": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 200,
-                "description": "向用户说明需要填写、修改或确认什么；invalid/confirm 必须指出具体原因，不能只说请补充信息"
-              },
-              "value": {
-                "anyOf": [
-                  {
-                    "type": [
-                      "string",
-                      "number",
-                      "null"
-                    ]
-                  },
-                  {
-                    "type": "array",
-                    "maxItems": 12,
-                    "uniqueItems": true,
-                    "items": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 200
-                    }
-                  }
-                ],
-                "description": "用户此前原值：单值或字符串数组；不要默认替用户选择"
-              }
-            }
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "label",
+          "reason",
+          "message"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_]{0,39}$"
           },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "key",
-              "label",
-              "type",
-              "reason",
-              "message"
-            ],
-            "properties": {
-              "key": {
-                "type": "string",
-                "pattern": "^[A-Za-z][A-Za-z0-9_]{0,39}$"
-              },
-              "label": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 24,
-                "description": "简短中文标签，如币种、期数；不用内部术语"
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "number"
-                ]
-              },
-              "placeholder": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "minLength": 1,
-                "maxLength": 80
-              },
-              "hint": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "minLength": 1,
-                "maxLength": 120
-              },
-              "options": {
-                "type": [
-                  "array",
-                  "null"
-                ],
-                "maxItems": 0,
-                "description": "非选择框不带选项"
-              },
-              "min": {
-                "type": [
-                  "number",
-                  "null"
-                ]
-              },
-              "max": {
-                "type": [
-                  "number",
-                  "null"
-                ]
-              },
-              "reason": {
-                "type": "string",
-                "enum": [
-                  "missing",
-                  "invalid",
-                  "confirm"
-                ],
-                "description": "missing=尚未提供；invalid=值不合法；confirm=有歧义或需要用户确认"
-              },
-              "message": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 200,
-                "description": "向用户说明需要填写、修改或确认什么；invalid/confirm 必须指出具体原因，不能只说请补充信息"
-              },
-              "value": {
-                "anyOf": [
-                  {
-                    "type": [
-                      "string",
-                      "number",
-                      "null"
-                    ]
-                  },
-                  {
-                    "type": "array",
-                    "maxItems": 12,
-                    "uniqueItems": true,
-                    "items": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 200
-                    }
-                  }
-                ],
-                "description": "用户此前原值：单值或字符串数组；不要默认替用户选择"
-              }
-            }
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 24
           },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "key",
-              "label",
-              "type",
-              "options",
-              "reason",
-              "message"
-            ],
-            "properties": {
-              "key": {
-                "type": "string",
-                "pattern": "^[A-Za-z][A-Za-z0-9_]{0,39}$"
-              },
-              "label": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 24,
-                "description": "简短中文标签，如币种、期数；不用内部术语"
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "select"
-                ]
-              },
-              "placeholder": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "minLength": 1,
-                "maxLength": 80
-              },
-              "hint": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "minLength": 1,
-                "maxLength": 120
-              },
-              "options": {
-                "type": "array",
-                "maxItems": 12,
-                "uniqueItems": true,
-                "items": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 80
-                },
-                "description": "必须给出用户可以选择的具体选项",
-                "minItems": 1
-              },
-              "min": {
-                "type": "null"
-              },
-              "max": {
-                "type": "null"
-              },
-              "reason": {
-                "type": "string",
-                "enum": [
-                  "missing",
-                  "invalid",
-                  "confirm"
-                ],
-                "description": "missing=尚未提供；invalid=值不合法；confirm=有歧义或需要用户确认"
-              },
-              "message": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 200,
-                "description": "向用户说明需要填写、修改或确认什么；invalid/confirm 必须指出具体原因，不能只说请补充信息"
-              },
-              "value": {
-                "anyOf": [
-                  {
-                    "type": [
-                      "string",
-                      "number",
-                      "null"
-                    ]
-                  },
-                  {
-                    "type": "array",
-                    "maxItems": 12,
-                    "uniqueItems": true,
-                    "items": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 200
-                    }
-                  }
-                ],
-                "description": "用户此前原值：单值或字符串数组；不要默认替用户选择"
-              }
-            }
+          "reason": {
+            "type": "string",
+            "enum": [
+              "missing",
+              "invalid",
+              "confirm"
+            ]
           },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "key",
-              "label",
-              "type",
-              "options",
-              "reason",
-              "message",
-              "minSelections",
-              "maxSelections"
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "向用户说明需补充、修改或确认什么，纠错和确认要解释具体原因"
+          },
+          "placeholder": {
+            "type": [
+              "string",
+              "null"
             ],
-            "properties": {
-              "key": {
-                "type": "string",
-                "pattern": "^[A-Za-z][A-Za-z0-9_]{0,39}$"
-              },
-              "label": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 24,
-                "description": "简短中文标签，如币种、期数；不用内部术语"
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "multiselect"
-                ]
-              },
-              "placeholder": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "minLength": 1,
-                "maxLength": 80
-              },
-              "hint": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "minLength": 1,
-                "maxLength": 120
-              },
-              "options": {
-                "type": "array",
-                "maxItems": 12,
-                "uniqueItems": true,
-                "items": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 80
-                },
-                "description": "可多选的具体选项；不得把需要选择两个对象的任务做成单选",
-                "minItems": 1
-              },
-              "min": {
-                "type": "null"
-              },
-              "max": {
-                "type": "null"
-              },
-              "reason": {
-                "type": "string",
-                "enum": [
-                  "missing",
-                  "invalid",
-                  "confirm"
-                ],
-                "description": "missing=尚未提供；invalid=值不合法；confirm=有歧义或需要用户确认"
-              },
-              "message": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 200,
-                "description": "向用户说明需要填写、修改或确认什么；invalid/confirm 必须指出具体原因，不能只说请补充信息"
-              },
-              "value": {
-                "anyOf": [
-                  {
-                    "type": [
-                      "string",
-                      "number",
-                      "null"
-                    ]
-                  },
-                  {
-                    "type": "array",
-                    "maxItems": 12,
-                    "uniqueItems": true,
-                    "items": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 200
-                    }
-                  }
-                ],
-                "description": "用户此前原值：单值或字符串数组；不要默认替用户选择"
-              },
-              "minSelections": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 12,
-                "description": "需要恰好选择N项时，minSelections与maxSelections均为N"
-              },
-              "maxSelections": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 12,
-                "description": "需要恰好选择N项时，minSelections与maxSelections均为N"
-              }
-            }
+            "maxLength": 80
+          },
+          "hint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 120
+          },
+          "options": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "maxItems": 12,
+            "items": {
+              "type": "string",
+              "maxLength": 80
+            },
+            "description": "可选参考示例，只作展示，用户可以填写其他表达，不是可选值枚举"
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 200,
+            "description": "用户原话，用于回显，不要自行替换成代码或默认值"
           }
-        ]
+        }
       },
       "uniqueItems": true
     },

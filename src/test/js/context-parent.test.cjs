@@ -94,7 +94,8 @@ test('历史恢复动态表单，只能提交当前轮次；保留同一会话�
   assert.ok(oldControls.every(n=>n.disabled));
   const controls=all(forms[1]).filter(n=>['input','select'].includes(n.tag));
   assert.equal(controls.length,3); assert.ok(controls.every(n=>!n.disabled));
-  assert.equal(controls[1].min,1); assert.equal(controls[1].max,100);
+  assert.ok(controls.every(n=>n.tag==='input'&&n.type==='text'));
+  assert.equal(controls[1].min,undefined);assert.equal(controls[1].max,undefined);
   controls[0].value='BTC'; controls[1].value='10'; controls[2].value='OKX';
   const submit=forms[1].events.submit;
   const first=submit({preventDefault(){}}); const second=submit({preventDefault(){}});
@@ -139,32 +140,28 @@ test('纠错和确认原因回显在输入框旁，保留原值且同key仍可�
   assert.deepEqual(a.requests[0].clarificationAnswers,{count:'10',base:'BTC'});
 });
 
-test('多选从三项中恰选两项，数组回显并提交，少选或多选时解释数量限制', async () => {
-  const fields=[{key:'exchange',label:'交易所',type:'multiselect',reason:'confirm',message:'请选择要比较的两家交易所',
-    options:['币安','OKX','第三家'],minSelections:2,maxSelections:2,value:['币安']}];
-  const a=await tab('current',[[['done',{turnId:'next',busy:false}]]],
-    [{question:'两所比较',answer:'请选择两家',turnId:'current',clarify:fields}]);
+test('旧的多选/数字元数据统一展示成文本框，参考值与范围不限制原话', async () => {
+  const fields=[{key:'exchange',label:'交易所',type:'multiselect',options:['币安','OKX'],minSelections:2,maxSelections:2,value:['币安','未知'],reason:'confirm',message:'请填写两家交易所'},
+    {key:'count',label:'期数',type:'number',min:1,max:100,options:[],reason:'missing',message:'请填写期数'}];
+  const a=await tab('current',[[['done',{turnId:'next',busy:false}]]],[{question:'比较费率',answer:'请补充',turnId:'current',clarify:fields}]);
   const form=all(a.elements.messages).find(n=>n.tag==='form');
-  const boxes=all(form).filter(n=>n.tag==='input'&&n.type==='checkbox');
-  assert.equal(boxes.length,3);assert.equal(boxes[0].checked,true);assert.equal(boxes[1].checked,false);
-  assert.ok(all(form).some(n=>n.textContent==='上次填写：币安'));
-  await form.events.submit({preventDefault(){}});assert.equal(a.requests.length,0);
-  assert.ok(all(form).some(n=>n.textContent.includes('请选择2项，当前已选1项')));
-  boxes[1].checked=true;boxes[1].events.change();boxes[2].checked=true;boxes[2].events.change();
-  await form.events.submit({preventDefault(){}});assert.equal(a.requests.length,0);
-  assert.ok(all(form).some(n=>n.textContent.includes('当前已选3项')));
-  boxes[2].checked=false;boxes[2].events.change();
+  const inputs=all(form).filter(n=>n.tag==='input');assert.equal(inputs.length,2);
+  assert.ok(inputs.every(n=>n.type==='text'));assert.equal(all(form).filter(n=>n.tag==='select').length,0);
+  assert.equal(inputs[0].value,'币安、未知');
+  assert.ok(all(form).some(n=>n.textContent==='参考：币安、OKX'));
+  inputs[0].value='币安和ok';inputs[1].value='最近两百期';
   await form.events.submit({preventDefault(){}});await tick();
-  assert.equal(a.requests.length,1);assert.deepEqual(a.requests[0].clarificationAnswers,{exchange:['币安','OKX']});
-  assert.ok(a.requests[0].question.includes('交易所：币安、OKX'));
-  assert.ok(boxes.every(n=>n.disabled));
+  assert.equal(a.requests.length,1);
+  assert.deepEqual(a.requests[0].clarificationAnswers,{exchange:'币安和ok',count:'最近两百期'});
 });
 
-test('历史多选原值含未知项时保留原文，旧轮次复选框不可提交', async () => {
-  const fields=[{key:'exchange',label:'交易所',type:'multiselect',options:['币安','OKX'],value:['币安','未知'],reason:'invalid',message:'未知交易所尚未接入，请重新选择'}];
-  const a=await tab('current',[],[{question:'旧问题',answer:'重新选择',turnId:'old',clarify:fields}]);
-  const form=all(a.elements.messages).find(n=>n.tag==='form');
-  const boxes=all(form).filter(n=>n.type==='checkbox');assert.ok(boxes.every(n=>n.disabled));
-  assert.ok(all(form).some(n=>n.textContent==='上次填写：币安、未知'));
-  await form.events.submit({preventDefault(){}});assert.equal(a.requests.length,0);
+test('没有type的参考提示支持参考以外的值，旧轮次仍不可提交', async () => {
+  const field={key:'base',label:'币种',options:['BTC','ETH'],message:'请填写币种',value:'比特币'};
+  const a=await tab('current',[[['done',{turnId:'next',busy:false}]]],[{question:'旧问题',answer:'请填写',turnId:'old',clarify:[field]},
+    {question:'新问题',answer:'请填写',turnId:'current',clarify:[field]}]);
+  const forms=all(a.elements.messages).filter(n=>n.tag==='form');
+  assert.ok(all(forms[0]).filter(n=>['input','button'].includes(n.tag)).every(n=>n.disabled));
+  const input=all(forms[1]).find(n=>n.tag==='input');assert.equal(input.value,'比特币');
+  input.value='sol';await forms[1].events.submit({preventDefault(){}});await tick();
+  assert.equal(a.requests.length,1);assert.equal(a.requests[0].clarificationAnswers.base,'sol');
 });

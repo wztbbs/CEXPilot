@@ -391,45 +391,64 @@ class DagPlannerTest {
         assertEquals(2, llm.calls.size());
     }
 
-    @Test void 选择框必须有选项的约束同时下发给首轮和修复轮() {
-        var invalid = "{\"in_domain\":true,\"needs_clarification\":true,\"plan\":null,\"clarify\":[{\"key\":\"basis\",\"label\":\"比较方式\",\"type\":\"select\"}]}";
-        var valid = "{\"clarify\":[{\"key\":\"comparison\",\"label\":\"比较方式\",\"type\":\"select\",\"options\":[\"最近一期已结算费率\",\"最近几期已结算费率的平均值\"]}]}";
-        var llm = new Script(invalid, valid);
+    @Test void 原话交给规划归一化后仍按真实指标协议编译() {
+        var group=metric("m1","funding.rate_settled","recent_n","binance","okx");group.remove(List.of("time","interval"));group.put("count",10);
+        var p=plan(group);
+        calculation(p,"b","avg","{\"kind\":\"field\",\"collection\":\"{{m1.binance.samples}}\",\"field\":\"value\"}");
+        calculation(p,"o","avg","{\"kind\":\"field\",\"collection\":\"{{m1.okx.samples}}\",\"field\":\"value\"}");
+        calculation(p,"c","compare","{\"left\":\"{{b.value}}\",\"right\":\"{{o.value}}\"}");
+        var llm=new Script(envelope(p));
+        String context=com.cexpilot.conversation.ClarificationAnswer.render(List.of(
+                new com.cexpilot.conversation.ClarificationAnswer("base","币种","比特币"),
+                new com.cexpilot.conversation.ClarificationAnswer("exchange","交易所","币安和ok"),
+                new com.cexpilot.conversation.ClarificationAnswer("count","期数","最近十期")));
+        var result=planner(llm,registry(),new DagConfig()).plan("比较最近几期平均费率",context,"t",e->{});
+        assertTrue(result.plan().isPresent(),result.lastError());
+        var metric=result.plan().orElseThrow().logicalPlan().metrics().get(0);
+        assertEquals("BTC",metric.instrument().base());assertEquals(List.of("binance","okx"),metric.exchanges());
+        assertTrue(llm.calls.get(0).get(0).content().contains("币安和ok"));
+        assertTrue(llm.calls.get(0).get(0).content().contains("最近十期"));
+    }
+
+    @Test void 表单不限制200期但真实计划仍拒绝超出支持范围() {
+        var group=metric("m1","funding.rate_settled","recent_n","binance");group.remove(List.of("time","interval"));group.put("count",200);
+        var llm=new Script(envelope(plan(group)),"{\"in_domain\":true,\"needs_clarification\":true,\"plan\":null,\"clarify\":[{\"key\":\"count\",\"label\":\"期数\",\"reason\":\"invalid\",\"message\":\"最多支持100期，您填写了200期\",\"value\":\"最近两百期\"}]}");
+        var result=planner(llm,registry(),new DagConfig()).plan("最近两百期费率", "", "t",e->{});
+        assertTrue(result.needsClarification());assertTrue(result.plan().isEmpty());assertTrue(result.reply().contains("最多支持100期"));
+        assertEquals(2,llm.calls.size());
+    }
+
+    @Test void 首轮和专项修复都只下发自由文本协议() {
+        var llm = new Script("{\"in_domain\":true,\"needs_clarification\":true,\"plan\":null,\"clarify\":[]}",
+                "{\"clarify\":[{\"key\":\"exchange\",\"label\":\"交易所\",\"reason\":\"missing\",\"message\":\"请填写两家交易所\",\"options\":[\"币安\",\"OKX\"]}]}");
         var config = new DagConfig(); config.setPlannerResponseFormat("json_schema");
         var events = new ArrayList<TraceEvent>();
         var result = planner(llm, registry(), config).plan("两所Funding谁更高", "", "t", events::add);
         assertTrue(result.needsClarification());
         assertEquals(2, result.clarificationFields().get(0).options().size());
         for (var event : events.stream().filter(e -> "LLM_CALL".equals(e.eventType())).toList()) {
-            var branches = json(event.inputJson()).at("/response_format/json_schema/schema/properties/clarify/items/anyOf");
-            assertEquals(4, branches.size());
-            for (var branch : branches) {
-                assertTrue(branch.path("required").toString().contains("reason"));
-                assertTrue(branch.path("required").toString().contains("message"));
-            }
-            var multi = branches.get(3);
-            assertEquals("multiselect", multi.at("/properties/type/enum/0").asText());
-            assertTrue(multi.path("required").toString().contains("options"));
-            assertTrue(multi.path("required").toString().contains("minSelections"));
-            assertTrue(multi.path("required").toString().contains("maxSelections"));
-            assertTrue(multi.path("properties").has("minSelections"));
-            var select = branches.get(2);
-            assertTrue(select.path("required").toString().contains("options"));
-            assertEquals(1, select.at("/properties/options/minItems").asInt());
-            assertEquals("array", select.at("/properties/options/type").asText());
+            var item = json(event.inputJson()).at("/response_format/json_schema/schema/properties/clarify/items");
+            assertEquals("object",item.path("type").asText());
+            for (String obsolete:List.of("type","min","max","minSelections","maxSelections")) assertFalse(item.path("properties").has(obsolete));
+            assertFalse(item.path("required").toString().contains("options"));
         }
     }
 
-    @Test void 用户日志中的缺选项和重复字段导致明确失败而不是缓存问题() {
-        var initial = "{\"changes\":[],\"clarify\":[{\"key\":\"base\",\"label\":\"币种\",\"type\":\"text\"},{\"key\":\"basis\",\"label\":\"比较方式\",\"type\":\"select\"}],\"in_domain\":true,\"needs_clarification\":true,\"plan\":{\"calculations\":[],\"metrics\":[]},\"reply\":null,\"task_action\":\"NEW\"}";
-        var repair = "{\"clarify\":[{\"key\":\"base\",\"label\":\"币种\",\"type\":\"text\"},{\"key\":\"comparison\",\"label\":\"比较方式\",\"type\":\"select\"},{\"key\":\"comparison\",\"label\":\"比较方式\",\"type\":\"select\"}]}";
-        var llm = new Script(initial, repair);
-        var result = planner(llm, registry(), new DagConfig()).plan("两所Funding谁更高", "", "t", e -> {});
-        assertFalse(result.needsClarification());
-        assertTrue(result.clarificationFields().isEmpty());
-        assertNotNull(result.lastError());
-        assertTrue(result.reply().contains("澄清表单生成失败"));
-        assertEquals(2, llm.calls.size());
+    @Test void 线上错误控件元数据现在可正常展示参考信息() {
+        var initial="{\"in_domain\":true,\"needs_clarification\":true,\"plan\":null,\"clarify\":[]}";
+        var repair="{\"clarify\":[{\"key\":\"base\",\"label\":\"币种\",\"message\":\"请填写币种\",\"reason\":\"missing\",\"type\":\"text\"},{\"key\":\"exchange\",\"label\":\"交易所\",\"message\":\"请填写两家\",\"min\":\"\",\"options\":[\"币安\",\"OKX\"],\"reason\":\"missing\",\"type\":\"number\"}]}";
+        var llm=new Script(initial,repair);
+        var result=planner(llm,registry(),new DagConfig()).plan("两所Funding谁更高", "", "t", e->{});
+        assertTrue(result.needsClarification());
+        assertEquals(2,result.clarificationFields().size());
+        assertEquals(2,llm.calls.size());
+    }
+
+    @Test void 重复字段key仍然需要修复而不是绑定到错误输入() {
+        var llm=new Script("{\"in_domain\":true,\"needs_clarification\":true,\"plan\":null,\"clarify\":[]}",
+                "{\"clarify\":[{\"key\":\"x\",\"label\":\"币种\"},{\"key\":\"x\",\"label\":\"交易所\"}]}");
+        var result=planner(llm,registry(),new DagConfig()).plan("比较Funding", "", "t", e->{});
+        assertFalse(result.needsClarification());assertNotNull(result.lastError());assertEquals(2,llm.calls.size());
     }
 
     @Test void 空澄清列表定向修复后返回表单且保留上下文() {

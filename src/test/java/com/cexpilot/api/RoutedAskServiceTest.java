@@ -132,7 +132,8 @@ class RoutedAskServiceTest {
         var history=new ConversationController.QueryMessage("比较两所","请选择两家","trace",null,"turn","NEEDS_CLARIFICATION","query",payload);
         var historyJson=json.readTree(json.writeValueAsString(history));
         assertTrue(historyJson.at("/clarify/0/value").isArray());
-        assertEquals(2,historyJson.at("/clarify/0/minSelections").asInt());
+        assertTrue(historyJson.at("/clarify/0/minSelections").isMissingNode());
+        assertTrue(historyJson.at("/clarify/0/type").isMissingNode());
     }
 
     @Test void sseDoneCarriesRouteAndPlanningPayload() throws Exception {

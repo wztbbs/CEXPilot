@@ -29,15 +29,14 @@ class ClarificationAnswerTest {
         return List.of(new QueryRecord(1,"两所比较","请选择两家","t",null,"parent","NEEDS_CLARIFICATION","query",payload));
     }
 
-    @Test void multiSelectionIsAnArrayAndEnforcesTwoOfThreeWithoutChangingSingleValues() throws Exception {
+    @Test void freeTextIsNotBoundToOldOptionsTypesOrSelectionCounts() throws Exception {
         var history=multiHistory();
-        var answer=ClarificationAnswer.validate("parent",history,Map.of("exchange",List.of("币安","OKX"))).get(0);
-        assertTrue(answer.value().isArray());
-        assertEquals(2,answer.value().size());
-        for (Object invalid : List.of("币安",List.of(),List.of("币安"),List.of("币安","OKX","第三家"),List.of("币安","未知"),List.of("币安","币安"))) {
-            assertThrows(IllegalArgumentException.class, () -> ClarificationAnswer.validate("parent",history,Map.of("exchange",invalid)));
+        for (String text : List.of("币安和ok","ok","其他交易所","三家都比较")) {
+            var answer=ClarificationAnswer.validate("parent",history,Map.of("exchange",text)).get(0);
+            assertEquals(text,answer.value().asText());
         }
-        assertThrows(IllegalArgumentException.class, () -> ClarificationAnswer.validate("parent",history(),Map.of("count",List.of("10"))));
+        var old=ClarificationAnswer.validate("parent",history,Map.of("exchange",List.of("币安","未知","币安"))).get(0);
+        assertEquals(3,old.value().size());
     }
 
     @Test void unknownFieldOrWrongParentCannotInventFormFields() throws Exception {
