@@ -158,7 +158,8 @@ public class DagRuntime {
             outcome = planner.plan(question, plannerContext, traceId, sink,
                     activeFrame, effectiveContext, evidenceContext,
                     plannerInput == null ? List.of() : plannerInput.tasks(),
-                    plannerInput == null ? null : plannerInput.currentTask());
+                    plannerInput == null ? null : plannerInput.currentTask(),
+                    plannerInput != null && plannerInput.clarificationSubmission());
         } catch (DagPlanner.PlanningFailure pf) {
             // 4.3：planner 阶段失败（LLM 欠费/超时）同样带出已发生的调用计数
             throw new ExecutionFailure(pf, new TurnCounters(pf.llmCalls, 0, 0, 0, 0, 0, List.of())

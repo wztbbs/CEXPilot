@@ -359,6 +359,38 @@ class DagPlannerTest {
         assertTrue(shadow.get(0).inputJson().contains("metric"));
     }
 
+    @Test void 已填写的无效值仍可纠错且不按key过滤() {
+        var state = com.cexpilot.conversation.TaskState.legacy(priceHighFrame(), 1, "比较平均费率")
+                .withClarificationAnswers(List.of(new com.cexpilot.conversation.ClarificationAnswer("count", "期数", "200"),
+                        new com.cexpilot.conversation.ClarificationAnswer("base", "币种", "BTC和ETH")));
+        var output = """
+                {"in_domain":true,"needs_clarification":true,"plan":null,"clarify":[
+                 {"key":"count","label":"期数","type":"number","reason":"invalid","message":"最多100期，您填写了200，请修改","min":1,"max":100},
+                 {"key":"base","label":"币种","type":"select","reason":"confirm","message":"本次比较BTC还是ETH？","options":["BTC","ETH"]}]}
+                """;
+        var llm = new Script(output);
+        var result = planner(llm, registry(), new DagConfig()).plan("补充查询条件", "", "t", e -> {},
+                priceHighFrame(), FOLLOWUP_CTX, null, List.of(), state, true);
+        assertTrue(result.needsClarification());
+        assertEquals(2, result.clarificationFields().size(), "同key纠错和确认项均必须保留");
+        assertEquals("200", result.clarificationFields().get(0).value());
+        assertEquals("BTC和ETH", result.clarificationFields().get(1).value());
+        assertTrue(result.reply().contains("最多100期"));
+        assertEquals(1, llm.calls.size());
+    }
+
+    @Test void 纠错没有原因时专项修复原因后仍展示同一字段() {
+        var state = com.cexpilot.conversation.TaskState.legacy(priceHighFrame(), 1, "比较平均费率")
+                .withClarificationAnswers(List.of(new com.cexpilot.conversation.ClarificationAnswer("count", "期数", "200")));
+        var llm = new Script("{\"in_domain\":true,\"needs_clarification\":true,\"plan\":null,\"clarify\":[{\"key\":\"count\",\"label\":\"期数\",\"type\":\"number\",\"reason\":\"invalid\"}]}",
+                "{\"clarify\":[{\"key\":\"count\",\"label\":\"期数\",\"type\":\"number\",\"reason\":\"invalid\",\"message\":\"期数最多100，请修改200\"}]}");
+        var result = planner(llm, registry(), new DagConfig()).plan("200", "", "t", e -> {},
+                priceHighFrame(), FOLLOWUP_CTX, null, List.of(), state, true);
+        assertEquals("200", result.clarificationFields().get(0).value());
+        assertEquals("invalid", result.clarificationFields().get(0).reason());
+        assertEquals(2, llm.calls.size());
+    }
+
     @Test void 选择框必须有选项的约束同时下发给首轮和修复轮() {
         var invalid = "{\"in_domain\":true,\"needs_clarification\":true,\"plan\":null,\"clarify\":[{\"key\":\"basis\",\"label\":\"比较方式\",\"type\":\"select\"}]}";
         var valid = "{\"clarify\":[{\"key\":\"comparison\",\"label\":\"比较方式\",\"type\":\"select\",\"options\":[\"最近一期已结算费率\",\"最近几期已结算费率的平均值\"]}]}";
@@ -371,6 +403,10 @@ class DagPlannerTest {
         for (var event : events.stream().filter(e -> "LLM_CALL".equals(e.eventType())).toList()) {
             var branches = json(event.inputJson()).at("/response_format/json_schema/schema/properties/clarify/items/anyOf");
             assertEquals(3, branches.size());
+            for (var branch : branches) {
+                assertTrue(branch.path("required").toString().contains("reason"));
+                assertTrue(branch.path("required").toString().contains("message"));
+            }
             var select = branches.get(2);
             assertTrue(select.path("required").toString().contains("options"));
             assertEquals(1, select.at("/properties/options/minItems").asInt());

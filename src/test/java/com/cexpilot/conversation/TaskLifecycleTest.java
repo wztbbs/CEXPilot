@@ -43,6 +43,23 @@ class TaskLifecycleTest {
         return finish(question, "SUCCEEDED", plan("price.last", base, "binance"), new TaskScope(TaskScope.Action.NEW, null), null);
     }
 
+    @Test void 结构化填写值随未完成任务持久化且修改覆盖旧值() {
+        var pending = finish("比较平均Funding", "NEEDS_CLARIFICATION", null,
+                new TaskScope(TaskScope.Action.NEW, null), "请填币种和期数");
+        var supplied = pending.withClarificationAnswers(List.of(new ClarificationAnswer("base", "币种", "比特币"),
+                new ClarificationAnswer("count", "期数", "200")));
+        var correction = finish("币种比特币，期数200", "NEEDS_CLARIFICATION", null, TaskScope.current(supplied), "期数最多100，请修改");
+        assertEquals(supplied.clarificationAnswers(), correction.clarificationAnswers());
+        assertEquals(correction, TaskState.fromJson(correction.toJson()));
+        assertTrue(context.buildPlannerInput("c1").contextText().contains("count（期数）=200"));
+        var input = context.buildPlannerInput("c1").withClarificationAnswers(List.of(new ClarificationAnswer("count", "期数", "10")));
+        assertTrue(input.contextText().contains("base（币种）=比特币"));
+        assertTrue(input.contextText().contains("count（期数）=10"));
+        assertFalse(input.contextText().contains("count（期数）=200"));
+        var done = finish("改成10期", "SUCCEEDED", plan("funding.rate_settled", "BTC", "binance"), TaskScope.current(input.currentTask()), null);
+        assertTrue(done.clarificationAnswers().isEmpty());
+    }
+
     @Test void 同一任务追问稳定ID并逐轮追加版本() {
         TaskState a = fresh("BTC 当前价", "BTC");
         TaskState b = finish("那 ETH 呢", "SUCCEEDED", plan("price.last", "ETH", "binance"), TaskScope.current(a), null);

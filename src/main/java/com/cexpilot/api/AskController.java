@@ -43,8 +43,7 @@ public class AskController {
         boolean newVisitor = visitorId == null || visitorId.isBlank();
         String resolvedVisitorId = newVisitor ? UUID.randomUUID().toString() : visitorId;
         try {
-            AskResponse response = askService.ask(request.conversationId(), request.question(),
-                    resolvedVisitorId, request.timezone(), request.parentTurnId(), null);
+            AskResponse response = execute(request, resolvedVisitorId, null);
             return ResponseEntity.ok()
                     .headers(headers -> {
                         if (newVisitor) {
@@ -77,8 +76,7 @@ public class AskController {
         taskExecutor.execute(() -> {
             var completedTurn = new java.util.concurrent.atomic.AtomicReference<String>();
             try {
-                askService.ask(request.conversationId(), request.question(), resolvedVisitorId,
-                        request.timezone(), request.parentTurnId(), new AskService.AskStreamListener() {
+                execute(request, resolvedVisitorId, new AskService.AskStreamListener() {
                             @Override
                             public void onTurnFinished(String turnId) { completedTurn.set(turnId); }
                             @Override
@@ -145,6 +143,14 @@ public class AskController {
                     headers.add("X-Accel-Buffering", "no");
                 })
                 .body(emitter);
+    }
+
+    private AskResponse execute(AskRequest request, String visitor, AskService.AskStreamListener listener) {
+        if (request.clarificationAnswers() != null && !request.clarificationAnswers().isEmpty()) {
+            return askService.ask(request.conversationId(), request.question(), visitor, request.timezone(),
+                    request.parentTurnId(), listener, request.clarificationAnswers());
+        }
+        return askService.ask(request.conversationId(), request.question(), visitor, request.timezone(), request.parentTurnId(), listener);
     }
 
     private static void send(SseEmitter emitter, String event, Object data) {

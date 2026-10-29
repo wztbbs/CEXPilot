@@ -11,7 +11,7 @@ class Element {
   addEventListener(name, callback) { this.events[name] = callback; }
   querySelector(selector) { return this.children.find(child => '.' + child.className === selector); }
   remove() { if (this.parent) this.parent.children = this.parent.children.filter(c => c !== this); }
-  setAttribute() {}
+  setAttribute(name,value) { this[name] = value; }
   setCustomValidity(text) { this.validationMessage = text; }
   reportValidity() { return all(this).every(n => !n.validationMessage && (!n.required || !!n.value)); }
   focus() {}
@@ -104,6 +104,8 @@ test('历史恢复动态表单，只能提交当前轮次；保留同一会话�
   assert.ok(a.requests[0].question.includes('币种：BTC'));
   assert.ok(a.requests[0].question.includes('期数（比较最近多少期的平均费率）：10'));
   assert.ok(a.requests[0].question.includes('交易所：OKX'));
+  assert.ok(a.requests[0].question.includes('\n币种：BTC'));
+  assert.deepEqual(a.requests[0].clarificationAnswers,{base:'BTC',count:'10',exchange:'OKX'});
   assert.ok(all(forms[1]).filter(n=>['input','select','button'].includes(n.tag)).every(n=>n.disabled));
 });
 
@@ -116,4 +118,23 @@ test('空白值不能提交；SSE产生的新表单可用且模型文字不作�
   assert.equal(all(form).filter(n=>n.tag==='img').length,0);
   input.value='  '; await form.events.submit({preventDefault(){}});
   assert.equal(a.requests.length,1); assert.ok(input.validationMessage);
+});
+
+
+test('纠错和确认原因回显在输入框旁，保留原值且同key仍可修改提交', async () => {
+  const fields=[{key:'count',label:'期数',type:'number',reason:'invalid',message:'期数需要1～100，您填写的是200',value:'200',min:1,max:100},
+    {key:'base',label:'币种',type:'select',reason:'confirm',message:'BTC和ETH需要选择一个 <img src=x>',value:'BTC和ETH',options:['BTC','ETH']}];
+  const a=await tab('current',[[['done',{turnId:'corrected',busy:false}]]],
+    [{question:'补充期数200、币种BTC和ETH',answer:'请修改或确认',turnId:'current',clarify:fields}]);
+  const form=all(a.elements.messages).find(n=>n.tag==='form');
+  const inputs=all(form).filter(n=>['input','select'].includes(n.tag));
+  assert.equal(inputs[0].value,'200'); assert.equal(inputs[0]['aria-invalid'],'true');
+  assert.ok(all(form).some(n=>n.textContent.includes('您填写的是200')));
+  assert.ok(all(form).some(n=>n.textContent==='上次填写：BTC和ETH'));
+  assert.ok(all(form).some(n=>n.textContent.includes('BTC和ETH需要选择一个 <img src=x>')));
+  assert.ok(!all(form).some(n=>n.tag==='img'));
+  inputs[0].value='10';inputs[0].events.input();inputs[1].value='BTC';
+  await form.events.submit({preventDefault(){}});await tick();
+  assert.equal(a.requests.length,1);
+  assert.deepEqual(a.requests[0].clarificationAnswers,{count:'10',base:'BTC'});
 });

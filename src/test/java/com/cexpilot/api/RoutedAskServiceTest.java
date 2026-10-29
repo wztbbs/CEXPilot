@@ -91,17 +91,21 @@ class RoutedAskServiceTest {
     @Test void querySseDoneIncludesClarificationFields() throws Exception {
         var ask=mock(AskService.class);
         var payload=json.createObjectNode().put("status","NEEDS_CLARIFICATION");
-        payload.putArray("clarify").addObject().put("key","base").put("label","币种").put("type","text");
+        payload.putArray("clarify").addObject().put("key","base").put("label","币种").put("type","text").put("reason","confirm").put("message","您填写了两个币种，请确认一个").put("value","BTC和ETH");
         var response=new AskResponse("c","trace","请补充币种",null,0,0,1,"turn",false,1,0,0,0,0,0,"query",payload,1);
-        when(ask.ask(any(),any(),any(),any(),any(),any())).thenAnswer(inv->{
+        when(ask.ask(any(),any(),any(),any(),any(),any(),any())).thenAnswer(inv->{
+            assertEquals(java.util.Map.of("base","BTC和ETH"), inv.getArgument(6));
             AskService.AskStreamListener listener=inv.getArgument(5);
             listener.onMeta("c","trace","turn"); listener.onDelta("请补充币种"); listener.onDone(response); return response;
         });
         var mvc=MockMvcBuilders.standaloneSetup(new AskController(ask,new SyncTaskExecutor())).build();
-        var pending=mvc.perform(post("/api/ask/stream").contentType("application/json").content("{\"question\":\"比较Funding\"}"))
+        var pending=mvc.perform(post("/api/ask/stream").contentType("application/json").content("{\"question\":\"比较Funding\",\"parentTurnId\":\"parent\",\"clarificationAnswers\":{\"base\":\"BTC和ETH\"}}"))
                 .andExpect(request().asyncStarted()).andReturn();
-        var body=mvc.perform(asyncDispatch(pending)).andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        var body=mvc.perform(asyncDispatch(pending)).andExpect(status().isOk()).andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
         assertTrue(body.contains("\"clarify\":[{\"key\":\"base\""));
+        assertTrue(body.contains("\"reason\":\"confirm\""));
+        assertTrue(body.contains("您填写了两个币种，请确认一个"));
+        assertTrue(body.contains("BTC和ETH"));
     }
 
     @Test void sseDoneCarriesRouteAndPlanningPayload() throws Exception {

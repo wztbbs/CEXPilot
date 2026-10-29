@@ -13,12 +13,28 @@ import java.util.List;
 public record TaskState(String frameId, String conversationId, long version, String originQuestion,
                         long firstQueryNo, long lastQueryNo, String turnId, String status,
                         String requestTime, String timezone, QueryFrame frame, QueryFrame successfulFrame, JsonNode logicalPlan,
-                        List<Dialogue> dialogue) {
+                        List<Dialogue> dialogue, List<ClarificationAnswer> clarificationAnswers) {
     private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    public TaskState(String frameId, String conversationId, long version, String originQuestion,
+            long firstQueryNo, long lastQueryNo, String turnId, String status, String requestTime, String timezone,
+            QueryFrame frame, QueryFrame successfulFrame, JsonNode logicalPlan, List<Dialogue> dialogue) {
+        this(frameId, conversationId, version, originQuestion, firstQueryNo, lastQueryNo, turnId, status,
+                requestTime, timezone, frame, successfulFrame, logicalPlan, dialogue, List.of());
+    }
+
+    public TaskState withClarificationAnswers(List<ClarificationAnswer> submitted) {
+        var merged = new java.util.LinkedHashMap<String, ClarificationAnswer>();
+        clarificationAnswers.forEach(a -> merged.put(a.key(), a));
+        submitted.forEach(a -> merged.put(a.key(), a));
+        return new TaskState(frameId, conversationId, version, originQuestion, firstQueryNo, lastQueryNo,
+                turnId, status, requestTime, timezone, frame, successfulFrame, logicalPlan, dialogue, List.copyOf(merged.values()));
+    }
 
     public record Dialogue(String turnId, String question, String response) {}
 
     public TaskState {
+        clarificationAnswers = clarificationAnswers == null ? List.of() : List.copyOf(clarificationAnswers);
         dialogue = dialogue == null ? List.of() : List.copyOf(dialogue);
         if (logicalPlan != null && logicalPlan.isNull()) logicalPlan = null;
     }
@@ -55,12 +71,13 @@ public record TaskState(String frameId, String conversationId, long version, Str
         }
         return new TaskState(frameId, conversationId, version, origin,
                 base == null ? turn.queryNo() : base.firstQueryNo(), turn.queryNo(), turn.turnId(), taskStatus,
-                requestTime.toString(), zone == null ? null : zone.getId(), effective, success, logical, chain);
+                requestTime.toString(), zone == null ? null : zone.getId(), effective, success, logical, chain,
+                base == null || "SUCCEEDED".equals(taskStatus) ? List.of() : base.clarificationAnswers());
     }
 
     public TaskState withSuccessfulFrame(QueryFrame success) {
         return new TaskState(frameId, conversationId, version, originQuestion, firstQueryNo, lastQueryNo,
-                turnId, status, requestTime, timezone, frame, success, logicalPlan, dialogue);
+                turnId, status, requestTime, timezone, frame, success, logicalPlan, dialogue, clarificationAnswers);
     }
 
     public String toJson() {

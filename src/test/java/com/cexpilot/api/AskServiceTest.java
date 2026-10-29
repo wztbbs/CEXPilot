@@ -89,6 +89,30 @@ class AskServiceTest {
     }
 
     @Test
+    void 表单回执按key传入规划且保留未验证的原值用于纠错() throws Exception {
+        var payload = MAPPER.readTree("{\"status\":\"NEEDS_CLARIFICATION\",\"clarify\":[{\"key\":\"count\",\"label\":\"期数\",\"type\":\"number\",\"min\":1,\"max\":100}]}");
+        when(conversation.history("conv-1")).thenReturn(List.of(new com.cexpilot.conversation.QueryRecord(2,"比较Funding","请补期数","trace",null,"parent","NEEDS_CLARIFICATION","query",payload)));
+        var pending = com.cexpilot.conversation.TaskState.complete("frame","conv-1",1,null,
+                new ConversationService.TurnHandle(2,"parent",1),"比较Funding","NEEDS_CLARIFICATION","请补期数",null,null,T0,ZoneOffset.UTC);
+        when(contextService.buildPlannerInput("conv-1")).thenReturn(new com.cexpilot.conversation.PlannerInput("",null,List.of(),0,List.of(),pending));
+        var correction = MAPPER.readTree("{\"status\":\"NEEDS_CLARIFICATION\",\"clarify\":[{\"key\":\"count\",\"label\":\"期数\",\"type\":\"number\",\"reason\":\"invalid\",\"message\":\"最多100期，您填写200\",\"value\":\"200\"}]}");
+        when(runtime.execute(anyString(),anyString(),anyString(),any(),any(),any(),any(),any(),any(),any())).thenAnswer(inv -> {
+            com.cexpilot.conversation.PlannerInput input = inv.getArgument(8);
+            assertTrue(input.clarificationSubmission());
+            assertEquals("200",input.currentTask().clarificationAnswers().get(0).value());
+            assertTrue(input.contextText().contains("count（期数）=200"));
+            return new ExecutionResult("最多100期，您填写200",null,0,0,10,5,"NEEDS_CLARIFICATION","最多100期，您填写200")
+                    .withTaskScope(com.cexpilot.conversation.TaskScope.current(input.currentTask())).withAgent("query",correction);
+        });
+        when(conversation.finishQueryTurn(any(),any(),any(),any(),any(),any(),any(),any(),any(),any(),any(),any(),any()))
+                .thenReturn(new ConversationService.TaskCommit(true,"frame",2,null));
+        var response = service.ask("conv-1","补充本轮查询条件：期数200","v1",null,"parent",null,java.util.Map.of("count","200"));
+        assertEquals("invalid",response.clarify().get(0).reason());
+        assertTrue(response.clarify().get(0).message().contains("最多100期"));
+        assertEquals("200",response.clarify().get(0).value());
+    }
+
+    @Test
     void 无路由兼容入口也一起提交澄清表单和任务() {
         var payload = MAPPER.createObjectNode().put("status", "NEEDS_CLARIFICATION");
         payload.putArray("clarify").addObject().put("key", "base").put("label", "币种").put("type", "text");

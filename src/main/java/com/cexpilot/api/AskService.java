@@ -114,6 +114,11 @@ public class AskService {
      */
     public AskResponse ask(String conversationId, String question, String visitorId, String timezone,
                            String parentTurnId, AskStreamListener listener) {
+        return ask(conversationId, question, visitorId, timezone, parentTurnId, listener, java.util.Map.of());
+    }
+
+    public AskResponse ask(String conversationId, String question, String visitorId, String timezone,
+                           String parentTurnId, AskStreamListener listener, java.util.Map<String, String> answers) {
         if (question == null || question.isBlank()) {
             throw new IllegalArgumentException("question 不能为空");
         }
@@ -124,6 +129,9 @@ public class AskService {
         // 1. 落定对话：conversationId 为空则新建对话；不为空则沿用（多轮追问的载体）。
         //    对话只保留最近几个 Query，不做长期记忆。
         String resolvedConversationId = conversation.getOrCreateConversation(conversationId, question, visitorId);
+
+        var submittedAnswers = answers == null || answers.isEmpty() ? java.util.List.<com.cexpilot.conversation.ClarificationAnswer>of()
+                : com.cexpilot.conversation.ClarificationAnswer.validate(parentTurnId, conversation.history(resolvedConversationId), answers);
 
         // 2. 登记轮次（短事务）：原子分配 query_no + turnId、占用会话执行权、写入 RUNNING 行。
         //    同会话已有未过期的执行中请求时返回明确的忙碌响应（首期串行约束），不建 trace、不执行 DAG。
@@ -158,7 +166,7 @@ public class AskService {
             //    Planner 侧用分层结构化上下文（活动 frame + 待补任务/失败尝试 + 带时间的近期问答）。
             String conversationContext = conversation.renderContext(resolvedConversationId);
             com.cexpilot.conversation.PlannerInput plannerInput =
-                    contextService.buildPlannerInput(resolvedConversationId);
+                    contextService.buildPlannerInput(resolvedConversationId).withClarificationAnswers(submittedAnswers);
             taskScopeRef.set(com.cexpilot.conversation.TaskScope.current(plannerInput.currentTask()));
 
             // 5. 开启 trace：写入一条 RUNNING 记录。traceId 是本次问答的全局标识——

@@ -6,5 +6,9 @@ package com.cexpilot.api;
  * @param timezone       可选；IANA 时区（如 Asia/Shanghai），作为本次请求的时间消解上下文，不传由服务端按默认口径处理
  * @param parentTurnId   页面看到的最近完成轮次；不匹配时拒绝执行。空串表示没有历史，null 兼容旧客户端
  */
-public record AskRequest(String conversationId, String question, String timezone, String parentTurnId) {
+public record AskRequest(String conversationId, String question, String timezone, String parentTurnId,
+                         java.util.Map<String, String> clarificationAnswers) {
+    public AskRequest(String conversationId, String question, String timezone, String parentTurnId) {
+        this(conversationId, question, timezone, parentTurnId, null);
+    }
 }

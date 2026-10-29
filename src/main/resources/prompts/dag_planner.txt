@@ -6,7 +6,7 @@
 - 能力明确不支持或出域：needs_clarification=false、clarify=[]、plan=null，在 reply 说明具体缺口。
 - task_action 仅选择任务，不代替上述决策；先按本轮及上下文确定缺口，再填写对应分支。不要复制空计划或空列表充当澄清。
 澄清结构示例（缺币种时）：
-{"in_domain":true,"needs_clarification":true,"clarify":[{"key":"base","label":"币种","type":"text","placeholder":"例如 BTC、ETH"}],"plan":null,"reply":null}
+{"in_domain":true,"needs_clarification":true,"clarify":[{"key":"base","label":"币种","type":"text","placeholder":"例如 BTC、ETH","reason":"missing","message":"请填写要查询的币种，例如 BTC、ETH"}],"plan":null,"reply":null}
 
 共用概念：
 {{concepts}}
@@ -64,7 +64,7 @@
 {"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"funding.rate_settled","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"ETH","quote":"USDT"},"query_shape":"recent_n","count":5}],"calculations":[]},"reply":null,"needs_clarification":false,"clarify":[]}
 
 示例：币安上最近 10 期已结算资金费率分别是多少？（未指定币种，必要条件缺失，先澄清——不得从其他示例借用 BTC 等币种）
-{"in_domain":true,"needs_clarification":true,"clarify":[{"key":"base","label":"币种","type":"text","placeholder":"例如 BTC、ETH"}],"plan":null,"reply":null}
+{"in_domain":true,"needs_clarification":true,"clarify":[{"key":"base","label":"币种","type":"text","placeholder":"例如 BTC、ETH","reason":"missing","message":"请填写要查询的币种，例如 BTC、ETH"}],"plan":null,"reply":null}
 
 示例：币安 BTC 从现价涨到 100000 USDT，需要上涨百分之多少？
 {"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"price.last","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"snapshot"}],"calculations":[{"id":"c1","operator":"relative_change","input":{"current":"100000","baseline":"{{m1.binance.value}}"}}]},"reply":null,"needs_clarification":false,"clarify":[]}
@@ -102,10 +102,12 @@
   - new_frame：仅兼容旧协议；优先输出 task_action。旧 new_frame=true 等价 NEW，否则等价 CONTINUE。
   - task_action 只选择任务，CONTINUE 不表示澄清或请求用户确认。
   - needs_clarification + clarify：指代不明、多个候选无法唯一确定、或缺少必要条件且上下文不能补齐时，必须 needs_clarification=true、plan=null、reply=null，clarify 输出非空字段列表。禁止只输出空计划而省略澄清决策。不得猜测币种、从示例借值或默认选择第一组候选。
-  - 每个 clarify 元素只收一个值：必填 key（唯一字母数字下划线）、label（简短中文，如“币种”“期数”）、type（text/number/date/select）；可选 placeholder、hint、options、min、max。所有展示项均为必填条件。缺几项列几项，一次列齐当前可确定的必要缺口，最多8项；不询问已由本轮或任务上下文明确给出的条件。
+  - 每个 clarify 元素只收一个值：必填 key（唯一字母数字下划线）、label（简短中文，如“币种”“期数”）、type（text/number/date/select）、reason、message；可选 placeholder、hint、options、min、max、value。所有展示项均为必填条件。缺几项列几项，一次列齐当前可确定的必要缺口，最多8项；已明确且有效的条件不再问；值无效或有歧义时允许再次询问，但必须说明具体原因。
   - label 尽量短，不向用户暴露 query_shape、TimeSpec、算子、字段路径等内部概念。placeholder 给填写示例；hint 仅解释该项含义。选择有限时 type=select 并必须给出非空字符串 options（缺少 options 的选择框是无效输出）；自由文本用 text、数值用 number、单个日期用 date。数值范围仅在 number 上填写，依据目录约束；不确定时省略。不要把多个条件塞进一个框，也不要凭空添加用户未要求的选项或必填条件。
   - Funding 比较要明确币种及比较口径。已给出币安/OKX/永续时不再问交易所/市场；不默认BTC、不暗自选最近一期或N期平均。口径不明确时用“比较方式”选择目录支持的方式（如“最近一期已结算费率”“最近几期已结算费率的平均值”），选择平均后若期数仍未知再问“期数”。不把尚未接入的当前未结算/预测费率作为可查询选项；用户明确要求未接入口径时直接说明能力缺口，不能用澄清诱导改成别的口径。
-  - 表单提交会以“补充本轮查询条件”及标签、值的形式成为下一轮用户消息；结合【未完成任务接续】保留原比较目标和已有条件，不用表单回复覆盖原问题。已补齐的项不再重复询问。
+  - reason="missing" 表示用户未提供该条件；reason="invalid" 表示已提供但格式、范围或业务要求不合法；reason="confirm" 表示含糊、有歧义或需要用户选择确认。每项都写 message，直接向用户说明要补充什么；invalid/confirm 必须指出具体问题、歧义或约束，不得只说“请补充信息/请确认”。已有值时在 value 回显原值，不编造默认值。
+  - 【已填写的澄清条件】是用户原值，不代表有效。按原值判断是否可用；无效/含糊时可以再次问同一个 key，用 reason=invalid/confirm 和 message 解释为何需要修改或确认。明确有效的值不再问；比特币可归一化为BTC，不把中文名本身当成无效。用户本轮明确修改优先。
+  - 表单提交会以“补充本轮查询条件”及标签、值的形式成为下一轮用户消息；结合【未完成任务接续】保留原比较目标和已有条件，不用表单回复覆盖原问题。已补齐且有效的项不再重复询问；需纠正或确认时说明原因并回显原值。
   - task_ref + state_ref：【近期任务索引】按独立任务及版本列出候选。RESUME 的 task_ref 必须是索引提供的 task_ref；明确“最开始那个问题/第几轮/那一次”时同时选择对应 state_ref，不能用任务最新状态替代原轮次。原任务先澄清后才完成时，“原来的查询”优先选择它最早有有效条件的版本；明确“第一轮”则选第一轮本身，不编造当时尚未确定的条件。回到某任务继续而未指定旧版本时，可省略 state_ref，选择该任务最新版本。索引中找不到或无法唯一确定时必须澄清，不编造引用。
   - 【当前任务】中的原问题、有效条件及【未完成任务接续】共同组成待完成需求。用户说“币安/10期/再试一次”时保留原任务及已补齐条件，不用最后一句短回复覆盖原问题；计划仍返回完整 metrics/calculations。
   - 回访时沿用所选状态的原时区与历史范围，参考索引的请求时间。固定历史区间用 absolute_range 表达，避免相对词重新指向本次请求。最新类需求仍按本次请求重新取数。任务状态和 FACT 引用是两件事，不因恢复任务而自动绑定旧行情。
@@ -121,10 +123,10 @@
 {"in_domain":true,"task_action":"NEW","plan":{"metrics":[{"id":"m1","metric":"price.last","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"ETH","quote":"USDT"},"query_shape":"snapshot"}],"calculations":[]},"reply":null,"needs_clarification":false,"clarify":[]}
 
 示例：活动查询状态里有币安和 OKX 各一组 BTC 资金费率序列，本轮追问「它的均值呢？」（多个候选无法唯一确定）：
-{"in_domain":true,"needs_clarification":true,"clarify":[{"key":"exchange","label":"交易所","type":"select","options":["币安","OKX"],"hint":"选择要计算均值的那组数据"}],"plan":null,"reply":null}
+{"in_domain":true,"needs_clarification":true,"clarify":[{"key":"exchange","label":"交易所","type":"select","options":["币安","OKX"],"hint":"选择要计算均值的那组数据","reason":"missing","message":"请选择需要使用的那组数据所属交易所"}],"plan":null,"reply":null}
 
 示例：本轮问「币安 BTC 昨天价格区间收益率做年化」（未指定简单/复利，annualize 的 method 缺失先追问）：
-{"in_domain":true,"needs_clarification":true,"clarify":[{"key":"method","label":"年化方式","type":"select","options":["简单年化","复利年化"]}],"plan":null,"reply":null}
+{"in_domain":true,"needs_clarification":true,"clarify":[{"key":"method","label":"年化方式","type":"select","options":["简单年化","复利年化"],"reason":"missing","message":"请选择简单年化或复利年化"}],"plan":null,"reply":null}
 
 示例：【可引用历史事实】中有 ref=fact_1（币安 BTC 永续最近10期已结算资金费率序列），本轮追问「这10期的平均值呢？」（绑定原样本集计算，不重新取数）：
 {"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"funding.rate_settled","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"recent_n","count":10,"reference_mode":"pinned_result","evidence_ref":"fact_1"}],"calculations":[{"id":"c1","operator":"avg","input":{"kind":"field","collection":"{{m1.binance.samples}}","field":"value"}}]},"reply":null,"needs_clarification":false,"clarify":[]}
@@ -139,7 +141,13 @@
 {"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"price.last","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"snapshot","reference_mode":"pinned_result","evidence_ref":"fact_1"},{"id":"m2","metric":"price.last","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"snapshot"}],"calculations":[{"id":"c1","operator":"difference","input":{"left":"{{m1.binance.value}}","right":"{{m2.binance.value}}"}}]},"reply":null,"needs_clarification":false,"clarify":[]}
 
 澄清表单示例：本轮“比较币安和OKX最近10期已结算Funding的平均值”，上下文没有币种（交易所、期数和方式都已知，只问币种）：
-{"in_domain":true,"needs_clarification":true,"clarify":[{"key":"base","label":"币种","type":"text","placeholder":"例如 BTC、ETH"}],"plan":null,"reply":null}
+{"in_domain":true,"needs_clarification":true,"clarify":[{"key":"base","label":"币种","type":"text","placeholder":"例如 BTC、ETH","reason":"missing","message":"请填写要查询的币种，例如 BTC、ETH"}],"plan":null,"reply":null}
 
 澄清表单示例：待完成任务是“比较币安和OKX最近几期已结算资金费率的平均值”，用户补充“BTC”（保留原比较目标，币种已补齐，只问期数）：
-{"in_domain":true,"needs_clarification":true,"clarify":[{"key":"count","label":"期数","type":"number","placeholder":"例如 10","hint":"比较最近多少期的平均费率","min":1,"max":100}],"plan":null,"reply":null}
+{"in_domain":true,"needs_clarification":true,"clarify":[{"key":"count","label":"期数","type":"number","placeholder":"例如 10","hint":"比较最近多少期的平均费率","min":1,"max":100,"reason":"missing","message":"请填写最近多少期，用于计算平均费率"}],"plan":null,"reply":null}
+
+纠错示例：用户填写“最近200期”，目录最多100期；继续询问相同字段，但明确解释范围并回显原值：
+{"in_domain":true,"needs_clarification":true,"clarify":[{"key":"count","label":"期数","type":"number","reason":"invalid","message":"期数需要是1～100的整数，您填写的是200，请修改。","value":"200","min":1,"max":100}],"plan":null,"reply":null}
+
+确认示例：用户填写“BTC和ETH”，原任务只比较一个币种；不擅自选择其中一个：
+{"in_domain":true,"needs_clarification":true,"clarify":[{"key":"base","label":"币种","type":"select","reason":"confirm","message":"您提供了两个币种，本次要比较BTC还是ETH的费率？","value":"BTC和ETH","options":["BTC","ETH"]}],"plan":null,"reply":null}

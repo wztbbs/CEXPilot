@@ -106,6 +106,7 @@ public class ConversationContextService {
                 .append("，version=").append(state.version()).append("，status=").append(state.status())
                 .append("，请求时间=").append(state.requestTime()).append("，时区=").append(state.timezone())
                 .append("，原始问题：「").append(state.originQuestion()).append("」\n");
+        out.append(ClarificationAnswer.render(state.clarificationAnswers()));
         if (state.logicalPlan() != null && (state.frame() == null || !state.dialogue().isEmpty())) {
             out.append("已保存有效计划（按本轮补充继续规划）：").append(storedPlanForContext(state, evidence)).append('\n');
         }

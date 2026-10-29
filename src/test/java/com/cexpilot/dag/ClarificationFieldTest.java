@@ -48,6 +48,23 @@ class ClarificationFieldTest {
                 .getMessage().contains("key 重复: comparison"));
     }
 
+    @Test void reasonsArePreservedAndCorrectiveItemsMustExplainWhy() throws Exception {
+        var fields = ClarificationField.parse(json.readTree("""
+                [{"key":"count","label":"期数","type":"number","reason":"invalid",
+                  "message":"期数需要1～100，您填写的是200","value":200,"min":1,"max":100},
+                 {"key":"base","label":"币种","type":"select","reason":"confirm",
+                  "message":"您填写了两个币种，请选择本次比较的币种","value":"BTC和ETH","options":["BTC","ETH"]}]
+                """));
+        assertEquals("invalid", fields.get(0).reason());
+        assertEquals("200", fields.get(0).value());
+        assertTrue(ClarificationField.question(fields).contains("您填写的是200"));
+        assertEquals(fields, ClarificationField.parse(json.valueToTree(fields)));
+        for (String reason : java.util.List.of("invalid", "confirm", "unknown")) {
+            var node = json.readTree("[{\"key\":\"x\",\"label\":\"字段\",\"type\":\"text\",\"reason\":\"" + reason + "\"}]");
+            assertThrows(IllegalArgumentException.class, () -> ClarificationField.parse(node));
+        }
+    }
+
     @Test void duplicateKeysAndOversizedListsAreRejected() throws Exception {
         var item = json.readTree("{\"key\":\"x\",\"label\":\"币种\",\"type\":\"text\"}");
         var list = json.createArrayNode().add(item).add(item);

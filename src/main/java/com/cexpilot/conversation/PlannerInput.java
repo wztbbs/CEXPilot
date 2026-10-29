@@ -15,7 +15,22 @@ import java.util.List;
  */
 public record PlannerInput(String contextText, QueryFrame activeFrame,
                            List<EvidenceAssembler.Entry> evidence, int textHistoryCount,
-                           List<TaskSnapshot> tasks, TaskState currentTask) {
+                           List<TaskSnapshot> tasks, TaskState currentTask, boolean clarificationSubmission) {
+
+    public PlannerInput(String contextText, QueryFrame activeFrame, List<EvidenceAssembler.Entry> evidence,
+            int textHistoryCount, List<TaskSnapshot> tasks, TaskState currentTask) {
+        this(contextText, activeFrame, evidence, textHistoryCount, tasks, currentTask, false);
+    }
+
+    public PlannerInput withClarificationAnswers(List<ClarificationAnswer> submitted) {
+        if (submitted.isEmpty()) return this;
+        if (currentTask == null || !"NEEDS_CLARIFICATION".equals(currentTask.status()))
+            throw new IllegalArgumentException("当前任务没有待补表单，请刷新历史");
+        var next = currentTask.withClarificationAnswers(submitted);
+        return new PlannerInput(contextText.replace(ClarificationAnswer.render(currentTask.clarificationAnswers()), "")
+                        + ClarificationAnswer.render(next.clarificationAnswers()), activeFrame,
+                evidence, textHistoryCount, tasks, next, true);
+    }
 
     public PlannerInput(String contextText, QueryFrame activeFrame, List<EvidenceAssembler.Entry> evidence,
                         int textHistoryCount, List<TaskSnapshot> tasks) {

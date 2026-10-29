@@ -89,6 +89,10 @@
   .clarification-form small { display: block; margin-top: 5px; color: #666; font-size: 12px; }
   .clarification-form button { min-height: 42px; padding: 10px 18px; border: 0; border-radius: 8px; background: #1f1f1f; color: white; cursor: pointer; }
   .clarification-form :disabled { opacity: .5; cursor: default; }
+  .clarification-form .clarification-reason { margin: 6px 0 0; font-size: 13px; line-height: 1.6; }
+  .clarification-form .clarification-reason.invalid { color: #b42318; }
+  .clarification-form .clarification-reason.confirm { color: #855512; }
+  .clarification-form [aria-invalid="true"] { border-color: #b42318; }
   .clarification-form p { margin-top: 10px; font-size: 12px; color: #666; }
 
   /* 加载动画 */
@@ -290,7 +294,7 @@
     var form = window.ClarificationForm.render(div, fields, {
       isCurrent: function () { return !!turnId && turnId === parentTurnId && !contextConflict; },
       canSubmit: function () { return !pending && !historyLoading && !contextConflict; },
-      onSubmit: function (question) { return send(question); }
+      onSubmit: function (question, answers) { return send(question, answers); }
     });
     if (form) clarificationForms.push(form);
   }
@@ -328,7 +332,7 @@
     return div;
   }
 
-  function send(supplement) {
+  function send(supplement, answers) {
     var question = typeof supplement === 'string' ? supplement.trim() : textarea.value.trim();
     if (!question || pending || historyLoading || contextConflict) return Promise.resolve(false);
 
@@ -421,6 +425,7 @@
         conversationId: conversationId,
         parentTurnId: parentTurnId,
         question: question,
+        clarificationAnswers: answers || undefined,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || null
       })
     })

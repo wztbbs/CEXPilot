@@ -11,8 +11,19 @@ import java.util.List;
 /** 面向用户的单个待补条件；不携带执行指令，填写结果仍经下一轮规划和计划校验。 */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ClarificationField(String key, String label, String type, String placeholder,
-                                 String hint, List<String> options, BigDecimal min, BigDecimal max) {
+                                 String hint, List<String> options, BigDecimal min, BigDecimal max,
+                                 String reason, String message, String value) {
+    public ClarificationField(String key, String label, String type, String placeholder, String hint,
+            List<String> options, BigDecimal min, BigDecimal max) {
+        this(key, label, type, placeholder, hint, options, min, max, "missing", null, null);
+    }
+
+    public ClarificationField withValue(String previous) {
+        return new ClarificationField(key, label, type, placeholder, hint, options, min, max, reason, message, previous);
+    }
+
     public ClarificationField {
+        reason = reason == null ? "missing" : reason;
         options = options == null ? List.of() : List.copyOf(options);
         min = min == null ? null : min.stripTrailingZeros();
         max = max == null ? null : max.stripTrailingZeros();
@@ -52,8 +63,17 @@ public record ClarificationField(String key, String label, String type, String p
             if ((min != null || max != null) && !"number".equals(type)
                     || min != null && max != null && min.compareTo(max) > 0)
                 throw new IllegalArgumentException("澄清数值范围不合法");
+            String reason = text(item, "reason", 12, false);
+            if (reason == null) reason = "missing"; // 旧字段兼容
+            if (!List.of("missing", "invalid", "confirm").contains(reason))
+                throw new IllegalArgumentException("不支持的澄清原因: " + reason);
+            String message = text(item, "message", 200, !"missing".equals(reason));
+            JsonNode previous = item.path("value");
+            String value = previous.isMissingNode() || previous.isNull() ? null : previous.asText();
+            if (value != null && (!previous.isTextual() && !previous.isNumber() || value.length() > 200))
+                throw new IllegalArgumentException("澄清回显值必须是简短文字或数值");
             fields.add(new ClarificationField(key, label, type, text(item, "placeholder", 80, false),
-                    text(item, "hint", 120, false), options, min, max));
+                    text(item, "hint", 120, false), options, min, max, reason, message, value));
         }
         return List.copyOf(fields);
     }
@@ -81,7 +101,8 @@ public record ClarificationField(String key, String label, String type, String p
     }
 
     public static String question(List<ClarificationField> fields) {
-        return "请补充以下信息：" + fields.stream().map(f -> f.label()
-                + (f.hint() == null ? "" : "（" + f.hint() + "）")).collect(java.util.stream.Collectors.joining("；")) + "。";
+        return "请补充或确认以下信息：" + fields.stream().map(f -> f.label()
+                + (f.message() != null ? "：" + f.message() : f.hint() == null ? "" : "（" + f.hint() + "）"))
+                .collect(java.util.stream.Collectors.joining("；")) + "。";
     }
 }

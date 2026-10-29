@@ -163,6 +163,15 @@ public class DagPlanner {
                             com.cexpilot.conversation.QueryFrame activeFrame,
                             com.cexpilot.runtime.RequestContext requestContext, EvidenceBindingContext evidenceContext,
                             List<com.cexpilot.conversation.TaskSnapshot> taskIndex, TaskState currentTask) {
+        return plan(question, conversationContext, traceId, sink, activeFrame, requestContext, evidenceContext,
+                taskIndex, currentTask, false);
+    }
+
+    public PlanOutcome plan(String question, String conversationContext, String traceId, TraceSink sink,
+                            com.cexpilot.conversation.QueryFrame activeFrame,
+                            com.cexpilot.runtime.RequestContext requestContext, EvidenceBindingContext evidenceContext,
+                            List<com.cexpilot.conversation.TaskSnapshot> taskIndex, TaskState currentTask,
+                            boolean clarificationSubmission) {
         TaskScope lastScope = TaskScope.current(currentTask);
         int maxToolCalls = llmConfig.getMaxToolCalls();
         String systemPrompt = systemPrompt(conversationContext);
@@ -201,7 +210,10 @@ public class DagPlanner {
                 PlanDecision decision = repairingClarification
                         ? evaluateClarificationRepair(response.content(), traceId, sink).withScope(lastScope)
                         : evaluateResponse(response.content(), maxToolCalls, traceId, sink,
-                                activeFrame, requestContext, evidenceContext, attempt, pinnedRequirements, taskIndex, currentTask, question);
+                                activeFrame, requestContext, evidenceContext, attempt, pinnedRequirements, taskIndex, currentTask, question, clarificationSubmission);
+                if (clarificationSubmission && currentTask != null) {
+                    decision = withSubmittedValues(decision, currentTask.clarificationAnswers());
+                }
                 if (decision.taskScope() != null) lastScope = decision.taskScope();
                 if (decision.error() == null) {
                     if (!pinnedRequirements.isEmpty() && decision.plan() != null
@@ -331,6 +343,16 @@ public class DagPlanner {
         }
     }
 
+    /** 仅回显用户填写值，不按 key 删除澄清项：已有值也可能需要纠正或确认。 */
+    private PlanDecision withSubmittedValues(PlanDecision decision,
+            List<com.cexpilot.conversation.ClarificationAnswer> supplied) {
+        if (!decision.needsClarification() || decision.error() != null || decision.clarificationFields().isEmpty()) return decision;
+        var fields = decision.clarificationFields().stream().map(field -> supplied.stream()
+                .filter(a -> a.key().equals(field.key())).findFirst()
+                .map(a -> field.withValue(a.value())).orElse(field)).toList();
+        return PlanDecision.clarification(fields).withScope(decision.taskScope());
+    }
+
     private PlanDecision clarificationError(String traceId, TraceSink sink, String output, String error) {
         log.warn("澄清表单校验失败 traceId={} error={}", traceId, error);
         sink.record(new TraceEvent(traceId, "CLARIFY_INVALID", TRACE_NAME, null, output,
@@ -379,7 +401,7 @@ public class DagPlanner {
                                           com.cexpilot.runtime.RequestContext requestContext,
                                           EvidenceBindingContext evidenceContext,
                                           int attempt, PinnedRequirements pinnedRequirements,
-                                          List<com.cexpilot.conversation.TaskSnapshot> taskIndex, TaskState currentTask, String question) {
+                                          List<com.cexpilot.conversation.TaskSnapshot> taskIndex, TaskState currentTask, String question, boolean clarificationSubmission) {
         JsonNode parsed;
         try {
             parsed = LlmJson.parse(content);
@@ -398,7 +420,7 @@ public class DagPlanner {
             return PlanDecision.accepted(false, textOrNull(parsed.path("reply")), null);
         }
         return evaluateInDomainResponse(parsed, maxToolCalls, traceId, sink, activeFrame, requestContext,
-                evidenceContext, attempt, pinnedRequirements, taskIndex, currentTask, question);
+                evidenceContext, attempt, pinnedRequirements, taskIndex, currentTask, question, clarificationSubmission);
     }
 
     private PlanDecision evaluateInDomainResponse(JsonNode parsed, int maxToolCalls,
@@ -407,9 +429,9 @@ public class DagPlanner {
                                                   com.cexpilot.runtime.RequestContext requestContext,
                                                   EvidenceBindingContext evidenceContext,
                                                   int attempt, PinnedRequirements pinnedRequirements,
-                                                  List<com.cexpilot.conversation.TaskSnapshot> taskIndex, TaskState currentTask, String question) {
+                                                  List<com.cexpilot.conversation.TaskSnapshot> taskIndex, TaskState currentTask, String question, boolean clarificationSubmission) {
         TaskScope selected;
-        try { selected = selectTask(parsed, currentTask, taskIndex); }
+        try { selected = clarificationSubmission ? TaskScope.current(currentTask) : selectTask(parsed, currentTask, taskIndex); }
         catch (IllegalArgumentException e) {
             return PlanDecision.clarification(e.getMessage()).withScope(
                     currentTask != null && !currentTask.dialogue().isEmpty()

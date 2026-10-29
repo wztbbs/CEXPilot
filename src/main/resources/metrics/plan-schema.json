@@ -234,7 +234,9 @@
             "required": [
               "key",
               "label",
-              "type"
+              "type",
+              "reason",
+              "message"
             ],
             "properties": {
               "key": {
@@ -283,6 +285,29 @@
               },
               "max": {
                 "type": "null"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "missing",
+                  "invalid",
+                  "confirm"
+                ],
+                "description": "missing=尚未提供；invalid=值不合法；confirm=有歧义或需要用户确认"
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "description": "向用户说明需要填写、修改或确认什么；invalid/confirm 必须指出具体原因，不能只说请补充信息"
+              },
+              "value": {
+                "type": [
+                  "string",
+                  "number",
+                  "null"
+                ],
+                "description": "需修改或确认时回显用户已经提供的原值；不编造默认值"
               }
             }
           },
@@ -292,7 +317,9 @@
             "required": [
               "key",
               "label",
-              "type"
+              "type",
+              "reason",
+              "message"
             ],
             "properties": {
               "key": {
@@ -346,6 +373,29 @@
                   "number",
                   "null"
                 ]
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "missing",
+                  "invalid",
+                  "confirm"
+                ],
+                "description": "missing=尚未提供；invalid=值不合法；confirm=有歧义或需要用户确认"
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "description": "向用户说明需要填写、修改或确认什么；invalid/confirm 必须指出具体原因，不能只说请补充信息"
+              },
+              "value": {
+                "type": [
+                  "string",
+                  "number",
+                  "null"
+                ],
+                "description": "需修改或确认时回显用户已经提供的原值；不编造默认值"
               }
             }
           },
@@ -356,7 +406,9 @@
               "key",
               "label",
               "type",
-              "options"
+              "options",
+              "reason",
+              "message"
             ],
             "properties": {
               "key": {
@@ -408,6 +460,29 @@
               },
               "max": {
                 "type": "null"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "missing",
+                  "invalid",
+                  "confirm"
+                ],
+                "description": "missing=尚未提供；invalid=值不合法；confirm=有歧义或需要用户确认"
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "description": "向用户说明需要填写、修改或确认什么；invalid/confirm 必须指出具体原因，不能只说请补充信息"
+              },
+              "value": {
+                "type": [
+                  "string",
+                  "number",
+                  "null"
+                ],
+                "description": "需修改或确认时回显用户已经提供的原值；不编造默认值"
               }
             }
           }

@@ -7,11 +7,12 @@
     if (parent) parent.appendChild(node);
     return node;
   }
+  let idSequence = 0;
   function render(target, fields, config) {
     if (!Array.isArray(fields) || !fields.length) return null;
     const form = element('form', undefined, target);
     form.className = 'clarification-form';
-    element('strong', '补充查询信息', form);
+    element('strong', fields.some(f => f.reason === 'invalid' || f.reason === 'confirm') ? '请核对查询信息' : '补充查询信息', form);
     const controls = [];
     fields.forEach(field => {
       const label = element('label', undefined, form);
@@ -31,8 +32,25 @@
           if (field.max !== null && field.max !== undefined) input.max = field.max;
         } else if (input.type === 'text') input.maxLength = 200;
       }
+      if (field.value !== null && field.value !== undefined) {
+        const value = String(field.value);
+        const previous = element('small', '上次填写：' + value, label);
+        previous.className = 'clarification-previous';
+        if (field.type !== 'select' || (field.options || []).includes(value)) input.value = value;
+      }
+      if (field.message) {
+        const reason = ['invalid', 'confirm'].includes(field.reason) ? field.reason : 'missing';
+        const message = element('p', (reason === 'invalid' ? '需要修改：' : reason === 'confirm' ? '请确认：' : '') + field.message, label);
+        message.className = 'clarification-reason ' + reason;
+        message.id = 'clarification-reason-' + (++idSequence);
+        input.setAttribute('aria-describedby', message.id);
+        if (reason === 'invalid') input.setAttribute('aria-invalid', 'true');
+      }
       if (field.hint) element('small', field.hint, label);
-      input.addEventListener('input', () => input.setCustomValidity(''));
+      input.addEventListener('input', () => {
+        input.setCustomValidity('');
+        input.setAttribute('aria-invalid', 'false');
+      });
       controls.push({field, input});
     });
     const button = element('button', '继续查询', form);
@@ -57,11 +75,13 @@
       if (!form.reportValidity()) return;
       const question = '补充本轮查询条件：\n' + controls.map(item => item.field.label
         + (item.field.hint ? '（' + item.field.hint + '）' : '') + '：' + item.input.value.trim()).join('\n');
+      const answers = {};
+      controls.forEach(item => { answers[item.field.key] = item.input.value.trim(); });
       submitting = true;
       status.textContent = '';
       refresh();
       try {
-        submitted = (await config.onSubmit(question)) === true;
+        submitted = (await config.onSubmit(question, answers)) === true;
         if (!submitted) status.textContent = '尚未确认提交结果，请查看对话提示后继续。';
       } catch (error) {
         status.textContent = error.message || '提交失败，请稍后再试。';
