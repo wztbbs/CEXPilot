@@ -1,0 +1,32 @@
+# 启动时加载到内存；修改此文件后重启生效。支持用 HOME_SUGGESTIONS_LOCATION=file:/path/queries.yml 覆盖。
+queries:
+  - id: btc-price
+    category: 看行情
+    query: 币安 BTC/USDT 永续现在的最新成交价是多少？
+  - id: yesterday-turnover
+    category: 时间窗口
+    query: 币安 BTC/USDT 永续昨天一整天的成交额是多少？
+  - id: rolling-close-avg
+    category: 时间窗口
+    query: 币安 BTC/USDT 永续最近 6 小时内，按已完结的 1 小时 K 线计算，收盘价的等权平均是多少？
+  - id: funding-sum
+    category: 聚合比较
+    query: 币安 BTC/USDT 永续最近 10 期已结算资金费率加起来是多少？
+  - id: funding-extrema
+    category: 聚合比较
+    query: 币安 BTC/USDT 永续最近 10 期已结算资金费率，最高和最低分别是多少？
+  - id: funding-avg-compare
+    category: 聚合比较
+    query: 比较币安和 OKX 的 BTC/USDT 永续最近 3 期已结算资金费率均值，哪家更高？
+  - id: change-compare
+    category: 聚合比较
+    query: 比较币安和 OKX 的 BTC/USDT 永续昨天一整天的涨跌幅，哪家更高？
+  - id: turnover-difference
+    category: 聚合比较
+    query: 币安与 OKX 的 BTC/USDT 永续昨天一整天的成交额相差多少？按币安减 OKX 计算。
+  - id: turnover-ratio
+    category: 聚合比较
+    query: 币安 BTC/USDT 永续昨天一整天的成交额，是 OKX 同一合约同期成交额的多少倍？
+  - id: btc-monitor
+    category: 设监控
+    query: 监控币安 BTC/USDT 永续最近一小时跌幅超过 2%，发邮件提醒。
