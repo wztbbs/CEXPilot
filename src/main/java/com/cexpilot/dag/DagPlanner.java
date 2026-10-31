@@ -581,6 +581,7 @@ public class DagPlanner {
                 }
             }
             List<String> errors = validator.validate(plan, compiler.allowedTools(), maxToolCalls);
+            errors.addAll(new FundingAggregationValidator().check(question, compiled));
             if (errors.isEmpty()) {
                 // 继承对账：NEW 无基准，CONTINUE/RESUME 使用已选择的任务版本。漏报 changes 的第一次先修复教学；修复后仍不声明则
                 // shadow 放行——计划本身已通过全部校验，changes 只是审计元数据，不构成拒绝理由——
@@ -708,7 +709,7 @@ public class DagPlanner {
 
     private String planValidationError(List<String> errors) {
         return "plan 校验失败: " + String.join("; ", errors)
-                + "；仅使用指标目录与算子，引用格式为 {{指标组.交易所.value}} / {{计算ID.value}}，不要输出底层 Tool 节点";
+                + "；仅使用指标目录与算子；引用字段和算子输入结构必须符合对应上游输出契约，不要输出底层 Tool 节点";
     }
 
     private PlanDecision repairDecision(String traceId, TraceSink sink, String output, String error) {

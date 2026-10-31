@@ -34,6 +34,8 @@
 - id 用字母开头的字母数字下划线，最长40字符，不用 metric_ 前缀。按交易所展开后的取数节点加计算节点总数不超过 {{max_nodes}}，依赖深度不超过 {{max_depth}}。
 - 行情数值必须引用本轮指标事实，不能填猜测或历史回答中的数字。唯一例外：metric 组用 reference_mode="pinned_result" + evidence_ref 绑定【可引用历史事实】中的已验证快照后，其数值视同本轮事实。用户明确给出的常量可用于计算，包括 relative_change 的 current/baseline、compare/difference/ratio 的 left/right。引用必须是完整字符串，不能夹带算术或文本插值。
 - avg/sum/min/max 的 input：多个值用 {"kind":"values","values":[引用1,引用2]}；序列用 {"kind":"field","collection":"{{m1.binance.samples}}","field":"value"}。序列为对象列表，不传 columns。平均收盘价必须明确 K 线粒度；不把等权均值冒充时间/成交量加权均值。
+- 对完整最近N期或完整时间序列做聚合时，collection 必须绑定完整 samples，不用 samples.0.value 等单点冒充全体；明确要求“最高和最低”必须分别生成 max 和 min，不能漏一个。要求发生期次时使用 kind=field，使算子 item 保留时间。仅当用户明确指定某期、子集或两期比较时，才按该范围选择下标。
+- funding.rate_settled 的 recent_n 输出没有顶层 value。两所均值比较需要分别对各所 samples 做 avg，再 compare 两个均值；修复时不能仅把 values 中的 .value 换成 .samples，必须把整个 input 改为 kind=field、collection=对应 samples、field=value。
 - 比较或运算必须明确方向、指标、单位和基准。不同币的基础币数量不能直接求和比较；百分数差是百分点。需要复合计算时显式安排多层节点，不留给 Answer 自行算数。字段名不要混用：relative_change 必须使用 {current, baseline}；compare / difference / ratio 使用 {left, right}。
 
 时间用以下四种 TimeSpec，不自行计算时间戳。timezone 可省略或为 null，继承请求时区；用户指定时使用 IANA 时区。
@@ -44,6 +46,7 @@
 未完结数据和覆盖完整性由程序核对。粗粒度 K 线不能回答任意秒级边界的精确统计。
 
 能力判断：
+- 用户明确指定了目录未支持的 K 线粒度（如1m/1分钟）时，这是接入能力缺口，不是缺少必要条件。不生成“请改选粒度”的澄清表单，不自动替换为5m；仅有该查询且无可执行部分时 needs_clarification=false、clarify=[]、plan=null，reply 说明系统当前支持的粒度及本次未查询。多个独立查询可保留支持的部分并说明缺口；用户后续主动改用支持粒度时再正常规划。
 - 非加密货币领域 in_domain=false、plan=null，reply 简短说明范围。
 - 在域问题按指标目录逐项判断能力：所需指标、产品、交易所或查询形态没有对应支持时说明缺口，不把某一形态不支持扩大为整个业务领域不支持；缺必要业务输入且上下文不能补齐时追问。没有可执行部分时 plan=null。不要因为旧能力曾存在就编造指标。
 - 可回答时生成 plan。只要一个核心结果且无法产生它，不安排无意义的取数；多个独立问题可查询支持部分，并在 reply 说明其余缺口。核心结果口径不兼容（如不同币的基础币数量求和）时 plan=null、reply 说明不兼容原因，不得擅自改写任务形态——例如以分别列出两者数值代替求和。
@@ -76,6 +79,15 @@
 
 示例：币安 BTC-USDT 永续当前未结算资金费率是多少？同时列出最近10期已结算费率。
 {"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"funding.rate_settled","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"recent_n","count":10}],"calculations":[]},"reply":"可查询最近10期已结算费率；当前未结算资金费率尚未接入。","needs_clarification":false,"clarify":[]}
+
+示例：币安 BTC/USDT 永续最近10期已结算资金费率最高、最低分别是多少，发生在哪一期？
+{"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"funding.rate_settled","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"recent_n","count":10}],"calculations":[{"id":"c1","operator":"max","input":{"kind":"field","collection":"{{m1.binance.samples}}","field":"value"}},{"id":"c2","operator":"min","input":{"kind":"field","collection":"{{m1.binance.samples}}","field":"value"}}]},"reply":null,"needs_clarification":false,"clarify":[]}
+
+示例：比较币安和OKX的 BTC/USDT 永续最近3期已结算资金费率均值，哪家更高？
+{"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"funding.rate_settled","exchanges":["binance","okx"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"recent_n","count":3}],"calculations":[{"id":"c1","operator":"avg","input":{"kind":"field","collection":"{{m1.binance.samples}}","field":"value"}},{"id":"c2","operator":"avg","input":{"kind":"field","collection":"{{m1.okx.samples}}","field":"value"}},{"id":"c3","operator":"compare","input":{"left":"{{c1.value}}","right":"{{c2.value}}"}}]},"reply":null,"needs_clarification":false,"clarify":[]}
+
+示例：列出币安 BTC/USDT 现货最近一小时的1分钟K线。（明确要求未接入粒度，直接说明能力缺口，不追问改选）
+{"in_domain":true,"plan":null,"reply":"系统尚未接入1分钟K线，目前支持5分钟、15分钟和1小时粒度，本次未执行查询。","needs_clarification":false,"clarify":[]}
 
 示例：币安 BTC-USDT 永续过去一周资金费率均值是多少？
 {"in_domain":true,"plan":null,"reply":"系统尚未接入资金费率按时间窗口取数，无法计算过去一周的均值；最近N期样本不能替代一周。","needs_clarification":false,"clarify":[]}

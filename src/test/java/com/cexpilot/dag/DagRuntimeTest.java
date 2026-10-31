@@ -23,6 +23,17 @@ import static org.mockito.Mockito.*;
 
 /** 固定模型响应 + 真实编译器/调度器/算子，覆盖新主流程、时间上下文和流式返回。 */
 class DagRuntimeTest {
+    @Test void partialFundingExtremaNeverReachToolsOrAnswerEvenWhenAllRepairsStayInvalid() {
+        var m=metric("m1","funding.rate_settled","recent_n","binance");
+        m.remove(List.of("time","interval"));m.put("count",10);
+        var bad=plan(m);
+        calculation(bad,"c1","max","{\"kind\":\"values\",\"values\":[\"{{m1.binance.samples.0.value}}\"]}");
+        var output=envelope(bad);var llm=new Script(output,output,output);
+        var result=runtime(llm,registry(),provider((q,c)->{throw new AssertionError("无效极值计划不得取数");}))
+                .execute("币安最近10期资金费率最高、最低分别是多少，发生在哪一期？","","t",e->{});
+        assertEquals("FAILED",result.turnStatus());assertEquals(0,result.toolCallCount());
+        assertEquals(0,result.answerLlmCalls());
+    }
     @Test void answerKeepsAllFixedRulesAheadOfDynamicHistoryAndTime() {
         var store=new PromptStore(LOADER);
         String first=store.render("agent_system",Map.of("time_context","TIME_A","conversation_context","HISTORY_A"));

@@ -17,6 +17,24 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /** 新协议的解析、展开、修复和能力边界；模型为固定脚本，不请求网络。 */
 class DagPlannerTest {
+    @Test void firstH7RepairExplainsWholeSeriesInputInsteadOfSuggestingBlindFieldReplacement() {
+        var m=metric("m1","funding.rate_settled","recent_n","binance","okx");
+        m.remove(List.of("time","interval"));m.put("count",3);
+        var bad=plan(m);
+        calculation(bad,"a","avg","{\"kind\":\"values\",\"values\":[\"{{m1.binance.value}}\"]}");
+        calculation(bad,"b","avg","{\"kind\":\"values\",\"values\":[\"{{m1.okx.value}}\"]}");
+        calculation(bad,"c","compare","{\"left\":\"{{a.value}}\",\"right\":\"{{b.value}}\"}");
+        var fixed=bad.deepCopy();
+        ((ObjectNode)fixed.at("/calculations/0")).set("input",json("{\"kind\":\"field\",\"collection\":\"{{m1.binance.samples}}\",\"field\":\"value\"}"));
+        ((ObjectNode)fixed.at("/calculations/1")).set("input",json("{\"kind\":\"field\",\"collection\":\"{{m1.okx.samples}}\",\"field\":\"value\"}"));
+        var llm=new Script(envelope(bad),envelope(fixed));
+        var result=planner(llm,registry(),new DagConfig()).plan("比较币安和OKX最近3期资金费率均值","","t",e->{});
+        assertTrue(result.plan().isPresent(),result.lastError());assertEquals(2,result.llmCalls());
+        String feedback=llm.calls.get(1).get(3).content();
+        assertTrue(feedback.contains("没有顶层 value"));assertTrue(feedback.contains("替换整个 input"));
+        for(String exchange:List.of("binance","okx")) assertTrue(feedback.contains("\"collection\":\"{{m1."+exchange+".samples}}\""));
+        assertFalse(feedback.contains("引用格式为 {{指标组.交易所.value}}"));
+    }
     @Test void allPromptExamplesParseAndCompileWithoutRepair() throws Exception {
         String prompt = new org.springframework.core.io.ClassPathResource("prompts/dag_planner.txt")
                 .getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
@@ -45,7 +63,7 @@ class DagPlannerTest {
                 assertEquals("{{m1.binance.value}}", envelope.at("/plan/calculations/0/input/baseline").asText());
             }
         }
-        assertEquals(16, examples);
+        assertEquals(18, examples);
     }
 
     @ParameterizedTest @ValueSource(strings={
@@ -175,7 +193,7 @@ class DagPlannerTest {
             assertTrue(result.reply().contains("系统尚未接入"));
             examples++;
         }
-        assertEquals(2, examples);
+        assertEquals(3, examples);
     }
 
     @Test void fundingWindowRepairDoesNotSuggestGuessingCount() {

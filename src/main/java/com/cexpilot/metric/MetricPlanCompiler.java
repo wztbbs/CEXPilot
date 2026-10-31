@@ -301,6 +301,14 @@ public final class MetricPlanCompiler {
             for (PlanNode node : plan.nodes()) {
                 if (node.metric() != null) {
                     String logical = node.metric().groupId() + "." + node.metric().exchange();
+                    JsonNode sampleSchema = node.metric().outputSchema().path("properties").path("samples");
+                    if (error.contains("{{" + node.id() + ".data.value}}") && "array".equals(sampleSchema.path("type").asText())) {
+                        String collection = "{{" + logical + ".samples}}";
+                        message += "；" + logical + " 的输出是 samples 对象数组，没有顶层 value。"
+                                + "对该完整序列执行 avg/sum/min/max，必须替换整个 input，而非只改引用字段："
+                                + "{\"kind\":\"field\",\"collection\":\"" + collection + "\",\"field\":\"value\"}。"
+                                + "不要把 " + collection + " 放入 values 数组；单个元素引用仅用于用户明确指定期次的需求";
+                    }
                     message = message.replace("{{" + node.id() + ".data.", "{{" + logical + ".")
                             .replace(node.id() + " ", logical + " ");
                 } else {
