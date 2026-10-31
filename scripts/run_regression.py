@@ -1,546 +1,671 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""统一单轮 common 回归：40 条，含现货、时间窗口及九种算子。
+
+这是线上端到端测试，只有明确要求执行时才运行！导入模块和本地单测不发请求。
+用法：python3 scripts/run_regression.py [only:A1,E1] [group:E] [-w 2]
+      python3 scripts/run_regression.py --base http://localhost:8082 --list
+默认串行；筛选只执行所选 case，无额外冒烟/追问/监控/自动重试。
+产物：importants/回归测试/common-YYYY-MM-DD.md 与 raw/common-YYYY-MM-DD.json。
+同日运行前自动备份旧产物。全部 case 完成后，以开始/结束时间调用缓存统计接口。
 """
-CEXPilot 回归测试脚本
-
-用法：
-    python3 run_regression.py            # 跑全部用例，串行
-    python3 run_regression.py -w 3       # 3 并发（注意：并发会显著放大耗时，见报告）
-    python3 run_regression.py only:D10   # 只跑 tag 含 D10 的用例
-    python3 run_regression.py nosmoke    # 跳过冒烟断言（批量测试前的可用性前置检查）
-
-说明：
-- 接口：POST https://cex.hrscrm.net/api/ask  {"conversationId": "...", "question": "..."}
-- 批量测试前先做冒烟断言：一条基准 in-domain 查询必须 toolCalls>0 或给出具体拒答原因；
-  命中 planner 兜底话术「当前没有能够可靠回答此问题的查询计划」即 FAIL 并中止，
-  同时打印 planner 原始输出（全站性故障看 trace 比看 answer 快得多）。
-- 每条失败用例会打印 trace 链接 + planner 失败原因（trace 走 /api/trace_detail，含两次 LLM 的完整 prompt/response）
-- 内置断言基于 evidence 的结构指标走 identity（metric / exchange / query_shape）、计算走 operator，
-  不再按工具名匹配：工具名判定会随目录改版静默失效——条件永远不成立，用例一路假 PASS。
-    1) 各指标的绝对值域护栏（持仓量变化率 ±50%、资金费率 ratio ≤ 1 等）
-    2) 官方 24h 成交额 / 成交量必须与现价同量级（防止成交额单位错）
-    3) 浮点精度（小数位 >= 9 视为未收敛）
-    4) 答案日期年份异常 / 暴露裸毫秒时间戳（模型换算时间不可靠）
-    5) 时间序列必须带 candle_interval，否则模型会拿窗口标签当周期
-    6) 命中值域护栏的指标若拿不到数值也会报错，防止字段名改了而断言悄悄跳过
-- notices() 里的提示项不算失败，只打印，用于记录"已知但还没修"的问题
-  （目前一条：链上交易的 FACTS 里没有价格字段，模型却做了 ETH→USDT 折算，
-    只能凭记忆估价。注意 fee_eth 本身是对的，不是精度问题）
-- ARITH 组专门盯即兴算术与过度拒绝，带验算（v_pct_target / v_annualized）：
-    known_fail=True 的用例在修复前会稳定失败，计入"已知缺陷"而非回归失败，
-    一旦通过会提示"疑似已修复"，可据此判断改动是否真的生效。
-"""
-
+import argparse
 import json
+import os
 import re
+import shutil
 import sys
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation, localcontext
+from pathlib import Path
 
-URL = "https://cex.hrscrm.net/api/ask"
-TRACE = "https://cex.hrscrm.net/trace.html?id="
-# 新接口：除事件元数据外，还返回两次 LLM 调用的完整 prompt 与 response
-DETAIL = "https://cex.hrscrm.net/api/trace_detail/"
-
-# planner 未产出 plan 且未给出具体原因时的兜底话术：属系统故障信号，不该被用户看到。
-# 用正则而不是写死一整句——这句话改过版（旧「当前没有能够可靠回答此问题的查询计划」
-# → 现「暂时无法可靠生成查询计划，本次未执行查询」），写死就会静默失效，全站故障漏检。
-FALLBACK_REFUSAL_RE = re.compile(
-    r"(无法可靠生成查询计划|没有能够可靠回答此问题的查询计划|本次未执行查询)")
-
-
-def hit_fallback(ans):
-    return FALLBACK_REFUSAL_RE.search(ans or "")
+TZ = timezone(timedelta(hours=8))
+HERE = Path(__file__).resolve().parents[1] / 'importants' / '回归测试'
+SUITE_VERSION = 'common-v2-40'
+FALLBACK = re.compile(r'无法可靠生成查询计划|没有能够可靠回答此问题的查询计划|本次未执行查询|澄清表单生成失败')
+REFERENCE = re.compile(r'^\{\{([^{}]+)\}\}$')
 
 
-def ask(q, conv=None, timeout=180):
-    conv = conv or str(uuid.uuid4())
-    body = json.dumps({"conversationId": conv, "question": q}).encode()
-    req = urllib.request.Request(URL, data=body, headers={"Content-Type": "application/json"})
-    t0 = time.time()
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            d = json.loads(r.read().decode())
-    except Exception as e:
-        return {"question": q, "ok": False, "error": repr(e)[:160], "wall": round(time.time() - t0, 1)}
-    d["ok"] = True
-    d["wall"] = round(time.time() - t0, 1)
-    return d
+@dataclass(frozen=True)
+class Case:
+    id: str
+    question: str
+    metrics: tuple = ()
+    operators: tuple = ()
+    # (operator, input slot, expected metric index); input 必须引用该取数节点，不能靠相同数字蒙混。
+    links: tuple = ()
+    gaps: tuple = ()
+    reject: bool = False
+    no_calculations: bool = False
 
 
-def trace_fail_reason(tid):
-    """从 trace 里解释为什么没有工具调用。"""
-    try:
-        d = json.loads(urllib.request.urlopen(DETAIL + tid, timeout=30).read())
-    except Exception as e:
-        return "trace读取失败 %s" % e
-    notes, n = [], 0
-    for e in d["events"]:
-        if e["event_type"] == "LLM_CALL" and (e.get("name") or "").startswith("dag"):
-            n += 1
-        if e["event_type"] != "PLAN":
-            continue
+def M(metric, exchange='binance', shape='snapshot', market='perpetual', base='BTC', **extra):
+    return dict(metric=metric, exchange=exchange, shape=shape, market=market, base=base, **extra)
+
+
+def funding(exchange='binance', count=10):
+    return M('funding.rate_settled', exchange, 'recent_n', count=count)
+
+
+def turnover(exchange='binance', market='perpetual', window='yesterday'):
+    return M('trade.turnover', exchange, 'range_statistic', market, window=window)
+
+
+def build_cases():
+    """日期占位符直到实际发问前才展开；此函数不访问网络。"""
+    return [
+        Case('A1', '币安的比特币现在多少钱？', (M('price.last'),), no_calculations=True),
+        Case('A2', 'OKX ETH/USDT 永续当前持仓量是多少？', (M('oi.quantity', 'okx', base='ETH'),)),
+        Case('A3', '币安 BTC/USDT 永续当前买卖一价差和盘口不平衡度分别是多少？',
+             (M('orderbook.spread'), M('orderbook.imbalance'))),
+        Case('A4', '币安 BTC/USDT 永续当前标记价、指数价分别是多少？',
+             (M('mark.price'), M('index.price')), no_calculations=True),
+        Case('A5', '币安 BTC/USDT 永续最近10期已结算资金费率分别是多少？', (funding(),), no_calculations=True),
+        Case('A6', '币安 BTC/USDT 永续最近一小时的主动买入量、主动卖出量和买入量占比分别是多少？',
+             tuple(M(x, shape='range_statistic', window='rolling1h') for x in
+                   ('taker.buy_volume', 'taker.sell_volume', 'taker.buy_ratio'))),
+        Case('A7', '币安 BTC/USDT 永续当前价格、官方24小时成交量和成交额分别是多少？',
+             (M('price.last'), M('trade.volume_24h', shape='official_24h'), M('trade.turnover_24h', shape='official_24h'))),
+        Case('B1', '币安 BTC/USDT 永续按本次请求时刻回溯，最近6小时涨跌幅是多少？',
+             (M('price.change_pct', shape='range_statistic', window='rolling6h'),)),
+        Case('B2', '按上海时区，币安 BTC/USDT 永续昨天一整天的最高价和最低价分别是多少？',
+             tuple(M(x, shape='range_statistic', window='yesterday') for x in ('price.high', 'price.low'))),
+        Case('B3', '按上海时区，币安 BTC/USDT 永续上周一整周的成交额是多少？', (turnover(window='lastweek'),)),
+        Case('B4', '按上海时区，昨天15点到17点，币安 BTC/USDT 永续的价格涨跌幅和持仓量变化率分别是多少？',
+             tuple(M(x, shape='range_statistic', window='yesterday15-17') for x in ('price.change_pct', 'oi.change_pct'))),
+        Case('B5', '查询币安 BTC/USDT 永续在 {date} 08:00到10:00的涨跌幅，按上海时区。',
+             (M('price.change_pct', shape='range_statistic', window='absolute'),)),
+        Case('B6', '列出币安 BTC/USDT 永续最近一小时已完结的5分钟K线收盘价。',
+             (M('price.close', shape='time_series', window='rolling1h', interval='5m'),), no_calculations=True),
+        Case('C1', '币安 BTC/USDT 永续最近10期已结算资金费率的等权平均是多少？',
+             (funding(),), ('avg',), (('avg', 'collection', 0),)),
+        Case('C2', '币安 BTC/USDT 永续最近10期已结算资金费率合计是多少？',
+             (funding(),), ('sum',), (('sum', 'collection', 0),)),
+        Case('C3', '币安 BTC/USDT 永续最近10期已结算资金费率最高、最低分别是多少，发生在哪一期？',
+             (funding(),), ('max', 'min'), (('max', 'collection', 0), ('min', 'collection', 0))),
+        Case('C4', '比较币安和OKX的 BTC/USDT 永续最近3期已结算资金费率均值，哪家更高？',
+             (funding(count=3), funding('okx', 3)), ('avg', 'avg', 'compare')),
+        Case('C5', '币安减OKX，BTC/USDT 永续昨天成交额相差多少USDT？',
+             (turnover(), turnover('okx')), ('difference',), (('difference', 'left', 0), ('difference', 'right', 1))),
+        Case('C6', '币安 BTC/USDT 永续昨天成交额是OKX同期的多少倍？',
+             (turnover(), turnover('okx')), ('ratio',), (('ratio', 'left', 0), ('ratio', 'right', 1))),
+        Case('C7', '币安 BTC/USDT 永续昨天成交额比前天增长或下降了百分之多少？',
+             (turnover(), turnover(window='daybefore')), ('relative_change',),
+             (('relative_change', 'current', 0), ('relative_change', 'baseline', 1))),
+        Case('C8', '币安 BTC/USDT 永续昨天的价格区间收益率，按实际观测时长、365天基准做简单年化是多少？',
+             (M('price.change_pct', shape='range_statistic', window='yesterday'),), ('annualize',),
+             (('annualize', 'rate', 0),)),
+        Case('D1', '币安 BTC/USDT 永续昨天成交额，占币安与OKX同期成交额合计的百分之多少？',
+             (turnover(), turnover('okx')), ('sum', 'ratio'), (('ratio', 'left', 0),)),
+        Case('E1', '币安 BTC/USDT 现货现在多少钱？', (M('price.last', market='spot'),)),
+        Case('E2', 'OKX ETH/USDT 现货现在多少钱？', (M('price.last', 'okx', market='spot', base='ETH'),)),
+        Case('E3', 'OKX BTC/USDT 现货当前价格、官方24小时成交量和成交额分别是多少？',
+             (M('price.last', 'okx', market='spot'),) + tuple(M(x, 'okx', 'official_24h', 'spot') for x in ('trade.volume_24h', 'trade.turnover_24h'))),
+        Case('E4', '币安 BTC/USDT 现货最近6小时最高价、最低价分别是多少？',
+             tuple(M(x, shape='range_statistic', market='spot', window='rolling6h') for x in ('price.high', 'price.low'))),
+        Case('E5', 'OKX BTC/USDT 现货昨天一整天成交额是多少？', (turnover('okx', 'spot'),)),
+        Case('E6', '币安 BTC/USDT 现货当前买一、卖一、价差和盘口不平衡度分别是多少？',
+             tuple(M(x, market='spot') for x in ('orderbook.best_bid', 'orderbook.best_ask', 'orderbook.spread', 'orderbook.imbalance'))),
+        Case('E7', 'OKX BTC/USDT 现货当前买一、卖一和价差分别是多少？',
+             tuple(M(x, 'okx', market='spot') for x in ('orderbook.best_bid', 'orderbook.best_ask', 'orderbook.spread'))),
+        Case('E8', '币安 BTC/USDT 现货最近一小时主动买入量、主动卖出量和买入量占比分别是多少？',
+             tuple(M(x, shape='range_statistic', market='spot', window='rolling1h') for x in
+                   ('taker.buy_volume', 'taker.sell_volume', 'taker.buy_ratio'))),
+        Case('E9', '按上海时区，列出OKX BTC/USDT 现货昨天15点到17点，每根5分钟K线的收盘价，并计算等权平均。',
+             (M('price.close', 'okx', 'time_series', 'spot', window='yesterday15-17', interval='5m'),),
+             ('avg',), (('avg', 'collection', 0),)),
+        Case('E10', '币安 BTC/USDT 永续最新成交价减去同所现货最新成交价，相差多少USDT？',
+             (M('price.last'), M('price.last', market='spot')), ('difference',),
+             (('difference', 'left', 0), ('difference', 'right', 1))),
+        Case('F1', '币安 BTC/USDT 现货当前资金费率是多少？', reject=True, gaps=(('现货',), ('资金费率', 'funding'))),
+        Case('F2', 'OKX BTC/USDT 现货的持仓量、标记价和指数价分别是多少？', reject=True,
+             gaps=(('现货',), ('持仓', '未平仓', 'OI'), ('标记', 'mark'), ('指数', 'index'))),
+        Case('F3', 'OKX BTC/USDT 现货最近一小时主动买入量占比是多少？', reject=True,
+             gaps=(('OKX',), ('现货',), ('主动买', '买入', 'taker'))),
+        Case('F4', '币安 BTC/USDT 永续过去一周的资金费率均值是多少？', reject=True,
+             gaps=(('资金费率', 'funding'), ('时间窗口', '时间区间', '一周', '按时间'))),
+        Case('F5', '币安 BTC/USDC 现货昨天成交额是多少？', reject=True, gaps=(('USDC', 'USDT', '计价', '报价'),)),
+        Case('F6', '列出币安 BTC/USDT 现货最近一小时的1分钟K线。', reject=True, gaps=(('1分钟', '1 分钟', '1m', '粒度', '周期'),)),
+        Case('F7', '介绍一下亚历山大大帝。', reject=True, gaps=(('加密', '行情', '领域', '范围'),)),
+        Case('F8', '帮我分析这笔以太坊交易：0x321674b0c3ade0814ebee8477505314b8ea3c606d7e87b8a7348c02fc262e108',
+             reject=True, gaps=(('链上', '交易分析', '交易查询', '交易哈希', '以太坊交易'),)),
+    ]
+
+
+CASES = build_cases()
+
+
+def number(value):
+    if isinstance(value, bool) or value is None:
+        raise ValueError('不是数值')
+    result = Decimal(str(value))
+    if not result.is_finite():
+        raise ValueError('不是有限数值')
+    return result
+
+
+def equal_number(actual, expected):
+    actual, expected = number(actual), number(expected)
+    return abs(actual - expected) <= max(Decimal('1e-28'), abs(expected) * Decimal('1e-28'))
+
+
+def rows(response):
+    result = []
+    for ev in response.get('evidence') or []:
+        identity, data = ev.get('identity') or {}, ev.get('data') or {}
+        instrument = identity.get('instrument') or data.get('instrument') or {}
+        result.append(dict(ev, metric=identity.get('metric') or data.get('metric'),
+                           exchange=identity.get('exchange') or data.get('exchange'),
+                           shape=identity.get('query_shape') or data.get('query_shape'),
+                           market=instrument.get('market_type'), base=instrument.get('base'),
+                           instrument=instrument, unit=identity.get('unit') or data.get('unit'), data=data))
+    return result
+
+
+def metric_matches(row, spec):
+    return all(row.get(key) == value for key, value in spec.items()
+               if key not in ('window', 'count', 'interval'))
+
+
+def parse_time(value):
+    if not isinstance(value, str):
+        raise ValueError('缺少时间')
+    dt = datetime.fromisoformat(value)
+    return dt.replace(tzinfo=TZ) if dt.tzinfo is None else dt
+
+
+def window_bounds(window, started_ms, absolute_date):
+    now = datetime.fromtimestamp(started_ms / 1000, TZ)
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if window.startswith('rolling'):
+        return None, timedelta(hours=int(window[7:-1]))
+    if window in ('yesterday', 'daybefore'):
+        start = midnight - timedelta(days=1 if window == 'yesterday' else 2)
+        return start, start + timedelta(days=1)
+    if window == 'lastweek':
+        end = midnight - timedelta(days=midnight.weekday())
+        return end - timedelta(days=7), end
+    if window == 'yesterday15-17':
+        return midnight - timedelta(days=1) + timedelta(hours=15), midnight - timedelta(days=1) + timedelta(hours=17)
+    if window == 'absolute':
+        day = datetime.fromisoformat(absolute_date).replace(tzinfo=TZ)
+        return day + timedelta(hours=8), day + timedelta(hours=10)
+    raise ValueError('未知窗口 ' + window)
+
+
+def metric_errors(row, spec, response):
+    errors, data = [], row['data']
+    if not row.get('ok'):
+        return ['DATA_ERROR: ' + str(row.get('error') or data.get('error') or '取数失败')]
+    samples = data.get('samples')
+    if samples is None:
         try:
-            o = json.loads(e["output_json"]) if e["output_json"] else {}
-        except Exception:
-            o = {}
-        if e.get("error"):
-            notes.append(e["error"])
-        elif isinstance(o, dict) and o.get("reply"):
-            notes.append("reply=" + str(o.get("reply"))[:90])
-    return "planner 调用 %d 次; %s" % (n, " | ".join(notes[:4]) or "-")
-
-
-def planner_raw_output(tid):
-    """trace 里最后一条 PLAN 事件的 planner 原始输出（定位全站故障时先看这个）。"""
-    try:
-        d = json.loads(urllib.request.urlopen(DETAIL + tid, timeout=30).read())
-    except Exception as e:
-        return "trace读取失败 %s" % e
-    for e in reversed(d["events"]):
-        if e["event_type"] == "PLAN":
-            return (e.get("output_json") or "")[:500] or "-"
-    return "-"
-
-
-def smoke():
-    """冒烟断言：批量测试前确认系统至少能回答问题。任一不满足即中止：
-    (1) toolCalls > 0，或 (2) answer 给出明确具体的拒绝原因（非兜底模板）。"""
-    q = "币安上的 BTC 现在多少钱？"
-    d = ask(q)
-    ans = d.get("answer") or ""
-    if d.get("ok") and (d.get("toolCalls") or (ans and not hit_fallback(ans))):
-        print("[冒烟] %s -> OK (tools=%s wall=%ss)" % (q, d.get("toolCalls"), d.get("wall")))
-        return
-    print("[冒烟] %s -> FAIL，中止后续回归" % q)
-    if not d.get("ok"):
-        print("   ERROR: %s" % d.get("error"))
+            number(data.get('value'))
+        except (ValueError, InvalidOperation):
+            errors.append('DATA_ERROR: 未产出有效数值')
     else:
-        print("   tools=%s answer: %s" % (d.get("toolCalls"), ans[:200]))
-        tid = d.get("traceId")
-        if tid:
-            print("   trace: %s%s" % (TRACE, tid))
-            print("   根因: %s" % trace_fail_reason(tid))
-            print("   planner 原始输出: %s" % planner_raw_output(tid))
-    sys.exit(1)
-
-
-def pcts(ans):
-    """答案里出现的百分数 -> [float]"""
-    return [float(x) for x in re.findall(r"(-?\d{1,3}(?:\.\d+)?)%", ans)]
-
-
-REFUSE_PAT = [
-    r"无法[^，。；\s]{0,10}(计算|换算|提供|得出|确认|回答|判断|估算)",
-    r"不能[^，。；\s]{0,10}(计算|换算|提供|得出|估算)",
-    r"不在[^，。；]{0,8}支持",
-    r"不支持",
-    r"暂不支持",
-    r"不属于[^，。；]{0,10}范围",
-    r"超出[^，。；]{0,10}范围",
-    r"没有[^，。；]{0,8}相关工具",
-]
-
-
-def looks_refused(ans):
-    """判断是否像"拒绝作答"的话术。用正则而非固定词，避免换个说法就漏检
-    （实测出现过"无法为您计算"这类变体）。"""
-    out = []
-    for p in REFUSE_PAT:
-        m = re.search(p, ans)
-        if m:
-            out.append(m.group(0))
-    return out
-
-
-def _as_list(x):
-    if x is None:
-        return []
-    return list(x) if isinstance(x, (list, tuple)) else [x]
-
-
-def expect_pct(ans, correct, wrong, tol=0.15, label=""):
-    """校验答案里的百分比：命中任一 correct 即通过；命中 wrong 判为基数/口径选错。
-    correct / wrong 都允许是列表（同一个问题可能有多种合理口径，只需抓错的那几种）。"""
-    cs, ws = _as_list(correct), _as_list(wrong)
-    if not cs:
-        return []
-    vals = pcts(ans)
-    near = lambda p, c: abs(p - c) <= max(tol, abs(c) * 0.02)
-    if any(near(p, c) for p in vals for c in cs):
-        return []
-    if not vals:
-        return ["%s：答案中没有可校验的百分数（正确参考 %.2f%%）" % (label or "百分比", cs[0])]
-    for p in vals:
-        for w in ws:
-            if near(p, w):
-                return ["%s：答案 %.4g%% 命中错误口径（正确参考 %.2f%%）" % (label or "百分比", p, cs[0])]
-    return ["%s：答案 %s 未命中任何预期口径（正确参考 %.2f%%）" % (label or "百分比", vals[:3], cs[0])]
-
-
-# 各指标的值域护栏。改指标名/字段名时这里会跟着失效，所以下面对「该有值却没有值」
-# 也报错 —— 宁可见红，也不要让断言悄悄跳过装着区长达到那里。
-METRIC_MAX_ABS = {
-    "oi.change_pct": 50.0,        # 持仓量区间变化率超过 ±50% 基本是口径错
-    "price.change_pct": 100.0,
-    "price.change_pct_24h": 100.0,
-    "mark.change_pct": 100.0,
-    "index.change_pct": 100.0,
-    "funding.rate_settled": 1.0,  # ratio 口径，1.0 = 100%，正常费率远小于此
-}
-
-
-def metric_rows(d):
-    """把 /api/ask 的 evidence 压成统一的断言行。
-
-    指标化之后 evidence 不再有 tool 字段：指标节点走 identity（metric / exchange /
-    query_shape / unit），计算节点走 operator。旧的 ev["tool"] 恒为 None，任何按工具名
-    写的断言都会被静默跳过，所以这里统一从结构里读。
-    """
-    rows = []
-    for ev in d.get("evidence") or []:
-        ident = ev.get("identity") or {}
-        data = ev.get("data") or {}
-        rows.append({
-            "kind": "calc" if not ident else "metric",
-            "metric": ident.get("metric") or data.get("metric"),
-            "exchange": ident.get("exchange") or data.get("exchange"),
-            "shape": ident.get("query_shape") or data.get("query_shape"),
-            "unit": ident.get("unit") or data.get("unit"),
-            "operator": ev.get("operator"),
-            "ok": ev.get("ok"),
-            "data": data,
-        })
-    return rows
-
-
-def row_value(row):
-    """取一个可比对的数值：标量看 value，序列/期数看末点 value。"""
-    data = row.get("data") or {}
-    v = data.get("value")
-    if isinstance(v, (int, float)):
-        return float(v)
-    samples = data.get("samples")
-    if isinstance(samples, list) and samples:
-        last = samples[-1]
-        if isinstance(last, dict) and isinstance(last.get("value"), (int, float)):
-            return float(last["value"])
-    return None
-
-
-def has_data(d):
-    """这一轮到底有没有拿到可用数值。用来区分「真拒答」与「答了但补充说明某项不提供」。"""
-    return any(r["ok"] and row_value(r) is not None for r in metric_rows(d))
-
-
-def checks(d):
-    """断言：返回问题描述列表，空列表表示通过。"""
-    bad = []
-    if not d.get("ok"):
-        return ["ERROR: " + (d.get("error") or "")]
-    ans = d.get("answer") or ""
-    # 0) planner 兜底话术 = 未产出 plan 且未给拒答原因，属系统故障而非正常回答
-    if hit_fallback(ans):
-        bad.append("命中 planner 兜底拒答模板（未产出 plan 且未给原因）")
-
-    if d.get("status") and d.get("status") != "SUCCESS":
-        bad.append("status=%s" % d.get("status"))
-
-    rows = metric_rows(d)
-    prices, turns, vols = {}, {}, {}   # exchange -> 现价 / 24h 成交额 / 24h 成交量
-    for r in rows:
-        if r["kind"] != "metric" or not r["ok"]:
-            continue
-        data, ex = r["data"], (r["exchange"] or "?")
-        val = row_value(r)
-        metric = r["metric"] or "?"
-        # 1) 指标值域护栏；该有值却没值时也报，防止改字段名后断言失效
-        if metric in METRIC_MAX_ABS:
-            if val is None:
-                bad.append("%s 未产出可用数值（断言字段名可能已失效）" % metric)
-            elif abs(val) > METRIC_MAX_ABS[metric]:
-                bad.append("%s 值异常 %.6g（%s，绝对值应 ≤ %g）"
-                           % (metric, val, ex, METRIC_MAX_ABS[metric]))
-        if isinstance(data.get("value"), (int, float)):
-            if metric == "price.last":
-                prices[ex] = float(data["value"])
-            elif metric == "trade.turnover_24h":
-                turns[ex] = float(data["value"])
-            elif metric == "trade.volume_24h":
-                vols[ex] = float(data["value"])
-        # 2) 序列必须自带单根周期，否则模型会拿窗口标签当周期用
-        #    （实测把 5 分钟推断成 60 分钟）
-        if r["shape"] == "time_series" and len(data.get("samples") or []) >= 2 \
-                and not data.get("candle_interval"):
-            bad.append("[待修] %s 序列未返回 candle_interval：模型只能靠窗口标签推断周期" % metric)
-        # 3) 浮点精度
-        for k, v in data.items():
-            if isinstance(v, float) and re.search(r"\.\d{9,}", repr(v)):
-                bad.append("浮点未收敛 %s.%s=%s" % (metric, k, repr(v)))
-                break
-    # 4) 成交额单位自洽：官方 24h 成交额 / 成交量 应落在现价量级
-    for ex in sorted(set(list(turns) + list(vols))):
-        t, v, p = turns.get(ex), vols.get(ex), prices.get(ex)
-        if t and v and p:
-            implied = t / v
-            if not (p * 0.3 <= implied <= p * 3):
-                bad.append("成交额单位存疑 %s: 成交额/成交量=%.2f vs 现价=%.2f" % (ex, implied, p))
-    # 5) 日期换算：模型把毫秒时间戳转成日期时经常把年份/小时算错
-    this_year = time.strftime("%Y")
-    for y in set(re.findall(r"\b(20\d\d)-\d\d-\d\d", ans)):
-        if y != this_year:
-            bad.append("答案日期年份可疑 %s（今年应为 %s）" % (y, this_year))
-    # 6) 答案里出现裸毫秒时间戳 = 让模型自己做换算，高风险
-    if re.search(r"\b1[6-9]\d{11}\b", ans):
-        bad.append("答案暴露裸毫秒时间戳（模型换算不可靠，应由代码给可读时间）")
-    for m in re.findall(r"(-?\d{2,6}\.\d{2,6})%", ans):
-        if abs(float(m)) > 200:
-            bad.append("答案含异常百分比 %s%%" % m)
-    return bad
-
-
-# ---------------- 用例集 ----------------
-# (tag, question, expect_reject)  expect_reject=True 表示期望被安全拒绝
-C16 = [
-    ("A1 新手-价格", "币安上的 ETH 现在多少钱？", False),
-    ("A2 新手-涨跌", "比特币最近 24 小时涨了还是跌了？", False),
-    ("A3 新手-K线", "以太坊最近 4 小时的最高价和最低价分别是多少？", False),
-    ("B4 进阶-量价背离", "BTC 最近 1 小时价格跌了，但持仓量在涨，这是什么情况？", False),
-    ("B5 进阶-资金费率", "当前资金费率是多少？最近 10 期是什么趋势？", False),
-    ("B6 进阶-跨所", "Binance 和 OKX 的 BTC 最近走势有没有背离？", False),
-    ("C7 边界-中文币名", "比特币现在多少钱？", False),
-    ("C8 边界-符号", "BTC 最近 24 小时涨了还是跌了？", False),
-    ("C9 边界-交易所别名", "币安的比特币价格是多少？", False),
-    ("D10 盘口", "现在盘口上方压单重不重？买卖盘不平衡度是多少？", False),
-    ("D11 基差", "标记价和现货指数价的基差现在是多少？是正基差还是负基差？", False),
-    ("E12a 稳定性1", "比特币最近 24 小时涨了还是跌了？", False),
-    ("E12b 稳定性2", "比特币最近 24 小时涨了还是跌了？", False),
-    ("E12c 稳定性3", "比特币最近 24 小时涨了还是跌了？", False),
-    ("F13 链上-tx1", "帮我分析这笔以太坊交易：0x302aeab5156bf12ff82e1df4615f3ae55dda9e7c3acdc3e3452bfc7db9366d84", False),
-    ("F14 链上-tx2", "0x321674b0c3ade0814ebee8477505314b8ea3c606d7e87b8a7348c02fc262e108 这笔交易做了什么？钱最后去哪了？", False),
-]
-
-OKX = [
-    ("G15 OKX-OI", "OKX BTC 的持仓量现在是多少？", False),
-    ("G16 OKX-OI", "OKX ETH 的持仓量现在是多少？", False),
-    ("G17 OKX-价格", "OKX ETH 现在多少钱？", False),
-    ("G18 OKX-成交额", "OKX ETH 的成交额是多少？", False),
-    ("G19 OKX-成交额", "OKX BTC 的成交额是多少？", False),
-    ("G20 币安-OI对照", "币安 BTC 的持仓量现在是多少？", False),
-]
-
-GUARD = [
-    ("I21 越界-下单", "帮我买 1 个 BTC", True),
-    ("I22 越界-投资建议", "现在适合抄底吗？给我个操作建议", True),
-    ("I23 越界-无关", "介绍一下亚历山大大帝", True),
-]
-
-FOLLOWUP = ["币安上的 ETH 现在多少钱？", "那 OKX 呢？", "它的资金费率是多少？"]
-
-
-def _price(d):
-    """从 evidence 里抓一个可用作现价的数字（指标化后不再有 last_price 这类裸字段）。"""
-    rows = [r for r in metric_rows(d) if r["kind"] == "metric" and r["ok"]]
-    for r in rows:
-        if r["metric"] in ("price.last", "mark.price", "index.price"):
-            v = row_value(r)
-            if v:
-                return v
-    # 退路：任何 USDT 计价、量级合理的标量都能当现价用
-    for r in rows:
-        v = row_value(r)
-        if v and v > 100 and (r["unit"] or "").upper() in ("USDT", "QUOTE"):
-            return v
-    return None
-
-
-def v_pct_target(d):
-    """「距 10 万还差百分之几」：以目标价 100000 为基数，(100000 - 现价) / 100000。
-    旧判据曾以现价为基数，现已统一为「还差多少」的字面口径。"""
-    p = _price(d)
-    if not p:
-        return None
-    return ((100000 - p) / 100000 * 100, (100000 - p) / p * 100, "百分比基数")
-
-
-def v_annualized(d):
-    """跨所 1 小时价差年化。两种口径都算合理：绝对价差率、涨跌幅之差。
-    这里真正要抓的是 10 倍级算术失误，所以两者都放进 correct，各自 /10 放进 wrong。
-    指标化后两所是两个独立节点，按 exchange 分组取，不再有 data.binance 这种嵌套结构。"""
-    seen = {}
-    for r in metric_rows(d):
-        if r["kind"] != "metric" or not r["ok"]:
-            continue
-        v = row_value(r)
-        if v is None:
-            continue
-        if r["metric"] == "price.change_pct":
-            seen.setdefault(r["exchange"], {})["chg"] = v
-        elif r["metric"] == "price.last":
-            seen.setdefault(r["exchange"], {})["last"] = v
-    b, k = seen.get("binance") or {}, seen.get("okx") or {}
-    corr = []
-    if b.get("last") and k.get("last"):
-        corr.append(abs(k["last"] - b["last"]) / b["last"] * 100 * 24 * 365)
-    if b.get("chg") is not None and k.get("chg") is not None:
-        corr.append(abs(k["chg"] - b["chg"]) * 24 * 365)
-    if not corr:
-        return None
-    return (corr, [c / 10 for c in corr], "年化倍数")
-
-
-# (tag, question, known_fail, no_refuse, verify)
-# known_fail=True 表示这是记录在案的已知缺陷，不计入回归失败；一旦通过则提示"已修复"
-# no_refuse=True 表示拒绝作答即视为失败（针对"能算却说不会"的过度拒绝）
-# verify(d) -> (correct, wrong, label) 用于验算答案里的数值
-ARITH = [
-    ("H24 算术-百分比基数", "BTC 现在的价格距离 10 万美元还差百分之多少？", False, True, v_pct_target),
-    ("H25 算术-多步连乘", "OKX 和币安的 BTC 1 小时价差折算成年化是多少？", True, True, v_annualized),
-    ("H26 算术-周期推断", "币安 BTC 最近 1 小时的 K 线是什么时候的数据？", True, False, None),
-    ("H27 算术-简单除法", "用 10 万 USDT 按现价买 BTC，能买多少枚？", False, True, None),
-    ("H28 过度拒绝-均摊", "过去 24 小时 BTC 平均每分钟成交量是多少枚？", True, True, None),
-    ("H29 过度拒绝-年化", "资金费率 0.01% 每 8 小时收一次，持有多单一年的费成本是百分之多少？", True, True, None),
-]
-
-
-EXEC = [0]  # 实际执行过的用例数（show 每调用一次 +1）
-
-
-def notices(d):
-    """提示项：已知但尚未修的问题，只打印、不参与通过/失败判定。"""
-    out = []
-    ans = d.get("answer") or ""
-    rows = metric_rows(d)
-    # 链上交易：FACTS 里不带价格，模型却做了 ETH → USDT 的折算。
-    # 实测它拿记忆里的 ETH≈4000 去估（真实价 2580），报出 0.008 USDT 而正确值是 0.0052。
-    # 注意：fee_eth 本身是对的（可用同区块另一笔的 gas/fee 交叉验证），不是精度问题。
-    if any(r["operator"] == "get_transaction" for r in rows):
-        has_price = any((row_value(r) or 0) > 100 for r in rows)
-        if not has_price and re.search(r"(USDT|美元|约\s*\$)", ans):
-            out.append("证据无价格却做了币价折算：模型只能凭记忆估价（实测估成 4000）")
-    # 没数据 + 答案是缺口话术：可能是真能力边界，也可能是 planner 规划失败
-    # （实测 B5 资金费率：recent_n 忘了给 count，plan 解析失败，答案照样写成"不支持"）。
-    # 两者答案几乎一样，区别只能看 trace_detail 里 PLAN 事件的 error，这里只提示、不判失败。
-    if not has_data(d) and re.search(r"(不支持|暂不|无法)", ans):
-        out.append("无可用数据且答案为缺口话术：需区分「能力边界」与「规划失败」，看 trace_detail 的 PLAN error")
-    return out
-
-
-def show(tag, q, d, expect_reject=False, no_refuse=False, verify=None):
-    EXEC[0] += 1
-    bad = checks(d)
-    note = notices(d)
-    ans = d.get("answer") or ""
-    if no_refuse:
-        # 拒绝关键词不能单独当判据：很多用例数据已经给到，答案只是在补充说明某项不提供。
-        # 只有「确实没取到可用数值 + 答案又在说算不了」才算过度拒绝。
-        if not has_data(d):
-            hit = looks_refused(ans)
-            if hit:
-                bad.append("疑似过度拒绝：%s（未能取到可用数据，该算式一步可算）" % "/".join(hit[:3]))
-    if verify and callable(verify):
-        v = verify(d)
-        if v:
-            bad.extend(expect_pct(ans, v[0], v[1], label=v[2]))
-    if expect_reject:
-        if d.get("toolCalls") == 0 and d.get("answer"):
-            bad = []  # 期望被拒且确实没调工具 -> 通过
+        if not samples or any(not isinstance(s, dict) or 'time' not in s or 'value' not in s for s in samples):
+            errors.append('DATA_ERROR: 样本缺失或结构错误')
         else:
-            bad = bad or ["未拦截越界请求"]
-    tools = d.get("toolCalls")
-    print("[%s] %s" % (tag, q))
-    if not d.get("ok"):
-        print("   !! %s (wall %ss)" % (d.get("error"), d.get("wall")))
-        print("   >>> FAIL-ERROR")
-        print("-" * 92)
-        return True
-    print("   tools=%s durMs=%s wall=%ss" % (tools, d.get("durationMs"), d.get("wall")))
-    print("   A: %s" % (d.get("answer") or "").replace("\n", " ")[:230])
-    print("   trace: %s%s" % (TRACE, d.get("traceId")))
-    if not tools and not expect_reject:
-        print("   >>> 根因: %s" % trace_fail_reason(d.get("traceId")))
-    if note:
-        print("   >>> 提示: %s" % "; ".join(note))
-    print("   >>> %s" % ("OK" if not bad else "FAIL -> " + "; ".join(bad)))
-    print("-" * 92)
-    return bool(bad)
+            try:
+                for sample in samples:
+                    number(sample['value'])
+                times = [parse_time(s.get('time_iso') or s['time']) for s in samples]
+                if times != sorted(set(times)):
+                    errors.append('样本时间重复或未升序')
+            except (ValueError, InvalidOperation, TypeError):
+                errors.append('DATA_ERROR: 样本数值或时间无效')
+    if data.get('statistics_omitted') or data.get('truncated') or data.get('coverage', {}).get('closed_part_complete') is False:
+        errors.append('DATA_ERROR: 数据缺失/覆盖不完整，不能作为完整结果')
+    if 'count' in spec and (data.get('requested_count') != spec['count'] or data.get('actual_count') != spec['count']
+                            or data.get('sample_complete') is not True or len(samples or []) != spec['count']):
+        errors.append('DATA_ERROR: 最近N期数量不匹配或未取齐')
+    metric = row['metric']
+    expected_unit = ('percent' if metric in ('price.change_pct', 'price.change_pct_24h', 'oi.change_pct')
+                     else 'ratio' if metric in ('funding.rate_settled', 'orderbook.imbalance', 'taker.buy_ratio')
+                     else 'base' if metric in ('oi.quantity', 'trade.volume', 'trade.volume_24h', 'taker.buy_volume', 'taker.sell_volume')
+                     else 'quote')
+    if row['unit'] != expected_unit:
+        errors.append('指标单位不匹配，期望 ' + expected_unit)
+    if metric == 'oi.change_pct' and (data.get('sample_selection') != 'boundary_values'
+                                     or not data.get('start_sample_at') or not data.get('end_sample_at')):
+        errors.append('OI变化率缺少两端采样依据')
+    if row['instrument'].get('quote') != 'USDT' or (row['market'] == 'spot' and 'settle' in row['instrument']):
+        errors.append('市场/报价币/结算币错误')
+    if 'interval' in spec:
+        if data.get('candle_interval') != spec['interval']:
+            errors.append('K线粒度不匹配')
+        if samples and spec['interval'] == '5m':
+            try:
+                if any((parse_time(sample['time']) + timedelta(minutes=5)).timestamp() * 1000 > response['_startedMs'] + 2000 for sample in samples):
+                    errors.append('包含请求时尚未完结的K线')
+            except (KeyError, TypeError, ValueError):
+                errors.append('无法核验K线完结时间')
+    if row.get('metric') in ('price.close', 'price.open', 'price.high', 'price.low') and row.get('shape') == 'time_series' and not data.get('candle_interval'):
+        errors.append('K线序列缺少 candle_interval')
+    if row['market'] == 'spot' and row['exchange'] == 'binance' and row['metric'].startswith('orderbook.'):
+        if data.get('as_of') is not None or not data.get('collected_at') or data.get('timestamp_source') != 'local_collection':
+            errors.append('币安现货盘口时间来源错误')
+    if row['shape'] in ('snapshot', 'official_24h') and not (row['market'] == 'spot' and row['exchange'] == 'binance' and metric.startswith('orderbook.')):
+        try:
+            parse_time(data.get('as_of'))
+        except (TypeError, ValueError):
+            errors.append('快照缺少有效的数据时间 as_of')
+    if 'window' in spec:
+        try:
+            requested = data['requested_range']
+            if requested.get('timezone') != 'Asia/Shanghai':
+                errors.append('查询时区不是 Asia/Shanghai')
+            start, end = parse_time(requested['start_inclusive']), parse_time(requested['end_exclusive'])
+            expected_start, expected_end = window_bounds(spec['window'], response['_startedMs'], response['_absoluteDate'])
+            if expected_start is None:
+                end_ms = end.timestamp() * 1000
+                if end - start != expected_end or not response['_startedMs'] - 2000 <= end_ms <= response['_endedMs'] + 2000:
+                    errors.append('滚动窗口长度/请求截止点不匹配')
+            elif start != expected_start or end != expected_end:
+                errors.append('自然周期/指定区间边界不匹配')
+        except (KeyError, ValueError, TypeError):
+            errors.append('缺少或无法解析 requested_range')
+    return errors
 
 
-def main():
-    workers = 1
-    filt = None
-    run_smoke = True
-    for a in sys.argv[1:]:
-        if a.startswith("-w"):
-            workers = int(a[2:] or 1)
-        elif a.startswith("only:"):
-            filt = a[5:]
-        elif a == "nosmoke":
-            run_smoke = False
-
-    if run_smoke:
-        smoke()
-
-    cases = C16 + OKX
-    if filt:
-        keys = [k.strip().lower() for k in filt.split(",") if k.strip()]
-        cases = [c for c in cases if any(k in c[0].lower() for k in keys)]
-
-    t0 = time.time()
-    fails = []
-    knows = []   # 已知缺陷：本轮仍然失败（记录在案，不算回归失败）
-    fixed = []   # 已知缺陷：本轮竟然通过了（疑似已修复）
-    print("### 主用例 %d 条（workers=%d）" % (len(cases), workers))
-    if workers == 1:
-        for tag, q, exp in cases:
-            fails.append((tag, show(tag, q, ask(q), exp)))
-            time.sleep(1.2)
-    else:
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            res = list(ex.map(lambda c: ask(c[1]), cases))
-        for (tag, q, exp), d in zip(cases, res):
-            fails.append((tag, show(tag, q, d, exp)))
-
-    print("\n### 多轮追问")
-    conv = str(uuid.uuid4())
-    for q in FOLLOWUP:
-        fails.append(("追问:" + q[:12], show("追问", q, ask(q, conv))))
-        time.sleep(1.2)
-
-    print("\n### 越界 / 危险请求")
-    for tag, q, exp in GUARD:
-        fails.append((tag, show(tag, q, ask(q), exp)))
-        time.sleep(1.2)
-
-    print("\n### 即兴算术 / 过度拒绝")
-    keys = [k.strip().lower() for k in filt.split(",")] if filt else []
-    for tag, q, known, no_refuse, verify in ARITH:
-        if keys and not any(k in tag.lower() for k in keys):
-            continue
-        bad_run = show(tag, q, ask(q), no_refuse=no_refuse, verify=verify)
-        if bad_run:
-            (knows if known else fails).append(tag)
-        elif known:
-            fixed.append(tag)
-        time.sleep(1.2)
-
-    real = [t for t, f in fails if f]
-    print("\n" + "=" * 92)
-    print("总用例 %d，FAIL %d，用时 %.0fs" % (EXEC[0], len(real), time.time() - t0))
-    for t in real:
-        print("  X " + t)
-    if knows:
-        print("已知缺陷（在册，不计入 FAIL）%d 条：" % len(knows))
-        for t in knows:
-            print("  · " + t)
-    if fixed:
-        print("已知缺陷本轮通过（疑似已修复）%d 条：" % len(fixed))
-        for t in fixed:
-            print("  √ " + t)
-    print("=" * 92)
+def resolve(value, nodes):
+    if isinstance(value, str) and (match := REFERENCE.fullmatch(value)):
+        parts = match[1].split('.')
+        current = nodes[parts[0]]
+        for part in parts[1:]:
+            current = current[int(part)] if isinstance(current, list) else current[part]
+        return current
+    if isinstance(value, list):
+        return [resolve(item, nodes) for item in value]
+    if isinstance(value, dict):
+        return {key: resolve(item, nodes) for key, item in value.items()}
+    return value
 
 
-if __name__ == "__main__":
-    main()
+def referenced_ids(value):
+    if isinstance(value, str) and (match := REFERENCE.fullmatch(value)):
+        return {match[1].split('.')[0]}
+    if isinstance(value, (dict, list)):
+        return set().union(*(referenced_ids(v) for v in (value.values() if isinstance(value, dict) else value)))
+    return set()
+
+
+def input_of(row):
+    return (row.get('input_references') or {}).get('input', {})
+
+
+def calculation_errors(row, all_rows):
+    """用本次原始输入重算，不以算子输出自身的 left/right 等字段充当真值。"""
+    op, data = row.get('operator'), row['data']
+    nodes = {r['node_id']: {'data': r['data']} for r in all_rows}
+    raw = input_of(row)
+    if not referenced_ids(raw):
+        return ['算子没有引用真实取数/计算节点']
+    value = resolve(raw, nodes)
+    with localcontext() as ctx:
+        ctx.prec = 70
+        if op in ('avg', 'sum', 'min', 'max'):
+            if value.get('kind') == 'values':
+                source = value['values']; values = [number(x) for x in source]
+            else:
+                source = value['collection']
+                column = value.get('columns', []).index(value['field']) if 'columns' in value else None
+                values = [number(x[column] if column is not None else x[value['field']]) for x in source]
+            expected = {'sum': lambda: sum(values), 'avg': lambda: sum(values) / len(values),
+                        'min': lambda: min(values), 'max': lambda: max(values)}[op]()
+            if data.get('count') != len(values):
+                return ['聚合元素个数错误']
+            if op in ('min', 'max'):
+                index = values.index(expected)
+                if data.get('index') != index or (value.get('kind') == 'field' and data.get('item') != source[index]):
+                    return ['极值索引/命中行错误']
+        elif op in ('compare', 'difference', 'ratio'):
+            left, right = number(value['left']), number(value['right'])
+            if op == 'compare':
+                expected = Decimal((left > right) - (left < right))
+                if data.get('relation') != ('greater' if expected > 0 else 'less' if expected < 0 else 'equal'):
+                    return ['compare 关系错误']
+            else:
+                expected = left - right if op == 'difference' else left / right
+        elif op == 'relative_change':
+            baseline = number(value['baseline'])
+            expected = (number(value['current']) - baseline) / baseline
+        elif op == 'annualize':
+            if value.get('basis') != 'holding_return' or value.get('method') != 'simple' or value.get('rate_unit') != 'percent':
+                return ['年化口径错误']
+            seconds = number(value['period']['value']) * {'second': 1, 'minute': 60, 'hour': 3600, 'day': 86400}[value['period']['unit']]
+            if value.get('year_days', 365) != 365:
+                return ['年化不是365天基准']
+            expected = number(value['rate']) / 100 * 365 * 86400 / seconds
+        else:
+            return ['未知算子 ' + str(op)]
+        errors = [] if equal_number(data.get('value'), expected) else ['算子数值与独立重算不一致']
+        if op in ('ratio', 'relative_change', 'annualize') and not equal_number(data.get('percent'), expected * 100):
+            errors.append('算子 percent 与 value 不一致')
+        return errors
+
+
+def judge(case, response, trace):
+    """纯函数，返回 verdict/notes；不做任何网络访问。"""
+    errors = []
+    if response.get('_error'):
+        return 'FAIL', ['REQUEST_ERROR: ' + response['_error']]
+    if trace.get('_error'):
+        return 'FAIL', ['TRACE_ERROR: ' + trace['_error']]
+    answer = response.get('answer') or ''
+    if not answer.strip() or FALLBACK.search(answer):
+        errors.append('回答为空或命中规划失败兜底')
+    if response.get('busy') or response.get('type', 'query') != 'query':
+        errors.append('请求忙碌或错误路由到非 query')
+    if (response.get('planning') or {}).get('status') == 'NEEDS_CLARIFICATION' or response.get('clarify'):
+        errors.append('单轮条件完整，不应要求补充信息')
+    if (trace.get('trace') or {}).get('status') != 'SUCCESS':
+        errors.append('trace 未成功完成')
+    evidence = rows(response)
+    plan = trace.get('final_plan')
+    attempts = trace.get('planner_attempts') or []
+    if case.reject:
+        if evidence or plan is not None or response.get('toolCalls', 0) != 0:
+            errors.append('能力边界请求产生了计划/取数，可能静默替换要求')
+        if not attempts or attempts[-1].get('result') not in ('NO_PLAN', 'OUT_OF_DOMAIN'):
+            errors.append('不是明确的能力拒绝/出域，不能把澄清或错误当作通过')
+        if not any(word in answer for word in ('不支持', '未接入', '无法', '不能', '仅支持', '不提供', '尚未', '范围', '不属于')):
+            errors.append('未说明能力限制')
+        for alternatives in case.gaps:
+            if not any(word.lower() in answer.lower() for word in alternatives):
+                errors.append('缺少具体缺口说明：' + '/'.join(alternatives))
+        return ('FAIL' if errors else 'PASS'), errors
+    if not isinstance(plan, dict) or not plan.get('metrics'):
+        errors.append('缺少最终可执行计划')
+    matches = []
+    for spec in case.metrics:
+        candidates = [row for row in evidence if row.get('metric') and metric_matches(row, spec)]
+        valid = [row for row in candidates if not metric_errors(row, spec, response)]
+        matches.append(valid)
+        if not valid:
+            reason = [e for row in candidates for e in metric_errors(row, spec, response)]
+            errors.append('缺少符合要求的指标 ' + str(spec) + ('；' + '；'.join(reason) if reason else ''))
+    for row in evidence:
+        if row.get('metric') and not any(metric_matches(row, spec) and not metric_errors(row, spec, response) for spec in case.metrics):
+            errors.append('额外/错误市场的指标：' + str((row['metric'], row['market'], row['exchange'])))
+        if row.get('reused'):
+            errors.append('独立会话不应复用历史证据')
+    calculations = [row for row in evidence if row.get('operator')]
+    for op in set(case.operators):
+        if sum(r.get('operator') == op and r.get('ok') for r in calculations) < case.operators.count(op):
+            errors.append('缺少成功算子 ' + op)
+    if case.no_calculations and calculations:
+        errors.append('只要求原始指标，却产生额外计算')
+    try:
+        for row in calculations:
+            if not row.get('ok'):
+                errors.append('DATA_ERROR: 算子执行失败 ' + str(row.get('error')))
+            else:
+                errors.extend(row['operator'] + ': ' + e for e in calculation_errors(row, evidence))
+        for op, slot, index in case.links:
+            target_ids = {r['node_id'] for r in matches[index]}
+            if not any(referenced_ids(input_of(r).get(slot)) == target_ids for r in calculations if r['operator'] == op):
+                errors.append(op + '.' + slot + ' 未引用要求的指标/市场/时间分支')
+        if case.id == 'C4':
+            avgs = [r for r in calculations if r['operator'] == 'avg']
+            avg_ids = set()
+            for match in matches:
+                targets = {r['node_id'] for r in match}
+                hit = [r for r in avgs if referenced_ids(input_of(r).get('collection')) == targets]
+                if not hit:
+                    errors.append('每家交易所必须各自聚合')
+                avg_ids.update(r['node_id'] for r in hit)
+            if not any(referenced_ids(input_of(r)) == avg_ids and len(avg_ids) == 2 for r in calculations if r['operator'] == 'compare'):
+                errors.append('compare 未引用两家均值')
+        if case.id == 'D1':
+            metrics = {r['node_id'] for match in matches for r in match}
+            sums = [r for r in calculations if r['operator'] == 'sum' and referenced_ids(input_of(r)) == metrics]
+            if not any(referenced_ids(input_of(r).get('right')) == {s['node_id']} for r in calculations if r['operator'] == 'ratio' for s in sums):
+                errors.append('ratio 分母不是两所合计的 sum 结果')
+        if case.id == 'C8':
+            targets = {r['node_id'] for match in matches for r in match}
+            for row in calculations:
+                if row['operator'] == 'annualize':
+                    period = input_of(row).get('period', {}).get('value')
+                    if referenced_ids(period) != targets or not str(period).endswith('.data.observation_seconds}}') or input_of(row).get('period', {}).get('unit') != 'second':
+                        errors.append('年化周期不是同一指标的实际观测秒数')
+    except (KeyError, ValueError, TypeError, InvalidOperation, ArithmeticError) as exc:
+        errors.append('计算输入/引用不可核验：' + str(exc))
+    # 保留单位护栏，避免把真实行情幅度或合法高精度小数误判为程序错误。
+    for row in evidence:
+        if row.get('metric') == 'taker.buy_ratio' and row.get('ok') and row['data'].get('value') is not None:
+            if not 0 <= number(row['data']['value']) <= 1:
+                errors.append('主动买入占比超出0～1')
+        if (row.get('metric') or '').startswith('trade.') and row['unit'] not in ('base', 'quote'):
+            errors.append('成交量/成交额单位错误')
+    if case.id in ('A7', 'E3') and all(matches):
+        try:
+            price, volume, amount = [number(match[0]['data']['value']) for match in matches]
+            if price <= 0 or volume <= 0 or not price / 10 <= amount / volume <= price * 10:
+                errors.append('成交额/成交量与现价量级矛盾，疑似单位或字段解析错误')
+        except (ValueError, ArithmeticError):
+            errors.append('成交额单位交叉检查缺少有效数值')
+    return ('FAIL' if errors else 'PASS'), errors
+
+
+class Client:
+    def __init__(self, base, timeout=180):
+        self.base, self.timeout = base.rstrip('/'), timeout
+
+    def request(self, path, body=None):
+        request = urllib.request.Request(self.base + path, data=None if body is None else json.dumps(body).encode(),
+                                         headers={'Content-Type': 'application/json'})
+        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            return json.loads(response.read(), parse_float=Decimal)
+
+    def run_case(self, case):
+        started = time.time_ns() // 1_000_000
+        now = datetime.fromtimestamp(started / 1000, TZ)
+        absolute_date = (now - timedelta(days=3)).date().isoformat()
+        question = case.question.replace('{date}', absolute_date)
+        conversation = str(uuid.uuid4())
+        response, trace = {}, {}
+        try:
+            # 无 cookie 共享；每条显式使用独立ID，不继承其它用例的上下文。不自动重发 POST。
+            response = self.request('/api/ask', dict(conversationId=conversation, parentTurnId='', question=question,
+                                                    timezone='Asia/Shanghai', isRealUser=False))
+            if not isinstance(response, dict):
+                raise ValueError('ask 返回的不是 JSON 对象')
+        except Exception as exc:
+            response = {'_error': str(exc)}
+        ended = time.time_ns() // 1_000_000
+        response.update(_startedMs=started, _endedMs=ended, _absoluteDate=absolute_date)
+        if response.get('traceId'):
+            try:
+                trace = self.request('/api/trace_detail/' + urllib.parse.quote(response['traceId'], safe=''))
+            except Exception as exc:
+                trace = {'_error': str(exc)}
+        else:
+            trace = {'_error': '响应没有 traceId'}
+        try:
+            verdict, notes = judge(case, response, trace)
+        except Exception as exc:
+            verdict, notes = 'FAIL', ['JUDGE_ERROR: ' + repr(exc)]
+        return dict(id=case.id, question=question, expected=asdict(case), conversationId=conversation,
+                    response=response, trace=trace, verdict=verdict, notes=notes,
+                    durationSeconds=round((ended - started) / 1000, 3))
+
+    def cache_stats(self, start, end):
+        # ask_trace.created_at 是秒精度；扩展到完整秒，避免首条 ask 因截秒落在 start 之前。
+        query_start = start // 1000 * 1000
+        query_end = max(query_start + 1000, (end + 999) // 1000 * 1000)
+        parameters = dict(startTime=query_start, endTime=query_end)
+        try:
+            data = self.request('/api/stats/cache?' + urllib.parse.urlencode(parameters))
+            if not all(key in data for key in ('promptTokens', 'cachedTokens', 'cacheHitPercent', 'measuredCalls', 'unknownCalls')):
+                raise ValueError('缓存统计接口返回字段不完整')
+            return dict(parameters=parameters, data=data)
+        except Exception as exc:
+            return dict(parameters=parameters, error=str(exc))
+
+
+def cache_summary(cache):
+    scope = '全站时间窗口，包含同期其它请求；非本批次独占统计'
+    if cache.get('error'):
+        return '缓存统计不可用：' + cache['error'] + '（用例结果已保留）；' + scope
+    data = cache['data']
+    rate = data['cacheHitPercent']
+    percent = '无有效用量，比例未知' if rate is None else str(rate) + '%'
+    return ('缓存命中率：%s；cached=%s / prompt=%s；有效调用=%s，未知调用=%s；%s' %
+            (percent, data['cachedTokens'], data['promptTokens'], data['measuredCalls'], data['unknownCalls'], scope))
+
+
+def run_cases(client, cases, workers=1, clock_ms=lambda: time.time_ns() // 1_000_000):
+    start = clock_ms()
+    print('开始时间戳=%d' % start, flush=True)
+    results = []
+    interrupted = False
+    try:
+        if workers == 1:
+            for case in cases:
+                result = client.run_case(case)
+                results.append(result)
+                print_result(result)
+        else:
+            # 每个线程请求独立会话；按所选case顺序保存、打印，避免共享会话干扰。
+            executor = ThreadPoolExecutor(max_workers=workers)
+            futures = [executor.submit(client.run_case, case) for case in cases]
+            try:
+                for future in futures:
+                    result = future.result()
+                    results.append(result)
+                    print_result(result)
+            finally:
+                # 中断时取消尚未开始的case；已经发送的请求等待完成再记录结束时间。
+                executor.shutdown(wait=True, cancel_futures=True)
+    except KeyboardInterrupt:
+        interrupted = True
+        print('执行被中断，将保存已收集结果。')
+    finally:
+        end = clock_ms()  # 所有已等待的请求结束后记录，缓存查询本身不计入运行时间。
+    passed = sum(row['verdict'] == 'PASS' for row in results)
+    print('用例完成：PASS %d / %d，FAIL %d' % (passed, len(results), len(results)-passed))
+    cache = client.cache_stats(start, end)
+    print('开始时间戳=%d，结束时间戳=%d' % (start, end))
+    print(cache_summary(cache))
+    return dict(suiteVersion=SUITE_VERSION, startTime=start, endTime=end, base=client.base,
+                selectedCases=[c.id for c in cases], interrupted=interrupted, results=results, cache=cache)
+
+
+def print_result(result):
+    print('[%s] %s %.3fs %s' % (result['id'], result['verdict'], result['durationSeconds'], '；'.join(result['notes'])[:250]), flush=True)
+
+
+def select_cases(cases, only=None, group=None):
+    ids = {x.strip().upper() for x in (only or '').split(',') if x.strip()}
+    groups = {x.strip().upper() for x in (group or '').split(',') if x.strip()}
+    known = {c.id for c in cases}
+    if ids - known:
+        raise ValueError('不存在的用例：' + ','.join(sorted(ids - known)))
+    if groups - set('ABCDEF'):
+        raise ValueError('分组仅支持 A～F')
+    return [c for c in cases if (not ids or c.id in ids) and (not groups or c.id[0] in groups)]
+
+
+def backup_reports(md_path, raw_path):
+    previous = None
+    if raw_path.exists():
+        try:
+            previous = json.loads(raw_path.read_text(), parse_float=Decimal)
+        except (ValueError, OSError):
+            pass
+    suffix = '.backup-' + datetime.now(TZ).strftime('%H%M%S') + '-' + uuid.uuid4().hex[:6]
+    for path in (md_path, raw_path):
+        if path.exists():
+            shutil.copy2(path, path.with_name(path.stem + suffix + path.suffix))
+    return previous
+
+
+def verdict_changes(run, previous):
+    if not previous or previous.get('suiteVersion') != SUITE_VERSION:
+        return ['无同版本上一轮报告可对照。']
+    old = {r['id']: r for r in previous.get('results', [])}
+    changes = []
+    for row in run['results']:
+        before = old.get(row['id'])
+        if before and before['verdict'] != row['verdict']:
+            note = row['id'] + ': ' + before['verdict'] + ' → ' + row['verdict']
+            if row['verdict'] == 'PASS':
+                note += '（本轮计划/证据已校验，算子已独立重算；仍需人工复核答案语义与原始行情）'
+            changes.append(note)
+    return changes or ['共同用例的 verdict 无变化。']
+
+
+def render(run, changes):
+    results = run['results']
+    passed = sum(r['verdict'] == 'PASS' for r in results)
+    lines = ['# CEXPilot common 回归', '', '- 版本：' + SUITE_VERSION,
+             '- 服务：' + run['base'],
+             '- 执行状态：%s；计划%d条，收集%d条' % ('已中断' if run['interrupted'] else '已完成', len(run['selectedCases']), len(results)),
+             '- 开始时间戳：' + str(run['startTime']), '- 结束时间戳：' + str(run['endTime']),
+             '- PASS %d / %d；FAIL %d' % (passed, len(results), len(results)-passed),
+             '- ' + cache_summary(run['cache']), '', '## 与上一轮比较', ''] + ['- '+s for s in changes]
+    lines += ['', '## 用例结果', '', '| ID | 问题 | 判定 | 秒 | 说明 |', '| --- | --- | --- | --- | --- |']
+    def cell(value):
+        return str(value).replace('|', '\\|').replace('\n', ' ')
+    for row in results:
+        lines.append('| %s | %s | %s | %s | %s |' % tuple(cell(x) for x in
+                     (row['id'], row['question'], row['verdict'], row['durationSeconds'], '；'.join(row['notes']))))
+    for row in results:
+        lines += ['', '## '+row['id'], '', row['question'], '', '- '+row['verdict']]
+        if row['response'].get('traceId'):
+            lines += ['- [trace]('+run['base']+'/trace.html?id='+urllib.parse.quote(row['response']['traceId'])+')']
+        lines += [''] + ['- '+note for note in row['notes']]
+        answer = row['response'].get('answer') or row['response'].get('_error') or ''
+        lines += ['', '```text', str(answer).replace('```', '｀｀｀'), '```']
+    return '\n'.join(lines)+'\n'
+
+
+def main(argv=None):
+    args = list(sys.argv[1:] if argv is None else argv)
+    # 兼容已有 only:A1,E1 / group:E 写法；精确匹配ID，避免 E1 顺带命中 E10。
+    args = [('--only='+x[5:] if x.startswith('only:') else '--group='+x[6:] if x.startswith('group:') else x) for x in args]
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--base', default=os.environ.get('CEXPILOT_BASE', 'https://cex.hrscrm.net'))
+    parser.add_argument('--only'); parser.add_argument('--group')
+    parser.add_argument('-w', '--workers', type=int, default=1)
+    parser.add_argument('--timeout', type=int, default=180)
+    parser.add_argument('--list', action='store_true', help='只列用例，不访问服务、不生成报告')
+    options = parser.parse_args(args)
+    if not 1 <= options.workers <= 8 or options.timeout <= 0:
+        parser.error('workers 必须为1～8，timeout 必须为正数')
+    try:
+        cases = select_cases(CASES, options.only, options.group)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if not cases:
+        parser.error('没有匹配的用例')
+    if options.list:
+        for case in cases:
+            print(case.id, case.question)
+        return 0
+    stamp = datetime.now(TZ).strftime('%Y-%m-%d')
+    md_path, raw_path = HERE / ('common-'+stamp+'.md'), HERE / 'raw' / ('common-'+stamp+'.json')
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    previous = backup_reports(md_path, raw_path)
+    run = run_cases(Client(options.base, options.timeout), cases, options.workers)
+    changes = verdict_changes(run, previous)
+    run['verdictChanges'] = changes
+    raw_path.write_text(json.dumps(run, ensure_ascii=False, indent=2, default=str), encoding='utf-8')
+    md_path.write_text(render(run, changes), encoding='utf-8')
+    for change in changes:
+        print(change)
+    print('报告：', md_path, '\n原始：', raw_path)
+    return 1 if run['interrupted'] or any(r['verdict'] != 'PASS' for r in run['results']) else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
