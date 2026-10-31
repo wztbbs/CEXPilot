@@ -77,17 +77,41 @@ public class MonitorRepository {
         }, id);
         return rows.isEmpty() ? null : rows.get(0);
     }
+    /** 执行、判定按规则版本及排期时刻关联；通知批量读取，避免每条记录再查一次数据库。 */
     public List<JsonNode> executions(String id) {
-        return jdbc.query("SELECT * FROM monitor_execution WHERE rule_id=? ORDER BY scheduled_at DESC LIMIT 100",(rs,n)->{
+        List<JsonNode> rows=jdbc.query("""
+                SELECT x.*, e.evidence_json, e.error_code, e.evaluation_id FROM monitor_execution x
+                LEFT JOIN monitor_evaluation e ON e.rule_id=x.rule_id AND e.rule_version=x.rule_version AND e.scheduled_at=x.scheduled_at
+                WHERE x.rule_id=? ORDER BY x.scheduled_at DESC LIMIT 100
+                """,(rs,n)->{
             var node=JsonNodeFactory.instance.objectNode().put("executionId",rs.getString("execution_id")).put("ruleVersion",rs.getInt("rule_version"))
                     .put("status",rs.getString("status")).put("attemptCount",rs.getInt("attempt_count")).put("scheduledAt",instant(rs,"scheduled_at").toString())
                     .put("deadlineAt",instant(rs,"deadline_at").toString()).put("result",rs.getString("result")).put("lastError",rs.getString("last_error"));
             if(instant(rs,"started_at")!=null) node.put("startedAt",instant(rs,"started_at").toString());
             if(instant(rs,"finished_at")!=null) node.put("finishedAt",instant(rs,"finished_at").toString());
+            node.put("evaluationId",rs.getString("evaluation_id")).put("errorCode",rs.getString("error_code"));
+            node.set("evidence",json.read(rs.getString("evidence_json")));
+            node.putArray("notifications");
             var checkpoint=json.read(rs.getString("checkpoint_json"));
             node.put("checkpointNodeCount",checkpoint.path("nodes").size()); return (JsonNode)node;
         },id);
+        var byEvaluation=new java.util.HashMap<String,com.fasterxml.jackson.databind.node.ArrayNode>();
+        for(var row:rows) if(row.path("evaluationId").isTextual())
+            byEvaluation.put(row.path("evaluationId").asText(),(com.fasterxml.jackson.databind.node.ArrayNode)row.path("notifications"));
+        if(!byEvaluation.isEmpty()) {
+            String placeholders=String.join(",",java.util.Collections.nCopies(byEvaluation.size(),"?"));
+            jdbc.query("SELECT e.evaluation_id,d.status,d.provider_message_id,d.sent_at FROM monitor_event e "
+                    +"JOIN notification_delivery d ON d.event_id=e.event_id WHERE e.evaluation_id IN ("+placeholders+")",
+                    (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
+                var item=byEvaluation.get(rs.getString("evaluation_id")).addObject().put("status",rs.getString("status"));
+                String message=rs.getString("provider_message_id");
+                item.put("simulated",message!=null && message.startsWith("dry-run:"));
+                if(instant(rs,"sent_at")!=null) item.put("sentAt",instant(rs,"sent_at").toString());
+            },byEvaluation.keySet().toArray());
+        }
+        return rows;
     }
+
     public List<JsonNode> events(String id) {
         return jdbc.query("""
                 SELECT e.*,d.status delivery_status,d.attempt_count,d.last_error,d.provider_message_id FROM monitor_event e

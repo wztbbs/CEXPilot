@@ -11,10 +11,13 @@ public record SnapshotQuery(MetricBinding binding, Integer depth) implements Met
 
     public SnapshotQuery {
         Objects.requireNonNull(binding, "binding");
-        InstrumentRules.requirePerpetualUsdt(binding);
+        InstrumentRules.requireSupportedUsdt(binding);
         if (depth != null && (depth < 5 || depth > 50)) {
             throw new IllegalArgumentException("depth 必须在 5~50 之间: " + depth);
         }
+    }
+    public com.cexpilot.market.MarketType marketType() {
+        return com.cexpilot.market.MarketType.parse(binding.instrument().path("market_type").asText());
     }
     public Exchange exchange() { return InstrumentRules.exchange(binding); }
     public String base() { return InstrumentRules.base(binding); }

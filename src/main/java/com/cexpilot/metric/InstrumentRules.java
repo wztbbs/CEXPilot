@@ -8,13 +8,15 @@ import com.fasterxml.jackson.databind.JsonNode;
 final class InstrumentRules {
     private InstrumentRules() {}
 
-    static void requirePerpetualUsdt(MetricBinding binding) {
+    static void requireSupportedUsdt(MetricBinding binding) {
         JsonNode instrument = binding.instrument();
-        if (!"perpetual".equals(instrument.path("market_type").asText())
-                || !"USDT".equals(instrument.path("quote").asText())
-                || !"USDT".equals(instrument.path("settle").asText())) {
-            throw new IllegalArgumentException("当前指标仅支持 USDT 报价、USDT 结算永续");
-        }
+        var market = com.cexpilot.market.MarketType.parse(instrument.path("market_type").asText());
+        if (!"USDT".equals(instrument.path("quote").asText()))
+            throw new IllegalArgumentException("当前指标仅支持 USDT 报价");
+        if (market == com.cexpilot.market.MarketType.PERPETUAL && !"USDT".equals(instrument.path("settle").asText()))
+            throw new IllegalArgumentException("永续仅支持 USDT 结算");
+        if (market == com.cexpilot.market.MarketType.SPOT && instrument.hasNonNull("settle"))
+            throw new IllegalArgumentException("现货不使用合约结算币 settle");
         String base = instrument.path("base").asText();
         if (!base.matches("[A-Z0-9]{2,15}") || base.matches(".+(?:USDC|BUSD|USD)")
                 || !SymbolMapper.normalize(base).equals(base)) {

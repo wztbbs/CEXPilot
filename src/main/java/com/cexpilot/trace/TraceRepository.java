@@ -26,11 +26,16 @@ public class TraceRepository {
 
     public void startTrace(String traceId, String conversationId, String question, String model,
                            String promptVersion, String visitorId, String buildCommit) {
+        startTrace(traceId, conversationId, question, model, promptVersion, visitorId, buildCommit, true);
+    }
+
+    public void startTrace(String traceId, String conversationId, String question, String model,
+                           String promptVersion, String visitorId, String buildCommit, boolean isRealUser) {
         jdbc.update("""
-                        INSERT INTO ask_trace (trace_id, conversation_id, question, status, model, prompt_version, visitor_id, build_commit)
-                        VALUES (?, ?, ?, 'RUNNING', ?, ?, ?, ?)
+                        INSERT INTO ask_trace (trace_id, conversation_id, question, status, model, prompt_version, visitor_id, build_commit, is_real_user)
+                        VALUES (?, ?, ?, 'RUNNING', ?, ?, ?, ?, ?)
                         """,
-                traceId, conversationId, question, model, promptVersion, visitorId, buildCommit);
+                traceId, conversationId, question, model, promptVersion, visitorId, buildCommit, isRealUser);
     }
 
     public void finishTrace(String traceId, String status, String answer, int llmSteps, int toolCalls,

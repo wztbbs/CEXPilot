@@ -29,8 +29,11 @@ public class KlineMetricProvider implements MetricProvider {
             throw new IllegalArgumentException("kline Provider 仅支持时间区间查询: " + query.getClass().getSimpleName());
         }
         CandleInterval interval = timeQuery.intervalCode() == null ? null : CandleInterval.parse(timeQuery.intervalCode());
-        var result = service.query(context.userZone(), timeQuery.time(), context.requestTime(),
-                timeQuery.exchange(), timeQuery.base(), interval, timeQuery.includeUnclosed());
+        var result = timeQuery.marketType() == com.cexpilot.market.MarketType.SPOT
+                ? service.query(context.userZone(), timeQuery.time(), context.requestTime(),
+                    timeQuery.exchange(), timeQuery.base(), timeQuery.marketType(), interval, timeQuery.includeUnclosed())
+                : service.query(context.userZone(), timeQuery.time(), context.requestTime(),
+                    timeQuery.exchange(), timeQuery.base(), interval, timeQuery.includeUnclosed());
         var metadata = new MetricResult.SeriesMetadata(result.requested().range(), result.effective().range(),
                 result.coverage(), result.effective().interval().code(), interval == null, result.candles().size());
         KlineMetric selector = (KlineMetric) query.binding().selector();

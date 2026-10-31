@@ -59,22 +59,36 @@ public class MetricCatalog {
                 throw new IllegalArgumentException(path + ".unit 不支持: " + unit);
             if (!node.path("bindings").isObject() || node.path("bindings").isEmpty())
                 throw new IllegalArgumentException(path + ".bindings 必须为非空对象");
-            Map<QueryShape, MetricBindingDefinition> bindings = new LinkedHashMap<>();
-            node.path("bindings").fields().forEachRemaining(b -> {
-                QueryShape shape = QueryShape.from(b.getKey());
-                String bindingPath = path + ".bindings." + b.getKey();
-                MetricBindingDefinition binding = parseBinding(b.getValue(), bindingPath);
-                if (shape.requiresCount() != (binding.count() != null))
-                    throw new IllegalArgumentException(bindingPath + ".count 仅 recent_n 必须声明");
-                if (binding.intervals() != null && !shape.requiresTime())
-                    throw new IllegalArgumentException(bindingPath + ".intervals 仅时间形态可声明");
-                if (binding.depth() != null && shape != QueryShape.SNAPSHOT && shape != QueryShape.OFFICIAL_24H)
-                    throw new IllegalArgumentException(bindingPath + ".depth 仅快照形态可声明");
-                bindings.put(shape, binding);
+            Map<String, Map<QueryShape, MetricBindingDefinition>> markets = new LinkedHashMap<>();
+            JsonNode declared = node.path("bindings");
+            // 旧目录仅声明查询形态时仍代表永续；新目录必须显式声明各市场，绝不隐式开放现货。
+            boolean legacy = !declared.has("perpetual") && !declared.has("spot");
+            if (legacy) markets.put("perpetual", parseShapes(declared, path + ".bindings"));
+            else declared.fields().forEachRemaining(m -> {
+                com.cexpilot.market.MarketType.parse(m.getKey());
+                markets.put(m.getKey(), parseShapes(m.getValue(), path + ".bindings." + m.getKey()));
             });
-            metrics.put(e.getKey(), new MetricDefinition(description, unit, bindings));
+            metrics.put(e.getKey(), new MetricDefinition(description, unit, markets));
         });
         this.definitions = java.util.Collections.unmodifiableMap(metrics);
+    }
+
+    private static Map<QueryShape, MetricBindingDefinition> parseShapes(JsonNode node, String path) {
+        if (!node.isObject() || node.isEmpty()) throw new IllegalArgumentException(path + " 必须为非空对象");
+        Map<QueryShape, MetricBindingDefinition> bindings = new LinkedHashMap<>();
+        node.fields().forEachRemaining(b -> {
+            QueryShape shape = QueryShape.from(b.getKey());
+            String bindingPath = path + "." + b.getKey();
+            MetricBindingDefinition binding = parseBinding(b.getValue(), bindingPath);
+            if (shape.requiresCount() != (binding.count() != null))
+                throw new IllegalArgumentException(bindingPath + ".count 仅 recent_n 必须声明");
+            if (binding.intervals() != null && !shape.requiresTime())
+                throw new IllegalArgumentException(bindingPath + ".intervals 仅时间形态可声明");
+            if (binding.depth() != null && shape != QueryShape.SNAPSHOT && shape != QueryShape.OFFICIAL_24H)
+                throw new IllegalArgumentException(bindingPath + ".depth 仅快照形态可声明");
+            bindings.put(shape, binding);
+        });
+        return bindings;
     }
 
     static MetricCatalog of(JsonNode document) { return new MetricCatalog(document); }
@@ -161,13 +175,16 @@ public class MetricCatalog {
         definitions.forEach((name, definition) -> {
             out.append("- ").append(name).append(": ").append(definition.description())
                     .append("；unit=").append(definition.unit());
-            // 相同约束的形态合并展示；不同形态的交易所限制不能取并集，否则会虚报能力。
-            var shapesByConstraints = new LinkedHashMap<String, List<String>>();
-            definition.bindings().forEach((shape, binding) ->
-                    shapesByConstraints.computeIfAbsent(describeConstraints(binding),
-                            ignored -> new ArrayList<>()).add(shape.code()));
-            shapesByConstraints.forEach((constraints, shapes) -> out.append("；query_shape=")
-                    .append(String.join("|", shapes)).append(constraints));
+            definition.marketBindings().forEach((market, bindings) -> {
+                out.append("；market_type=").append(market).append("{");
+                var shapesByConstraints = new LinkedHashMap<String, List<String>>();
+                bindings.forEach((shape, binding) ->
+                        shapesByConstraints.computeIfAbsent(describeConstraints(binding),
+                                ignored -> new ArrayList<>()).add(shape.code()));
+                shapesByConstraints.forEach((constraints, shapes) -> out.append("；query_shape=")
+                        .append(String.join("|", shapes)).append(constraints));
+                out.append("}");
+            });
             out.append('\n');
         });
         return out.toString();

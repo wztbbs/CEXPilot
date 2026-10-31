@@ -21,6 +21,8 @@ public interface TakerVolumeSource {
 
     Exchange exchange();
 
+    default com.cexpilot.market.MarketType marketType() { return com.cexpilot.market.MarketType.PERPETUAL; }
+
     /** 数据源能力（分页预算、历史保留天数）。 */
     SeriesCapability capability();
 

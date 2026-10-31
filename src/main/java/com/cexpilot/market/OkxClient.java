@@ -27,7 +27,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * OKX v5 公共行情，统一使用 USDT 永续合约（instId 形如 BTC-USDT-SWAP）。
+ * OKX v5 公共行情：USDT 永续 BTC-USDT-SWAP 与现货 BTC-USDT 共用域名和接口。
  * OKX 的 candles / trades 接口返回是倒序（最新在前），这里统一翻转为时间升序。
  */
 @Component
@@ -60,7 +60,7 @@ public class OkxClient {
     public List<Candle> candles(String instId, String bar, long beforeTs, long afterTs, int limit) {
         JsonNode data = get("/api/v5/market/candles?instId={i}&bar={b}&before={bf}&after={af}&limit={l}",
                 instId, bar, beforeTs, afterTs, limit);
-        return parseCandles(data);
+        return parseCandles(data, !instId.endsWith("-SWAP"));
     }
 
     /**
@@ -69,21 +69,23 @@ public class OkxClient {
     public List<Candle> historyCandles(String instId, String bar, long beforeTs, long afterTs, int limit) {
         JsonNode data = get("/api/v5/market/history-candles?instId={i}&bar={b}&before={bf}&after={af}&limit={l}",
                 instId, bar, beforeTs, afterTs, limit);
-        return parseCandles(data);
+        return parseCandles(data, !instId.endsWith("-SWAP"));
     }
 
     public Ticker ticker(String instId) {
         JsonNode data = get("/api/v5/market/ticker?instId={i}", instId);
-        return parseTicker(first(data, "ticker"));
+        return parseTicker(first(data, "ticker"), !instId.endsWith("-SWAP"));
     }
 
     /**
-     * OKX ticker 没有 USDT 成交额字段：vol24h 是张数、volCcy24h 是基础币数。
+     * OKX 永续 ticker：vol24h 是张数、volCcy24h 是基础币数；现货分别为基础币量、报价币额。
      * 统一为币安同口径：baseVolume24h = 币数（volCcy24h），
      * quoteVolume24h = 币数 × 最新价（USDT 估算值，24h 内价格变动会带来误差，
      * 由 quoteVolumeEstimated 显式标注）。open24h 为 0 时涨跌幅无法定义，返回 null。
      */
-    static Ticker parseTicker(JsonNode item) {
+    static Ticker parseTicker(JsonNode item) { return parseTicker(item, false); }
+
+    static Ticker parseTicker(JsonNode item, boolean spot) {
         BigDecimal last = decimal(item, "last");
         BigDecimal open24h = decimal(item, "open24h");
         BigDecimal changePct = null;
@@ -92,9 +94,10 @@ public class OkxClient {
                     .divide(open24h, 6, java.math.RoundingMode.HALF_UP)
                     .multiply(new BigDecimal("100"));
         }
-        BigDecimal volumeBase = decimal(item, "volCcy24h");
-        return new Ticker(last, changePct, volumeBase, volumeBase.multiply(last),
-                true, item.path("ts").asLong(0));
+        BigDecimal volumeBase = decimal(item, spot ? "vol24h" : "volCcy24h");
+        BigDecimal quoteVolume = spot ? decimal(item, "volCcy24h") : volumeBase.multiply(last);
+        return new Ticker(last, changePct, volumeBase, quoteVolume,
+                !spot, item.path("ts").asLong(0));
     }
 
     /**
@@ -215,9 +218,9 @@ public class OkxClient {
     public OrderBook orderBook(String instId, int depth) {
         JsonNode data = get("/api/v5/market/books?instId={i}&sz={d}", instId, depth);
         JsonNode item = first(data, "books");
-        // OKX 盘口数量是合约张数，不是基础币数量
+        // 永续盘口数量是合约张数，现货则是基础币数量。
         return new OrderBook(parseLevels(item.path("bids")), parseLevels(item.path("asks")),
-                "contracts", item.path("ts").asLong(0));
+                instId.endsWith("-SWAP") ? "contracts" : "base", item.path("ts").asLong(0));
     }
 
     /** mark 与 index 是两次顺序请求，各自保留来源时间戳，供基差处给出时间差。 */
@@ -355,7 +358,9 @@ public class OkxClient {
         return data.get(0);
     }
 
-    static List<Candle> parseCandles(JsonNode data) {
+    static List<Candle> parseCandles(JsonNode data) { return parseCandles(data, false); }
+
+    static List<Candle> parseCandles(JsonNode data, boolean spot) {
         List<Candle> candles = new ArrayList<>();
         for (int i = data.size() - 1; i >= 0; i--) {
             JsonNode row = data.get(i);
@@ -365,8 +370,8 @@ public class OkxClient {
                     new BigDecimal(row.get(2).asText()),
                     new BigDecimal(row.get(3).asText()),
                     new BigDecimal(row.get(4).asText()),
-                    // OKX candles 第 5 列是张数，第 6 列才是基础币数（与币安 volume 口径一致）
-                    new BigDecimal(row.get(6).asText()),
+                    // 永续基础币量在索引 6，现货基础币量在索引 5。
+                    new BigDecimal(row.get(spot ? 5 : 6).asText()),
                     // 第 8 列 volCcyQuote 为 USDT 成交额
                     new BigDecimal(row.get(7).asText()),
                     // 第 9 列 confirm："1"=已完结，"0"=未完结（OHLCV 仍是部分值，不能按时间推断覆盖）

@@ -53,6 +53,8 @@ public class AskController {
                     .body(response);
         } catch (com.cexpilot.conversation.StaleContextException e) {
             return ResponseEntity.status(409).body(e.response());
+        } catch (org.springframework.web.server.ResponseStatusException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(Map.of("error", "会话不存在"));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
@@ -146,11 +148,8 @@ public class AskController {
     }
 
     private AskResponse execute(AskRequest request, String visitor, AskService.AskStreamListener listener) {
-        if (request.clarificationAnswers() != null && !request.clarificationAnswers().isEmpty()) {
-            return askService.ask(request.conversationId(), request.question(), visitor, request.timezone(),
-                    request.parentTurnId(), listener, request.clarificationAnswers());
-        }
-        return askService.ask(request.conversationId(), request.question(), visitor, request.timezone(), request.parentTurnId(), listener);
+        return askService.ask(request.conversationId(), request.question(), visitor, request.timezone(),
+                request.parentTurnId(), listener, request.clarificationAnswers(), request.isRealUser());
     }
 
     private static void send(SseEmitter emitter, String event, Object data) {
@@ -177,7 +176,7 @@ public class AskController {
         }
     }
 
-    private static String visitorCookie(String visitorId) {
+    static String visitorCookie(String visitorId) {
         return ResponseCookie.from(VISITOR_COOKIE, visitorId)
                 .httpOnly(true)
                 .path("/")

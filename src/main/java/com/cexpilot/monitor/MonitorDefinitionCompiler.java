@@ -22,7 +22,7 @@ public class MonitorDefinitionCompiler {
         // 自动粒度固定为5m，随确认内容持久化，避免后台按窗口自动切换粒度。
         ObjectNode normalized=checked.candidate().deepCopy();
         for(var metric:normalized.path("plan").path("metrics")) {
-            var binding=catalog.metricDefinition(metric.path("metric").asText()).bindings().get(QueryShape.from(metric.path("query_shape").asText()));
+            var binding=catalog.metricDefinition(metric.path("metric").asText()).bindings(metric.path("instrument").path("market_type").asText()).get(QueryShape.from(metric.path("query_shape").asText()));
             if(binding.hasIntervalSupport() && !metric.hasNonNull("interval")) ((ObjectNode)metric).put("interval","5m");
         }
         checked=validator.validate(normalized);
@@ -75,8 +75,9 @@ public class MonitorDefinitionCompiler {
                 case "price.last" -> "成交价"; case "price.close" -> "K线收盘价";
                 case "oi.quantity" -> "持仓量"; default -> metric.description();
             };
-            return metric.exchange().equals("binance")?"Binance "+metric.instrument().path("base").asText()+"/USDT 永续，"+window+name
-                    :"OKX "+metric.instrument().path("base").asText()+"/USDT 永续，"+window+name;
+            String market = "spot".equals(metric.instrument().path("market_type").asText()) ? "现货" : "永续";
+            return (metric.exchange().equals("binance") ? "Binance " : "OKX ")
+                    + metric.instrument().path("base").asText() + "/USDT " + market + "，" + window + name;
         }
         String op=switch(node.tool()) { case "avg"->"均值"; case "sum"->"合计"; case "min"->"最小值"; case "max"->"最大值";
             case "difference"->"差值"; case "ratio"->"比值"; case "relative_change"->"相对变化率"; case "annualize"->"年化结果"; case "compare"->"大小关系值"; default->node.tool(); };

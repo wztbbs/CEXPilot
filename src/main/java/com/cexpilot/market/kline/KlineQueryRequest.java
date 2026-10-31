@@ -14,5 +14,11 @@ public record KlineQueryRequest(Exchange exchange,
                                 String base,
                                 CandleInterval interval,
                                 TimeRange range,
-                                boolean includeUnclosed) {
+                                boolean includeUnclosed,
+                                com.cexpilot.market.MarketType marketType) {
+    public KlineQueryRequest(Exchange exchange, String base, CandleInterval interval, TimeRange range,
+                             boolean includeUnclosed) {
+        this(exchange, base, interval, range, includeUnclosed, com.cexpilot.market.MarketType.PERPETUAL);
+    }
+    public KlineQueryRequest { java.util.Objects.requireNonNull(marketType); }
 }

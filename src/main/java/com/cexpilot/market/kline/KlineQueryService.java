@@ -49,19 +49,26 @@ public class KlineQueryService {
     public KlineQueryResult query(ZoneId userZone, TimeSpec spec, Instant requestTime,
                                   Exchange exchange, String base,
                                   CandleInterval interval, boolean includeUnclosed) {
+        return query(userZone, spec, requestTime, exchange, base,
+                com.cexpilot.market.MarketType.PERPETUAL, interval, includeUnclosed);
+    }
+
+    public KlineQueryResult query(ZoneId userZone, TimeSpec spec, Instant requestTime,
+                                  Exchange exchange, String base, com.cexpilot.market.MarketType market,
+                                  CandleInterval interval, boolean includeUnclosed) {
         TimeRange range = timeRangeResolver.resolve(userZone, spec, requestTime);
         KlineSource source = sources.get(exchange);
         if (source == null) {
             throw new IllegalArgumentException("交易所暂无 K 线数据源: " + exchange.displayName());
         }
 
-        interval = CandleIntervalSelector.select(interval, range, source.capability());
+        interval = CandleIntervalSelector.select(interval, range, source.capability(market));
         KlineQueryRequest requested = new KlineQueryRequest(
-                exchange, base, interval, range, includeUnclosed);
+                exchange, base, interval, range, includeUnclosed, market);
         TimeRange effectiveRange = SeriesQueryPolicy.check(
-                interval, range, source.capability(), exchange.displayName(), requestTime);
+                interval, range, source.capability(market), exchange.displayName(), requestTime);
         KlineQueryRequest effective = new KlineQueryRequest(
-                exchange, base, interval, effectiveRange, includeUnclosed);
+                exchange, base, interval, effectiveRange, includeUnclosed, market);
 
         KlineSource.FetchResult fetch = source.fetch(effective);
         List<TimePoint> points = fetch.candles().stream()

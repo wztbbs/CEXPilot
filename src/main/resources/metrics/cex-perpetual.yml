@@ -1,7 +1,8 @@
-version: cex-perpetual-v1
+version: cex-market-v2
 # concepts 只保留跨指标的共用语义；指标口径归 description，参数能力归 bindings，计算规则归 operators。
 concepts: |
-  perpetual 是永续产品；base 是基础币；quote 是价格的计价币种；settle 是合约盈亏的结算币种。当前仅支持 USDT 报价、USDT 结算的永续合约。
+  perpetual 是永续产品；base 是基础币；quote 是价格的计价币种；settle 是合约盈亏的结算币种。spot 是现货产品；当前支持 USDT 报价现货与 USDT 报价、USDT 结算永续。现货没有合约结算币 settle，必须省略；永续 settle 可省略，由程序补为 USDT。同名指标按 market_type 分别取数，不可互相替代。
+  市场、查询形态、交易所的支持范围以每个绑定为准，不跨市场合并约束。Binance 现货 REST 盘口没有交易所数据时间，结果只提供 collected_at 本地采集时间，不能称作 as_of。
   snapshot 是当前时刻取值；range_statistic 是区间统计；time_series 是逐采样点序列；official_24h 是交易所官方滚动24小时统计；recent_n 是最近N期/笔，期数不代表时间跨度。
   自然日由日期和时区定义，不等于滚动24小时；官方24h窗口也不保证等于程序按 time 计算的窗口。用户询问“24h/最近24小时”的涨跌幅、成交量或成交额且未进一步限定口径时，优先使用已接入的 official_24h 指标；明确要求按本次请求时刻回溯、指定起止时间或查询“昨天”等自然日时，使用 range_statistic。官方指标未接入时，可使用已接入的 K 线区间统计并披露实际窗口与计算口径，但不能称为交易所官方24h数据；用户明确要求官方口径时，应说明能力缺口，不自动替代。
   未对齐的时间边界可能外延，回答以实际窗口为准；默认排除未完结数据，用户明确要求时才能 include_unclosed=true，并披露状态。
@@ -37,203 +38,282 @@ metrics:
     description: 最近 N 期已结算资金费率（0.0001=0.01%），按结算时间升序；正费率多头付空头，负费率空头付多头，零费率无支付。未接入当前未结算/预测费率、下次结算时间和时间窗口查询；不能用已结算值替代当前未结算值、用历史周期推算未来结算时间，或把天数/小时数换算成期数；N期 avg/sum 不代表指定时间窗口的均值/累计值
     unit: ratio
     bindings:
-      recent_n: {provider: funding, selector: RATE, count: {min: 1, max: 100}}
+      perpetual:
+        recent_n: {provider: funding, selector: RATE, count: {min: 1, max: 100}}
   orderbook.best_bid:
     description: 当前买一价
     unit: quote
     bindings:
-      snapshot: {provider: orderbook, selector: BEST_BID, depth: {default: 20, min: 5, max: 50}}
+      perpetual:
+        snapshot: {provider: orderbook, selector: BEST_BID, depth: {default: 20, min: 5, max: 50}}
+      spot:
+        snapshot: {provider: orderbook, selector: BEST_BID, depth: {default: 20, min: 5, max: 50}}
   orderbook.best_ask:
     description: 当前卖一价
     unit: quote
     bindings:
-      snapshot: {provider: orderbook, selector: BEST_ASK, depth: {default: 20, min: 5, max: 50}}
+      perpetual:
+        snapshot: {provider: orderbook, selector: BEST_ASK, depth: {default: 20, min: 5, max: 50}}
+      spot:
+        snapshot: {provider: orderbook, selector: BEST_ASK, depth: {default: 20, min: 5, max: 50}}
   orderbook.spread:
     description: 当前买卖一价差（卖一减买一）
     unit: quote
     bindings:
-      snapshot: {provider: orderbook, selector: SPREAD, depth: {default: 20, min: 5, max: 50}}
+      perpetual:
+        snapshot: {provider: orderbook, selector: SPREAD, depth: {default: 20, min: 5, max: 50}}
+      spot:
+        snapshot: {provider: orderbook, selector: SPREAD, depth: {default: 20, min: 5, max: 50}}
   orderbook.imbalance:
     description: 买卖盘挂单量不平衡度=买方挂单量/卖方挂单量（ratio 可大于1，>1 表示买盘量较多，<1 表示卖盘量较多，不是买量占总量的比例或百分数）；按实际可用档数计算，最多 10 档
     unit: ratio
     bindings:
-      snapshot: {provider: orderbook, selector: IMBALANCE, depth: {default: 20, min: 5, max: 50}}
+      perpetual:
+        snapshot: {provider: orderbook, selector: IMBALANCE, depth: {default: 20, min: 5, max: 50}}
+      spot:
+        snapshot: {provider: orderbook, selector: IMBALANCE, depth: {default: 20, min: 5, max: 50}}
   price.last:
     description: 最新成交价（当前快照，带 as_of 数据时间）；不是标记价、指数价或区间收盘价
     unit: quote
     bindings:
-      snapshot: {provider: ticker, selector: LAST}
+      perpetual:
+        snapshot: {provider: ticker, selector: LAST}
+      spot:
+        snapshot: {provider: ticker, selector: LAST}
   price.change_pct_24h:
     description: 交易所官方滚动 24 小时涨跌幅（百分数口径）；窗口由交易所定义，不是自然日，也不等于区间涨跌幅
     unit: percent
     bindings:
-      official_24h: {provider: ticker, selector: CHANGE_PCT_24H}
+      perpetual:
+        official_24h: {provider: ticker, selector: CHANGE_PCT_24H}
+      spot:
+        official_24h: {provider: ticker, selector: CHANGE_PCT_24H}
   price.open:
     description: 区间首根成交价格 K 线开盘价；序列为每根开盘价
     unit: quote
     bindings:
-      range_statistic: {provider: kline, selector: OPEN, intervals: [5m, 15m, 1h]}
-      time_series: {provider: kline, selector: OPEN, intervals: [5m, 15m, 1h]}
+      perpetual:
+        range_statistic: {provider: kline, selector: OPEN, intervals: [5m, 15m, 1h]}
+        time_series: {provider: kline, selector: OPEN, intervals: [5m, 15m, 1h]}
+      spot:
+        range_statistic: {provider: kline, selector: OPEN, intervals: [5m, 15m, 1h]}
+        time_series: {provider: kline, selector: OPEN, intervals: [5m, 15m, 1h]}
   price.close:
     description: 区间末根成交价格 K 线收盘价；序列为每根收盘价，不是当前实时价
     unit: quote
     bindings:
-      range_statistic: {provider: kline, selector: CLOSE, intervals: [5m, 15m, 1h]}
-      time_series: {provider: kline, selector: CLOSE, intervals: [5m, 15m, 1h]}
+      perpetual:
+        range_statistic: {provider: kline, selector: CLOSE, intervals: [5m, 15m, 1h]}
+        time_series: {provider: kline, selector: CLOSE, intervals: [5m, 15m, 1h]}
+      spot:
+        range_statistic: {provider: kline, selector: CLOSE, intervals: [5m, 15m, 1h]}
+        time_series: {provider: kline, selector: CLOSE, intervals: [5m, 15m, 1h]}
   price.high:
     description: 区间最高成交价；序列为每根最高价
     unit: quote
     bindings:
-      range_statistic: {provider: kline, selector: HIGH, intervals: [5m, 15m, 1h]}
-      time_series: {provider: kline, selector: HIGH, intervals: [5m, 15m, 1h]}
+      perpetual:
+        range_statistic: {provider: kline, selector: HIGH, intervals: [5m, 15m, 1h]}
+        time_series: {provider: kline, selector: HIGH, intervals: [5m, 15m, 1h]}
+      spot:
+        range_statistic: {provider: kline, selector: HIGH, intervals: [5m, 15m, 1h]}
+        time_series: {provider: kline, selector: HIGH, intervals: [5m, 15m, 1h]}
   price.low:
     description: 区间最低成交价；序列为每根最低价
     unit: quote
     bindings:
-      range_statistic: {provider: kline, selector: LOW, intervals: [5m, 15m, 1h]}
-      time_series: {provider: kline, selector: LOW, intervals: [5m, 15m, 1h]}
+      perpetual:
+        range_statistic: {provider: kline, selector: LOW, intervals: [5m, 15m, 1h]}
+        time_series: {provider: kline, selector: LOW, intervals: [5m, 15m, 1h]}
+      spot:
+        range_statistic: {provider: kline, selector: LOW, intervals: [5m, 15m, 1h]}
+        time_series: {provider: kline, selector: LOW, intervals: [5m, 15m, 1h]}
   price.change_pct:
     description: 区间末收盘价相对首开盘价的涨跌幅，百分数口径
     unit: percent
     bindings:
-      range_statistic: {provider: kline, selector: CHANGE_PCT, intervals: [5m, 15m, 1h]}
+      perpetual:
+        range_statistic: {provider: kline, selector: CHANGE_PCT, intervals: [5m, 15m, 1h]}
+      spot:
+        range_statistic: {provider: kline, selector: CHANGE_PCT, intervals: [5m, 15m, 1h]}
   trade.volume:
     description: 区间基础币成交量合计；序列为每根 K 线基础币成交量
     unit: base
     bindings:
-      range_statistic: {provider: kline, selector: VOLUME, intervals: [5m, 15m, 1h]}
-      time_series: {provider: kline, selector: VOLUME, intervals: [5m, 15m, 1h]}
+      perpetual:
+        range_statistic: {provider: kline, selector: VOLUME, intervals: [5m, 15m, 1h]}
+        time_series: {provider: kline, selector: VOLUME, intervals: [5m, 15m, 1h]}
+      spot:
+        range_statistic: {provider: kline, selector: VOLUME, intervals: [5m, 15m, 1h]}
+        time_series: {provider: kline, selector: VOLUME, intervals: [5m, 15m, 1h]}
   trade.turnover:
     description: 区间真实报价币成交额，由成交 K 线成交额累计，不用成交量乘最新价估算
     unit: quote
     bindings:
-      range_statistic: {provider: kline, selector: TURNOVER, intervals: [5m, 15m, 1h]}
+      perpetual:
+        range_statistic: {provider: kline, selector: TURNOVER, intervals: [5m, 15m, 1h]}
+      spot:
+        range_statistic: {provider: kline, selector: TURNOVER, intervals: [5m, 15m, 1h]}
   trade.volume_24h:
     description: 交易所官方滚动 24 小时成交量（基础币）；不是自然日成交量
     unit: base
     bindings:
-      official_24h: {provider: ticker, selector: VOLUME_24H}
+      perpetual:
+        official_24h: {provider: ticker, selector: VOLUME_24H}
+      spot:
+        official_24h: {provider: ticker, selector: VOLUME_24H}
   trade.turnover_24h:
     description: 交易所官方滚动 24 小时真实成交额，不接受成交量乘最新价的估算值
     unit: quote
     bindings:
-      official_24h: {provider: ticker, selector: TURNOVER_24H, exchanges: [binance]}
+      perpetual:
+        official_24h: {provider: ticker, selector: TURNOVER_24H, exchanges: [binance]}
+      spot:
+        official_24h: {provider: ticker, selector: TURNOVER_24H}
   oi.quantity:
     description: 未平仓合约数量（基础币口径，不是名义价值或张数）；序列为各采样点、快照为当前值；Binance 历史查询仅支持最近 30 天
     unit: base
     bindings:
-      snapshot: {provider: oi, selector: QUANTITY}
-      time_series: {provider: oi, selector: QUANTITY, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
+      perpetual:
+        snapshot: {provider: oi, selector: QUANTITY}
+        time_series: {provider: oi, selector: QUANTITY, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
   oi.start:
     description: 区间起点采样时刻的未平仓合约数量（基础币）；端点统计含逻辑右端点并要求覆盖完整，缺端点不替代；Binance 历史查询仅支持最近 30 天
     unit: base
     bindings:
-      range_statistic: {provider: oi, selector: START, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
+      perpetual:
+        range_statistic: {provider: oi, selector: START, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
   oi.end:
     description: 区间逻辑终点采样时刻的未平仓合约数量（基础币），不是半开区间内最后一点；缺端点不替代；Binance 历史查询仅支持最近 30 天
     unit: base
     bindings:
-      range_statistic: {provider: oi, selector: END, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
+      perpetual:
+        range_statistic: {provider: oi, selector: END, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
   oi.change:
     description: 区间逻辑终点减起点的未平仓合约数量变化量（基础币），包含两端采样；缺端点不替代；Binance 历史查询仅支持最近 30 天
     unit: base
     bindings:
-      range_statistic: {provider: oi, selector: CHANGE, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
+      perpetual:
+        range_statistic: {provider: oi, selector: CHANGE, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
   oi.change_pct:
     description: 区间逻辑终点相对起点的未平仓合约数量变化率，包含两端采样；缺端点或零基数不输出值；Binance 历史查询仅支持最近 30 天
     unit: percent
     bindings:
-      range_statistic: {provider: oi, selector: CHANGE_PCT, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
+      perpetual:
+        range_statistic: {provider: oi, selector: CHANGE_PCT, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
   oi.max:
     description: 区间采样点最高未平仓合约数量（基础币）；Binance 历史查询仅支持最近 30 天
     unit: base
     bindings:
-      range_statistic: {provider: oi, selector: MAX, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
+      perpetual:
+        range_statistic: {provider: oi, selector: MAX, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
   oi.min:
     description: 区间采样点最低未平仓合约数量（基础币）；Binance 历史查询仅支持最近 30 天
     unit: base
     bindings:
-      range_statistic: {provider: oi, selector: MIN, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
+      perpetual:
+        range_statistic: {provider: oi, selector: MIN, intervals: [5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d]}
   mark.price:
     description: 当前标记价格（快照，带 as_of）；不是成交价、指数价
     unit: quote
     bindings:
-      snapshot: {provider: mark_price, selector: MARK}
+      perpetual:
+        snapshot: {provider: mark_price, selector: MARK}
   mark.open:
     description: 区间首根标记价格开盘价；序列为每根开盘价；标记价不是成交价
     unit: quote
     bindings:
-      range_statistic: {provider: mark_price, selector: MARK_OPEN, intervals: [5m, 15m, 1h]}
-      time_series: {provider: mark_price, selector: MARK_OPEN, intervals: [5m, 15m, 1h]}
+      perpetual:
+        range_statistic: {provider: mark_price, selector: MARK_OPEN, intervals: [5m, 15m, 1h]}
+        time_series: {provider: mark_price, selector: MARK_OPEN, intervals: [5m, 15m, 1h]}
   mark.close:
     description: 区间末根标记价格收盘价；序列为每根收盘价，不是当前实时价
     unit: quote
     bindings:
-      range_statistic: {provider: mark_price, selector: MARK_CLOSE, intervals: [5m, 15m, 1h]}
-      time_series: {provider: mark_price, selector: MARK_CLOSE, intervals: [5m, 15m, 1h]}
+      perpetual:
+        range_statistic: {provider: mark_price, selector: MARK_CLOSE, intervals: [5m, 15m, 1h]}
+        time_series: {provider: mark_price, selector: MARK_CLOSE, intervals: [5m, 15m, 1h]}
   mark.high:
     description: 区间最高标记价格；序列为每根最高价
     unit: quote
     bindings:
-      range_statistic: {provider: mark_price, selector: MARK_HIGH, intervals: [5m, 15m, 1h]}
-      time_series: {provider: mark_price, selector: MARK_HIGH, intervals: [5m, 15m, 1h]}
+      perpetual:
+        range_statistic: {provider: mark_price, selector: MARK_HIGH, intervals: [5m, 15m, 1h]}
+        time_series: {provider: mark_price, selector: MARK_HIGH, intervals: [5m, 15m, 1h]}
   mark.low:
     description: 区间最低标记价格；序列为每根最低价
     unit: quote
     bindings:
-      range_statistic: {provider: mark_price, selector: MARK_LOW, intervals: [5m, 15m, 1h]}
-      time_series: {provider: mark_price, selector: MARK_LOW, intervals: [5m, 15m, 1h]}
+      perpetual:
+        range_statistic: {provider: mark_price, selector: MARK_LOW, intervals: [5m, 15m, 1h]}
+        time_series: {provider: mark_price, selector: MARK_LOW, intervals: [5m, 15m, 1h]}
   mark.change_pct:
     description: 区间标记价格末收盘价相对首开盘价的涨跌幅，百分数口径
     unit: percent
     bindings:
-      range_statistic: {provider: mark_price, selector: MARK_CHANGE_PCT, intervals: [5m, 15m, 1h]}
+      perpetual:
+        range_statistic: {provider: mark_price, selector: MARK_CHANGE_PCT, intervals: [5m, 15m, 1h]}
   index.price:
     description: 当前指数价格（快照，带 as_of）；是现货指数加权价，不是成交价、标记价
     unit: quote
     bindings:
-      snapshot: {provider: mark_price, selector: INDEX}
+      perpetual:
+        snapshot: {provider: mark_price, selector: INDEX}
   index.open:
     description: 区间首根指数价格开盘价；序列为每根开盘价；指数价不是成交价
     unit: quote
     bindings:
-      range_statistic: {provider: mark_price, selector: INDEX_OPEN, intervals: [5m, 15m, 1h]}
-      time_series: {provider: mark_price, selector: INDEX_OPEN, intervals: [5m, 15m, 1h]}
+      perpetual:
+        range_statistic: {provider: mark_price, selector: INDEX_OPEN, intervals: [5m, 15m, 1h]}
+        time_series: {provider: mark_price, selector: INDEX_OPEN, intervals: [5m, 15m, 1h]}
   index.close:
     description: 区间末根指数价格收盘价；序列为每根收盘价，不是当前实时价
     unit: quote
     bindings:
-      range_statistic: {provider: mark_price, selector: INDEX_CLOSE, intervals: [5m, 15m, 1h]}
-      time_series: {provider: mark_price, selector: INDEX_CLOSE, intervals: [5m, 15m, 1h]}
+      perpetual:
+        range_statistic: {provider: mark_price, selector: INDEX_CLOSE, intervals: [5m, 15m, 1h]}
+        time_series: {provider: mark_price, selector: INDEX_CLOSE, intervals: [5m, 15m, 1h]}
   index.high:
     description: 区间最高指数价格；序列为每根最高价
     unit: quote
     bindings:
-      range_statistic: {provider: mark_price, selector: INDEX_HIGH, intervals: [5m, 15m, 1h]}
-      time_series: {provider: mark_price, selector: INDEX_HIGH, intervals: [5m, 15m, 1h]}
+      perpetual:
+        range_statistic: {provider: mark_price, selector: INDEX_HIGH, intervals: [5m, 15m, 1h]}
+        time_series: {provider: mark_price, selector: INDEX_HIGH, intervals: [5m, 15m, 1h]}
   index.low:
     description: 区间最低指数价格；序列为每根最低价
     unit: quote
     bindings:
-      range_statistic: {provider: mark_price, selector: INDEX_LOW, intervals: [5m, 15m, 1h]}
-      time_series: {provider: mark_price, selector: INDEX_LOW, intervals: [5m, 15m, 1h]}
+      perpetual:
+        range_statistic: {provider: mark_price, selector: INDEX_LOW, intervals: [5m, 15m, 1h]}
+        time_series: {provider: mark_price, selector: INDEX_LOW, intervals: [5m, 15m, 1h]}
   index.change_pct:
     description: 区间指数价格末收盘价相对首开盘价的涨跌幅，百分数口径
     unit: percent
     bindings:
-      range_statistic: {provider: mark_price, selector: INDEX_CHANGE_PCT, intervals: [5m, 15m, 1h]}
+      perpetual:
+        range_statistic: {provider: mark_price, selector: INDEX_CHANGE_PCT, intervals: [5m, 15m, 1h]}
   taker.buy_volume:
-    description: 区间主动买成交量合计（基础币）；交易所官方 5m 统计求和
+    description: 区间主动买成交量合计（基础币）；永续为交易所官方 5m 统计求和，现货为 5m 成交 K 线统计求和
     unit: base
     bindings:
-      range_statistic: {provider: taker, selector: BUY_VOLUME, exchanges: [binance]}
+      perpetual:
+        range_statistic: {provider: taker, selector: BUY_VOLUME, exchanges: [binance]}
+      spot:
+        range_statistic: {provider: taker, selector: BUY_VOLUME, exchanges: [binance]}
   taker.sell_volume:
-    description: 区间主动卖成交量合计（基础币）；交易所官方 5m 统计求和
+    description: 区间主动卖成交量合计（基础币）；永续为交易所官方 5m 统计求和，现货为 5m 成交 K 线统计求和
     unit: base
     bindings:
-      range_statistic: {provider: taker, selector: SELL_VOLUME, exchanges: [binance]}
+      perpetual:
+        range_statistic: {provider: taker, selector: SELL_VOLUME, exchanges: [binance]}
+      spot:
+        range_statistic: {provider: taker, selector: SELL_VOLUME, exchanges: [binance]}
   taker.buy_ratio:
-    description: 区间主动买成交量占总成交量的比例（0~1）；根据交易所官方 5m 买卖成交量合计计算
+    description: 区间主动买成交量占总成交量的比例（0~1）；按 5m 买卖成交量合计计算；永续使用官方统计，现货使用成交 K 线主动买量和总量；零总量不输出值
     unit: ratio
     bindings:
-      range_statistic: {provider: taker, selector: BUY_RATIO, exchanges: [binance]}
+      perpetual:
+        range_statistic: {provider: taker, selector: BUY_RATIO, exchanges: [binance]}
+      spot:
+        range_statistic: {provider: taker, selector: BUY_RATIO, exchanges: [binance]}

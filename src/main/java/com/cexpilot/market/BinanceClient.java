@@ -26,7 +26,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Binance USDⓈ-M 永续合约公共行情。公共行情接口不需要 API Key（Key 留给后续私有接口）。
+ * Binance USDⓈ-M 永续与现货公共行情，按产品使用独立上游。公共行情接口不需要 API Key（Key 留给后续私有接口）。
  * 解析方法与 HTTP 分离，方便用录制的响应样本做单元测试。
  */
 @Component
@@ -38,6 +38,8 @@ public class BinanceClient {
 
     private final RestClient rest;
     private final String baseUrl;
+    private final RestClient spotRest;
+    private final String spotBaseUrl;
 
     public BinanceClient(ExchangeConfig config) {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
@@ -49,6 +51,8 @@ public class BinanceClient {
         }
         this.baseUrl = baseUrl;
         this.rest = RestClient.builder().baseUrl(baseUrl).requestFactory(factory).build();
+        this.spotBaseUrl = config.getBinance().getSpotBaseUrl().replaceAll("/+$", "");
+        this.spotRest = RestClient.builder().baseUrl(spotBaseUrl).requestFactory(factory).build();
     }
 
     /**
@@ -76,6 +80,10 @@ public class BinanceClient {
 
     public Ticker ticker24h(String symbol) {
         JsonNode node = get("/fapi/v1/ticker/24hr?symbol={s}", symbol);
+        return parseTicker(node);
+    }
+
+    static Ticker parseTicker(JsonNode node) {
         return new Ticker(
                 decimal(node, "lastPrice"),
                 decimal(node, "priceChangePercent"),
@@ -83,6 +91,38 @@ public class BinanceClient {
                 decimal(node, "quoteVolume"),
                 false,
                 node.path("closeTime").asLong(0));
+    }
+
+    public List<Candle> spotKlines(String symbol, String interval, long startMs, long endMs, int limit) {
+        return parseCandles(get(spotRest, spotBaseUrl,
+                "/api/v3/klines?symbol={s}&interval={i}&startTime={st}&endTime={et}&limit={l}",
+                symbol, interval, startMs, endMs, limit));
+    }
+
+    public Ticker spotTicker24h(String symbol) {
+        return parseTicker(get(spotRest, spotBaseUrl, "/api/v3/ticker/24hr?symbol={s}", symbol));
+    }
+
+    public OrderBook spotDepth(String symbol, int limit) {
+        JsonNode node = get(spotRest, spotBaseUrl, "/api/v3/depth?symbol={s}&limit={l}", symbol, mapDepth(limit));
+        // REST 现货盘口不提供数据时间；只记录本地采集时间，不能伪造 as_of。
+        return new OrderBook(parseLevels(node.path("bids")), parseLevels(node.path("asks")),
+                "base", 0, System.currentTimeMillis());
+    }
+
+    public List<TakerVolumePoint> spotTakerVolumes(String symbol, long startMs, long endMs, int limit) {
+        JsonNode rows = get(spotRest, spotBaseUrl,
+                "/api/v3/klines?symbol={s}&interval=5m&startTime={st}&endTime={et}&limit={l}",
+                symbol, startMs, endMs, limit);
+        List<TakerVolumePoint> points = new ArrayList<>();
+        for (JsonNode row : rows) {
+            BigDecimal total = new BigDecimal(row.get(5).asText());
+            BigDecimal buy = new BigDecimal(row.get(9).asText());
+            if (buy.signum() < 0 || total.compareTo(buy) < 0)
+                throw new IllegalArgumentException("现货 K 线主动买量与总成交量不一致");
+            points.add(new TakerVolumePoint(row.get(0).asLong(), buy, total.subtract(buy)));
+        }
+        return points;
     }
 
     /** premiumIndex 同时给出标记价格、指数价格、最近一期已结算资金费率。 */
@@ -197,6 +237,10 @@ public class BinanceClient {
     private static final int MAX_ATTEMPTS = 3;
 
     private JsonNode get(String uri, Object... vars) {
+        return get(rest, baseUrl, uri, vars);
+    }
+
+    private JsonNode get(RestClient rest, String baseUrl, String uri, Object... vars) {
         for (int attempt = 1; ; attempt++) {
             long start = System.currentTimeMillis();
             log.info("binance 请求 GET {}{} 参数={}", baseUrl, uri, vars);

@@ -191,6 +191,18 @@ class AskServiceTest {
     }
 
     @Test
+    void 请求来源按每次请求写入trace且旧调用默认用户流量() {
+        stubRuntimeSuccess();
+        service.ask("conv-1", "BTC 多少钱", "v1", null, null, null);
+        verify(traceRepository).startTrace(anyString(), eq("conv-1"), eq("BTC 多少钱"),
+                anyString(), nullable(String.class), eq("v1"), nullable(String.class), eq(true));
+        service.ask("conv-1", "ETH 多少钱", "v1", null, null, null, Map.of(), false);
+        verify(traceRepository).startTrace(anyString(), eq("conv-1"), eq("ETH 多少钱"),
+                anyString(), nullable(String.class), eq("v1"), nullable(String.class), eq(false));
+        verify(conversation).getOrCreateConversation("conv-1", "ETH 多少钱", "v1");
+    }
+
+    @Test
     void 会话忙碌时返回忙碌文案且不执行DAG不建trace() {
         when(conversation.beginTurn(eq("conv-1"), anyString(), any(), any())).thenReturn(null);
 
@@ -202,7 +214,7 @@ class AskServiceTest {
         assertNull(response.turnId());
         verify(runtime, never()).execute(anyString(), anyString(), anyString(), any(), any(), any(), any(), any(), any(), any());
         verify(traceRepository, never()).startTrace(anyString(), anyString(), anyString(),
-                anyString(), anyString(), any(), anyString());
+                anyString(), anyString(), any(), anyString(), org.mockito.ArgumentMatchers.anyBoolean());
     }
 
     @Test
@@ -228,7 +240,7 @@ class AskServiceTest {
         // startTrace 返回 void，桩要用 doThrow 语法；promptVersion/buildCommit 来自 mock 可能为 null
         org.mockito.Mockito.doThrow(new IllegalStateException("db down"))
                 .when(traceRepository).startTrace(anyString(), anyString(), anyString(),
-                        anyString(), nullable(String.class), any(), nullable(String.class));
+                        anyString(), nullable(String.class), any(), nullable(String.class), org.mockito.ArgumentMatchers.anyBoolean());
 
         assertThrows(IllegalStateException.class,
                 () -> service.ask("conv-1", "BTC 多少钱", "v1", null, null, null));

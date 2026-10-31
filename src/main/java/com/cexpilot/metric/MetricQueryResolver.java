@@ -25,9 +25,9 @@ public final class MetricQueryResolver {
 
     public List<ResolvedMetric> resolve(MetricRequest request, int startIndex) {
         MetricDefinition definition = catalog.metricDefinition(request.metric());
-        MetricBindingDefinition binding = definition.bindings().get(request.shape());
+        MetricBindingDefinition binding = definition.bindings(request.instrument().marketType()).get(request.shape());
         if (binding == null) {
-            throw new IllegalArgumentException("当前系统未接入指标 " + request.metric() + " 的查询形态 "
+            throw new IllegalArgumentException("当前系统未接入指标 " + request.metric() + " 在市场 " + request.instrument().marketType() + " 的查询形态 "
                     + request.shape().code() + "；这是系统接入限制，不代表交易所没有数据或算子不能计算");
         }
 
@@ -64,12 +64,13 @@ public final class MetricQueryResolver {
 
     private void validateInstrument(MetricRequest request) {
         InstrumentSpec instrument = request.instrument();
-        if (!"perpetual".equals(instrument.marketType())) {
-            throw new IllegalArgumentException("当前指标仅支持 USDT 报价、USDT 结算永续，不支持该产品；不会自动替换");
-        }
-        if (!"USDT".equals(instrument.quote()) || (instrument.settle() != null && !"USDT".equals(instrument.settle()))) {
-            throw new IllegalArgumentException("当前指标仅支持 USDT 报价、USDT 结算永续，不支持该产品；不会自动替换");
-        }
+        com.cexpilot.market.MarketType market = com.cexpilot.market.MarketType.parse(instrument.marketType());
+        if (!"USDT".equals(instrument.quote()))
+            throw new IllegalArgumentException("当前仅支持 USDT 报价，不会替换报价币");
+        if (market == com.cexpilot.market.MarketType.SPOT && instrument.settle() != null)
+            throw new IllegalArgumentException("现货不使用合约结算币 settle，请省略该字段");
+        if (market == com.cexpilot.market.MarketType.PERPETUAL && instrument.settle() != null && !"USDT".equals(instrument.settle()))
+            throw new IllegalArgumentException("永续仅支持 USDT 结算");
         if (!instrument.base().matches("[A-Z0-9]{1,20}")) {
             throw new IllegalArgumentException("instrument.base 必须是大写基础币代码");
         }
@@ -140,7 +141,7 @@ public final class MetricQueryResolver {
         node.put("market_type", instrument.marketType());
         node.put("base", instrument.base());
         node.put("quote", instrument.quote());
-        node.put("settle", "USDT");
+        if ("perpetual".equals(instrument.marketType())) node.put("settle", "USDT");
         return node;
     }
 

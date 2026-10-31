@@ -15,7 +15,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class ContextConflictApiTest {
     @Test void 普通接口冲突返回409及机器可识别错误码() throws Exception {
         var service = mock(AskService.class);
-        when(service.ask(any(), any(), any(), any(), any(), any()))
+        when(service.ask(any(), any(), any(), any(), any(), any(), any(), anyBoolean()))
                 .thenThrow(new StaleContextException("c1", "eth-turn"));
         var mvc = MockMvcBuilders.standaloneSetup(new AskController(service, new SyncTaskExecutor())).build();
         mvc.perform(post("/api/ask").contentType("application/json")
@@ -27,7 +27,7 @@ class ContextConflictApiTest {
 
     @Test void 流式接口冲突使用error事件且不发meta或done() throws Exception {
         var service = mock(AskService.class);
-        when(service.ask(any(), any(), any(), any(), any(), any()))
+        when(service.ask(any(), any(), any(), any(), any(), any(), any(), anyBoolean()))
                 .thenThrow(new StaleContextException("c1", "eth-turn"));
         var mvc = MockMvcBuilders.standaloneSetup(new AskController(service, new SyncTaskExecutor())).build();
         var result = mvc.perform(post("/api/ask/stream").contentType("application/json")
@@ -42,7 +42,7 @@ class ContextConflictApiTest {
 
     @Test void 流式失败只有提交确认后才携带父轮次() throws Exception {
         var service = mock(AskService.class);
-        when(service.ask(any(), any(), any(), any(), any(), any())).thenAnswer(inv -> {
+        when(service.ask(any(), any(), any(), any(), any(), any(), any(), anyBoolean())).thenAnswer(inv -> {
             AskService.AskStreamListener listener = inv.getArgument(5);
             listener.onMeta("c1", "trace", "failed-turn");
             listener.onTurnFinished("failed-turn");

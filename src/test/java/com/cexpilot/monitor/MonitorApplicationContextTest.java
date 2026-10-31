@@ -31,6 +31,12 @@ class MonitorApplicationContextTest {
         assertNotNull(context.getBean(MonitorScheduler.class));
         assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM monitor_rule",Integer.class));
     }
+    @Test void homepageSuggestionsAreAvailableWithoutVisitorOrLlm() throws Exception {
+        mvc.perform(get("/api/home/suggestions")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(4))
+                .andExpect(jsonPath("$[0].query").isNotEmpty())
+                .andExpect(header().string("Cache-Control","no-store"));
+    }
     @Test void removedLegacyRoutesAndAssetsAreNoLongerExposed() throws Exception {
         for(String path:java.util.List.of("/api/monitors","/api/monitors/removed","/monitors.html","/monitors.js"))
             mvc.perform(get(path)).andExpect(status().isNotFound());

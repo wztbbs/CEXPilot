@@ -221,8 +221,8 @@ public final class MetricPlanCompiler {
         ObjectNode args = MAPPER.createObjectNode();
         args.put("exchange", rm.exchange())
                 .put("symbol", binding.instrument().path("base").asText())
-                .put("market_type", "perpetual")
-                .put("quote_asset", "USDT");
+                .put("market_type", binding.instrument().path("market_type").asText())
+                .put("quote_asset", binding.instrument().path("quote").asText());
         if (query instanceof TimeRangeQuery q) {
             args.set("time", com.cexpilot.time.TimeSpecJson.write(q.time()));
             if (q.intervalCode() != null) args.put("interval", q.intervalCode());

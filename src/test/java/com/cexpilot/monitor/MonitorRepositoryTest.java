@@ -10,6 +10,21 @@ class MonitorRepositoryTest {
     MonitorTestFixture f;
     @BeforeEach void setup() { f=new MonitorTestFixture(); }
     @AfterEach void close() { f.close(); }
+    @Test void executionHistoryIncludesItsOwnEvaluationAndDelivery() {
+        String id=f.active(1).rule().ruleId();
+        f.evaluate(id,Result.MATCH);
+        var first=f.repository.executions(id).get(0);
+        assertEquals("MATCH",first.path("result").asText());
+        assertFalse(first.path("evaluationId").asText().isBlank());
+        assertFalse(first.path("evidence").isNull());
+        assertEquals("PENDING",first.path("notifications").get(0).path("status").asText());
+        f.clock.advance(300);f.evaluate(id,Result.NO_MATCH);
+        var records=f.repository.executions(id);
+        assertEquals("NO_MATCH",records.get(0).path("result").asText());
+        assertTrue(records.get(0).path("notifications").isEmpty());
+        assertEquals(first.path("evaluationId"),records.get(1).path("evaluationId"));
+        assertEquals(1,records.get(1).path("notifications").size());
+    }
     @Test void consecutiveHitsFireOnceAndRearmOnlyOnValidNoMatch() {
         String id=f.active(2).rule().ruleId();
         f.evaluate(id,Result.MATCH); assertEquals(0,f.count("monitor_event"));

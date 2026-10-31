@@ -34,7 +34,7 @@ public class MetricProviderRegistry {
     /** 校验绑定指向已注册 Provider、选择器可解析且支持对应查询形态。 */
     public void validate(MetricCatalog catalog) {
         for (String metric : catalog.names()) {
-            catalog.metricDefinition(metric).bindings().forEach((shape, binding) -> {
+            catalog.metricDefinition(metric).marketBindings().forEach((market, bindings) -> bindings.forEach((shape, binding) -> {
                 MetricProvider provider = get(binding.provider());
                 MetricSelector selector;
                 try {
@@ -45,7 +45,7 @@ public class MetricProviderRegistry {
                 if (!selector.supports(shape.code())) {
                     throw new IllegalStateException("指标绑定不可用: " + metric + "/" + shape.code());
                 }
-            });
+            }));
         }
     }
 }

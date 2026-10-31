@@ -43,6 +43,10 @@ public final class MetricResultJson {
         } else if (metadata instanceof MetricResult.SnapshotMetadata snapshot) {
             // 快照没有窗口，只有数据时间；时区由 Provider 在取数时从请求上下文带入。
             out.put("as_of", Times.readable(snapshot.asOf().toEpochMilli(), snapshot.zone()));
+        } else if (metadata instanceof MetricResult.CollectedSnapshotMetadata collected) {
+            out.put("collected_at", Times.readable(collected.collectedAt().toEpochMilli(), collected.zone()));
+            out.put("timestamp_source", "local_collection");
+            out.put("as_of_unavailable_reason", "交易所 REST 现货盘口未提供数据时间，collected_at 仅为本地采集时间");
         } else if (metadata instanceof MetricResult.RecentMetadata recent) {
             out.put("timezone", recent.zone().getId());
             out.put("sample_scope", "recent_settlements");

@@ -144,4 +144,38 @@ class KlineSourcePaginationTest {
         assertEquals(START, result.candles().get(0).openTime());
         assertEquals(end - FIVE_MIN_MS, result.candles().get(1499).openTime());
     }
+    @Test void spotBinancePaginatesAt1000AndNeverUsesFuturesFetcher() {
+        var calls = new ArrayList<Long>();
+        var source = new BinanceKlineSource((a,b,c,d,e) -> { throw new AssertionError("误用永续"); },
+                (symbol, interval, start, end, limit) -> {
+                    assertEquals(1000, limit); calls.add(start);
+                    return sequence(start, start == START ? 1000 : 2);
+                });
+        var req = new KlineQueryRequest(Exchange.BINANCE, "BTC", CandleInterval.FIVE_MINUTES,
+                new TimeRange(Instant.ofEpochMilli(START), Instant.ofEpochMilli(START + 1002L * FIVE_MIN_MS), ZoneOffset.UTC),
+                false, com.cexpilot.market.MarketType.SPOT);
+        var result = source.fetch(req);
+        assertNull(result.abortReason()); assertEquals(1002, result.candles().size());
+        assertEquals(List.of(START, START + 1000L * FIVE_MIN_MS), calls);
+        assertEquals(4000, source.capability(com.cexpilot.market.MarketType.SPOT).budget());
+        assertEquals(6000, source.capability(com.cexpilot.market.MarketType.PERPETUAL).budget());
+    }
+
+    @Test void okxSpotHistoryAndRecentKeepSpotInstrumentAndCursorDirection() {
+        long now = START + 2000L * FIVE_MIN_MS;
+        long cutoff = now - 1440L * FIVE_MIN_MS;
+        var endpoints = new ArrayList<Boolean>();
+        var source = new OkxKlineSource((instId, bar, before, after, limit, history) -> {
+            assertEquals("BTC-USDT", instId); assertTrue(before < after);
+            endpoints.add(history);
+            long start = history ? START : cutoff;
+            return sequence(start, (int)((after - start) / FIVE_MIN_MS));
+        }, Clock.fixed(Instant.ofEpochMilli(now), ZoneOffset.UTC));
+        var req = new KlineQueryRequest(Exchange.OKX, "BTC", CandleInterval.FIVE_MINUTES,
+                new TimeRange(Instant.ofEpochMilli(START), Instant.ofEpochMilli(START + 1500L * FIVE_MIN_MS), ZoneOffset.UTC),
+                false, com.cexpilot.market.MarketType.SPOT);
+        var result = source.fetch(req);
+        assertEquals(List.of(true, false), endpoints); assertEquals(1500, result.candles().size()); assertNull(result.abortReason());
+    }
+
 }

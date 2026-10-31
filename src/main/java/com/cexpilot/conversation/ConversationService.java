@@ -39,8 +39,26 @@ public class ConversationService {
         }
         if (!repository.conversationExists(conversationId)) {
             repository.createConversation(conversationId, abbreviate(firstQuestion, 60), visitorId);
+        } else if (visitorId != null) {
+            requireOwned(conversationId, visitorId);
+            repository.initializeTitle(conversationId, abbreviate(firstQuestion, 60));
         }
         return conversationId;
+    }
+
+    public void requireOwned(String id, String visitor) {
+        if (!repository.ownedBy(id, visitor)) throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.NOT_FOUND, "会话不存在");
+    }
+
+    public String createEmpty(String visitor) {
+        String id = UUID.randomUUID().toString();
+        repository.createConversation(id, null, visitor);
+        return id;
+    }
+
+    public List<ConversationRepository.Summary> list(String visitor, String search, int limit, int offset) {
+        return repository.list(visitor, search == null ? "" : search.trim(), Math.max(1, Math.min(100, limit)), Math.max(0, offset));
     }
 
     /** 会话的全部问答历史（页面回显用），无会话时返回空表。 */

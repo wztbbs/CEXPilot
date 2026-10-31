@@ -27,6 +27,7 @@ class ConversationServiceTest {
     void 访客已有会话时复用最近会话() {
         when(repository.findLatestByVisitorId("v1")).thenReturn("conv-existing");
         when(repository.conversationExists("conv-existing")).thenReturn(true);
+        when(repository.ownedBy("conv-existing", "v1")).thenReturn(true);
 
         String id = service.getOrCreateConversation(null, "BTC 多少钱", "v1");
 
@@ -48,6 +49,7 @@ class ConversationServiceTest {
     @Test
     void 显式传入会话id时不查访客会话() {
         when(repository.conversationExists("conv-given")).thenReturn(true);
+        when(repository.ownedBy("conv-given", "v1")).thenReturn(true);
 
         String id = service.getOrCreateConversation("conv-given", "BTC 多少钱", "v1");
 

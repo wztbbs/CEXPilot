@@ -183,15 +183,31 @@
 .monitor-confirmation input { display:block; margin:8px 0; padding:8px; max-width:100%; width:290px; }
 .monitor-confirmation pre { overflow:auto; max-height:260px; font-size:12px; }
 </style>
+<link rel="stylesheet" href="/home-shell.css">
 </head>
 <body>
+<button id="nav-backdrop" aria-label="关闭导航"></button>
+<aside id="sidebar" aria-label="主导航">
+  <a class="brand" href="/">↗ CEXPilot</a>
+  <button id="new-chat" class="primary">＋ 新建会话</button>
+  <button id="my-monitors" class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>我的监控</button>
+  <div class="history-heading">历史会话</div>
+  <input id="history-search" type="search" placeholder="搜索历史会话" aria-label="搜索历史会话" maxlength="100">
+  <div id="conversation-list"></div>
+  <button id="more-conversations" hidden>加载更多会话</button>
+  <p class="browser-note">当前浏览器的会话与任务<br>换设备后不会自动同步</p>
+</aside>
+<div id="workspace">
+<header id="workspace-header"><button id="toggle-nav" aria-label="打开导航" aria-expanded="false">☰</button><span id="view-title">新会话</span></header>
+<div id="shell-status" role="status" aria-live="polite"></div>
+<div id="monitor-view" hidden></div>
 <div id="app" class="empty">
   <div id="hero">
-    <h1>CEXPilot</h1>
-    <p style="font-size:14px;color:#6b7280">也可以说「监控 BTC 最近一小时跌幅超过 2%，发邮件提醒」</p>
-    <p>加密货币交易 AI Copilot · 行情、资金费率、持仓量、链上交易，随便问</p>
+    <h1>今天想了解什么行情？</h1>
+    <p>用自然语言提问，也可以让 CEXPilot 持续关注市场变化。</p>
   </div>
 
+  <section id="suggestions" aria-label="推荐问题"><div class="suggestion-heading">试着问一个问题 <small>点击填入，不会自动发送</small></div><div id="suggestion-list"></div></section>
   <div id="messages"></div>
 
   <div id="input-area">
@@ -208,6 +224,8 @@
   </div>
 </div>
 
+</div>
+<script src="/home-shell.js"></script>
 <script src="/monitor-confirmation.js"></script>
 <script src="/clarification-form.js"></script>
 <script>
@@ -226,6 +244,7 @@
   var pending = false;
   var clarificationForms = [];
   var followLatest = true;
+  var linkedMonitorOpened = false;
 
   // 用户离开底部阅读历史后，流式回复和异步卡片更新都不能抢回滚动位置。
   messages.addEventListener('scroll', function () {
@@ -374,6 +393,7 @@
       try { payload = JSON.parse(data); } catch (e) { return; }
       if (name === 'meta') {
         conversationId = payload.conversationId;
+        if (window.HomeShell) window.HomeShell.conversationAssigned(conversationId);
       } else if (name === 'progress') {
         appendProgress(payload.text);
       } else if (name === 'delta') {
@@ -448,6 +468,7 @@
       .finally(function () {
         pending = false;
         autoResize();
+        if (window.HomeShell) window.HomeShell.refreshList();
         if (followLatest) textarea.focus({preventScroll:true});
       }).then(function () { return requestCompleted && !contextConflict; });
   }
@@ -458,7 +479,7 @@
     var div = addMessage('error', '请先刷新历史，确认当前对话后再提问。');
     var button = document.createElement('button');
     button.textContent = '刷新历史';
-    button.addEventListener('click', function () { window.location.reload(); });
+    button.addEventListener('click', function () { loadHistory(conversationId ? '/api/conversation/' + encodeURIComponent(conversationId) : '/api/conversation/latest'); });
     div.querySelector('.bubble').appendChild(button);
     autoResize();
   }
@@ -481,17 +502,22 @@
   }
 
   // 页面加载时拉取该访客（cexpilot_uid cookie）最近会话的全部问答历史并回显
-  function loadHistory() {
-    fetch('/api/conversation/latest')
+  function loadHistory(url) {
+    if (pending) return Promise.reject(new Error('请等待当前回答完成'));
+    historyLoading = true; autoResize();
+    return fetch(typeof url === 'string' ? url : '/api/conversation/latest')
       .then(function (res) {
         if (!res.ok) throw new Error('历史读取失败');
         return res.json();
       })
       .then(function (data) {
-        if (!data || !data.conversationId || !data.messages || data.messages.length === 0) return;
-        conversationId = data.conversationId;
+        if (!data || !Array.isArray(data.messages)) throw new Error('历史格式无效');
+        messages.textContent = ''; clarificationForms = []; contextConflict = false;
+        conversationId = data.conversationId || null;
         parentTurnId = data.parentTurnId || '';
-        app.className = 'chatting';
+        followLatest = true;
+        app.className = data.messages.length ? 'chatting' : 'empty';
+        if (window.HomeShell) window.HomeShell.chatOpened(conversationId);
         data.messages.forEach(function (m) {
           addMessage('user', m.question);
           if (m.answer) {
@@ -502,15 +528,11 @@
           }
         });
       })
-      .catch(function () { requireHistoryRefresh(); })
+      .catch(function () { requireHistoryRefresh(); return false; })
       .finally(function () {
         historyLoading = false; autoResize();
-        if (window.MonitorConfirmation) {
-          window.MonitorConfirmation.recover(function () {
-            app.className = 'chatting'; return addMessage('assistant','已恢复的监控任务');
-          }).catch(function () { /* 首次访问无访客 cookie 时没有可恢复监控。 */ });
-        }
-        if (window.MonitorConfirmation && window.location.search) {
+        if (!linkedMonitorOpened && window.MonitorConfirmation && window.location.search) {
+          linkedMonitorOpened = true;
           var linked = new URLSearchParams(window.location.search).get('monitor');
           if (linked) {
             app.className = 'chatting';
@@ -536,6 +558,12 @@
     }
   });
 
+  if (window.HomeShell) window.HomeShell.init({
+    canNavigate: function () { return !pending && !historyLoading; },
+    open: function (id) { return loadHistory('/api/conversation/' + encodeURIComponent(id)); },
+    fill: function (question) { textarea.value = question; autoResize(); textarea.focus(); },
+    current: function () { return conversationId; }
+  });
   loadHistory();
   textarea.focus({preventScroll:true});
 })();

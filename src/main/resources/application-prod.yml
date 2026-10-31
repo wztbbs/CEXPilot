@@ -14,6 +14,7 @@ exchange:
     # 美国服务器直连币安会 451（地域限制），走新加坡服务器上的 nginx 反代；
     # 当前环境使用该代理；其他部署环境可通过 BINANCE_BASE_URL 覆盖地址，业务层不限制固定地址。
     base-url: ${BINANCE_BASE_URL:http://43.160.213.63:18080}
+    spot-base-url: ${BINANCE_SPOT_BASE_URL:http://43.160.213.63:18082}
 
 logging:
   level:

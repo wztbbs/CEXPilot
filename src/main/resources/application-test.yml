@@ -15,5 +15,6 @@ logging:
 exchange:
   binance:
     base-url: http://43.160.213.63:18080
+    spot-base-url: http://43.160.213.63:18082
   okx:
     base-url: http://43.160.213.63:18081

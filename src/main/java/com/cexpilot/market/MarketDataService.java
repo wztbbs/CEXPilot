@@ -26,6 +26,14 @@ public class MarketDataService {
     }
 
     public Ticker ticker(Exchange exchange, String base) {
+        return ticker(exchange, base, MarketType.PERPETUAL);
+    }
+
+    public Ticker ticker(Exchange exchange, String base, MarketType market) {
+        if (market == MarketType.SPOT) return switch (exchange) {
+            case BINANCE -> binance.spotTicker24h(SymbolMapper.binanceSymbol(base));
+            case OKX -> okx.ticker(SymbolMapper.okxIndexInstId(base));
+        };
         return switch (exchange) {
             case BINANCE -> binance.ticker24h(SymbolMapper.binanceSymbol(base));
             case OKX -> okx.ticker(SymbolMapper.okxInstId(base));
@@ -75,6 +83,14 @@ public class MarketDataService {
     }
 
     public OrderBook orderBook(Exchange exchange, String base, int depth) {
+        return orderBook(exchange, base, depth, MarketType.PERPETUAL);
+    }
+
+    public OrderBook orderBook(Exchange exchange, String base, int depth, MarketType market) {
+        if (market == MarketType.SPOT) return switch (exchange) {
+            case BINANCE -> binance.spotDepth(SymbolMapper.binanceSymbol(base), depth);
+            case OKX -> okx.orderBook(SymbolMapper.okxIndexInstId(base), depth);
+        };
         return switch (exchange) {
             case BINANCE -> binance.depth(SymbolMapper.binanceSymbol(base), depth);
             case OKX -> okx.orderBook(SymbolMapper.okxInstId(base), depth);

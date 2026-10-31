@@ -119,6 +119,13 @@ public class AskService {
 
     public AskResponse ask(String conversationId, String question, String visitorId, String timezone,
                            String parentTurnId, AskStreamListener listener, java.util.Map<String, ?> answers) {
+        return ask(conversationId, question, visitorId, timezone, parentTurnId, listener, answers, true);
+    }
+
+    /** 来源标记仅写入 trace，不参与路由、上下文、模型输入或工具执行。 */
+    public AskResponse ask(String conversationId, String question, String visitorId, String timezone,
+                           String parentTurnId, AskStreamListener listener, java.util.Map<String, ?> answers,
+                           boolean isRealUser) {
         if (question == null || question.isBlank()) {
             throw new IllegalArgumentException("question 不能为空");
         }
@@ -175,7 +182,7 @@ public class AskService {
             //    同时记录 model、promptVersion（prompt 内容的哈希）和 buildCommit（代码版本指纹），
             //    便于排查答案可复现性。
             traceRepository.startTrace(traceId, resolvedConversationId, question,
-                    llmConfig.getNormal().getModel(), dispatcher==null?runtime.promptVersion():dispatcher.promptVersion(), visitorId, buildCommit);
+                    llmConfig.getNormal().getModel(), dispatcher==null?runtime.promptVersion():dispatcher.promptVersion(), visitorId, buildCommit, isRealUser);
             traceStarted = true;
             if (listener != null) {
                 listener.onMeta(resolvedConversationId, traceId, turn.turnId());

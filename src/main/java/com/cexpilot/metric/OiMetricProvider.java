@@ -29,6 +29,8 @@ public class OiMetricProvider implements MetricProvider {
     @Override
     public MetricResult query(MetricQuery query, RequestContext context) {
         Objects.requireNonNull(context, "请求时间上下文不能为空");
+        if (!"perpetual".equals(query.binding().instrument().path("market_type").asText()))
+            throw new IllegalArgumentException("此 Provider 仅支持永续市场");
         Objects.requireNonNull(context.requestTime(), "请求时间不能为空");
         Objects.requireNonNull(context.userZone(), "请求时区不能为空");
         if (query instanceof SnapshotQuery snapshot) {

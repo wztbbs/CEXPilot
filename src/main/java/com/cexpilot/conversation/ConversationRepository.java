@@ -55,6 +55,31 @@ public class ConversationRepository {
                 conversationId, title, visitorId);
     }
 
+    public boolean ownedBy(String id, String visitor) {
+        if (visitor == null || visitor.isBlank()) return false;
+        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM conversation WHERE conversation_id=? AND visitor_id=?", Integer.class, id, visitor);
+        return count != null && count > 0;
+    }
+
+    public record Summary(String conversationId, String title, java.time.LocalDateTime createdAt,
+                          java.time.LocalDateTime lastActiveAt) {}
+
+    public List<Summary> list(String visitor, String search, int limit, int offset) {
+        if (visitor == null || visitor.isBlank()) return List.of();
+        return jdbc.query("""
+                SELECT c.conversation_id,c.title,c.created_at,c.last_active_at FROM conversation c
+                WHERE c.visitor_id=? AND (?='' OR LOCATE(?,COALESCE(c.title,''))>0)
+                  AND EXISTS (SELECT 1 FROM conversation_query q WHERE q.conversation_id=c.conversation_id)
+                ORDER BY c.last_active_at DESC,c.conversation_id DESC LIMIT ? OFFSET ?
+                """, (rs,n)->new Summary(rs.getString("conversation_id"),rs.getString("title"),
+                rs.getTimestamp("created_at").toLocalDateTime(),rs.getTimestamp("last_active_at").toLocalDateTime()),
+                visitor,search,search,limit,offset);
+    }
+
+    public void initializeTitle(String id, String title) {
+        jdbc.update("UPDATE conversation SET title=COALESCE(title,?) WHERE conversation_id=?", title,id);
+    }
+
     /** 访客最近活跃的会话；没有返回 null。 */
     public String findLatestByVisitorId(String visitorId) {
         List<String> ids = jdbc.query(

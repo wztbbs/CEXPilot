@@ -28,8 +28,11 @@ public class TakerMetricProvider implements MetricProvider {
         if (!(query instanceof TimeRangeQuery timeQuery)) {
             throw new IllegalArgumentException("taker Provider 仅支持时间区间查询: " + query.getClass().getSimpleName());
         }
-        var result = service.query(context.userZone(), timeQuery.time(), context.requestTime(),
-                timeQuery.exchange(), timeQuery.base());
+        var result = timeQuery.marketType() == com.cexpilot.market.MarketType.SPOT
+                ? service.query(context.userZone(), timeQuery.time(), context.requestTime(),
+                    timeQuery.exchange(), timeQuery.base(), timeQuery.marketType())
+                : service.query(context.userZone(), timeQuery.time(), context.requestTime(),
+                    timeQuery.exchange(), timeQuery.base());
         var metadata = new MetricResult.SeriesMetadata(result.requested(), result.effective(),
                 result.coverage(), TakerVolumeSource.INTERVAL.code(), timeQuery.intervalCode() == null,
                 result.points().size());

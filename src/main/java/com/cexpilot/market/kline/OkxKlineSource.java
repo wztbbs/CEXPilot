@@ -63,6 +63,9 @@ public class OkxKlineSource implements KlineSource {
         return new SeriesCapability(Set.of(CandleInterval.values()), 300, 20);
     }
 
+    @Override
+    public SeriesCapability capability(com.cexpilot.market.MarketType market) { return capability(); }
+
     /** OKX 粒度编码：5m/15m 与 CandleInterval 一致，1h 为 1H。 */
     static String bar(CandleInterval interval) {
         return switch (interval) {
@@ -74,7 +77,8 @@ public class OkxKlineSource implements KlineSource {
 
     @Override
     public FetchResult fetch(KlineQueryRequest effective) {
-        String instId = SymbolMapper.okxInstId(effective.base());
+        String instId = effective.marketType() == com.cexpilot.market.MarketType.SPOT
+                ? SymbolMapper.okxIndexInstId(effective.base()) : SymbolMapper.okxInstId(effective.base());
         String bar = bar(effective.interval());
         long intervalMs = effective.interval().duration().toMillis();
         long startMs = effective.range().startInclusive().toEpochMilli();

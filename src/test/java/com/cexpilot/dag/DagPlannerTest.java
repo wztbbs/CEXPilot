@@ -45,7 +45,7 @@ class DagPlannerTest {
                 assertEquals("{{m1.binance.value}}", envelope.at("/plan/calculations/0/input/baseline").asText());
             }
         }
-        assertEquals(13, examples);
+        assertEquals(15, examples);
     }
 
     @ParameterizedTest @ValueSource(strings={"", "json_object", "json_schema"})
@@ -275,7 +275,7 @@ class DagPlannerTest {
         var registry=registry();var compiler=new MetricPlanCompiler(new MetricCatalog(LOADER),registry,providers());
         List<ObjectNode> bad=new ArrayList<>();
         var p=scalarPlan();((ObjectNode)p.at("/metrics/0")).put("metric","funding.rate");bad.add(p);
-        p=scalarPlan();((ObjectNode)p.at("/metrics/0/instrument")).put("market_type","spot");bad.add(p);
+        p=scalarPlan();((ObjectNode)p.at("/metrics/0/instrument")).put("market_type","delivery");bad.add(p);
         p=scalarPlan();((ObjectNode)p.at("/metrics/0/instrument")).put("settle","USDC");bad.add(p);
         p=scalarPlan();((ObjectNode)p.at("/metrics/0")).put("query_shape","snapshot");bad.add(p);
         p=scalarPlan();((ObjectNode)p.at("/metrics/0")).put("type","metric");bad.add(p);

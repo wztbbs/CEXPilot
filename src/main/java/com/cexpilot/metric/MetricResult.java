@@ -70,6 +70,12 @@ public sealed interface MetricResult {
         public TimeRange requestedRange() { return null; }
         public TimeRange effectiveRange() { return null; }
     }
+    /** 上游不提供数据时间的快照：仅记录本地采集时间。 */
+    record CollectedSnapshotMetadata(Instant collectedAt, ZoneId zone) implements Metadata {
+        public CollectedSnapshotMetadata { Objects.requireNonNull(collectedAt); Objects.requireNonNull(zone); }
+        public TimeRange requestedRange() { return null; }
+        public TimeRange effectiveRange() { return null; }
+    }
     /**
      * 最近 N 期形态的元数据：以期数取样，不做覆盖核对；样本不足时 sampleComplete=false，
      * 由算子在引用前拦截。periodMs 仅用于已核实周期的单期样本；多期或未知周期为 null。

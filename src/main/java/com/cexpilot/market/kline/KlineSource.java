@@ -21,6 +21,12 @@ public interface KlineSource {
     /** 数据源能力；SeriesQueryPolicy 依据它检查查询要求，不自行维护交易所能力表。 */
     SeriesCapability capability();
 
+    default SeriesCapability capability(com.cexpilot.market.MarketType market) {
+        if (market != com.cexpilot.market.MarketType.PERPETUAL)
+            throw new IllegalArgumentException("数据源尚未支持现货");
+        return capability();
+    }
+
     /**
      * 拉取 effective 请求（已经过 SeriesQueryPolicy 对齐）覆盖的 K 线，
      * 结果按 openTime 升序去重，且 openTime 严格落在 [range.start, range.end) 内。

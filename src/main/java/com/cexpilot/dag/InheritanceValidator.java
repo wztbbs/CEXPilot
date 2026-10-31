@@ -82,6 +82,10 @@ public final class InheritanceValidator {
             }
             comparePair(changed, "exchange", match.exchange(), planTarget.exchange());
             comparePair(changed, "base", baseOf(match), baseOf(planTarget));
+            comparePair(changed, "market_type", match.instrument().path("market_type").asText(),
+                    planTarget.instrument().path("market_type").asText());
+            comparePair(changed, "quote", match.instrument().path("quote").asText(),
+                    planTarget.instrument().path("quote").asText());
             comparePair(changed, "metric", match.metric(), planTarget.metric());
             comparePair(changed, "shape", match.queryShape(), planTarget.queryShape());
             comparePair(changed, "interval", intervalOf(match), intervalOf(planTarget));
@@ -135,6 +139,7 @@ public final class InheritanceValidator {
                 continue;
             }
             // 同所同币的多个指标，优先匹配相同指标/形态，再用条件消除同指标歧义。
+            if (candidate.instrument().path("market_type").equals(planTarget.instrument().path("market_type"))) rank += 50;
             if (candidate.metric().equals(planTarget.metric())) rank += 30;
             if (candidate.queryShape().equals(planTarget.queryShape())) rank += 10;
             if (java.util.Objects.equals(candidate.timeExpression(), planTarget.timeExpression())) rank += 5;

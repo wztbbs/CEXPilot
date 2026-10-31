@@ -46,8 +46,8 @@ public class MonitorPlanValidator {
         for(var metric:compiled.logicalPlan().metrics()) {
             if("pinned_result".equals(metric.referenceMode())) throw new IllegalArgumentException("持续监控不能绑定历史事实快照");
             if(metric.exchanges().size()!=1) throw new IllegalArgumentException("首版监控每个指标只允许一个交易所");
-            String key=metric.exchanges().get(0)+":"+metric.instrument().base();
-            if(marketKey!=null && !marketKey.equals(key)) throw new IllegalArgumentException("首版 AND 条件必须使用同一交易所、同一永续品种");
+            String key=metric.exchanges().get(0)+":"+metric.instrument().marketType()+":"+metric.instrument().base()+":"+metric.instrument().quote();
+            if(marketKey!=null && !marketKey.equals(key)) throw new IllegalArgumentException("首版 AND 条件必须使用同一交易所、同一市场类型、同一品种");
             marketKey=key;
             if(metric.params() instanceof TimeQueryParams params) {
                 if(!(params.time() instanceof TimeSpec.RollingWindow rolling)) throw new IllegalArgumentException("首版持续监控仅支持滚动时间窗口，不支持固定日期或自然周期");

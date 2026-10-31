@@ -93,7 +93,7 @@ class RoutedAskServiceTest {
         var payload=json.createObjectNode().put("status","NEEDS_CLARIFICATION");
         payload.putArray("clarify").addObject().put("key","base").put("label","币种").put("type","text").put("reason","confirm").put("message","您填写了两个币种，请确认一个").put("value","BTC和ETH");
         var response=new AskResponse("c","trace","请补充币种",null,0,0,1,"turn",false,1,0,0,0,0,0,"query",payload,1);
-        when(ask.ask(any(),any(),any(),any(),any(),any(),any())).thenAnswer(inv->{
+        when(ask.ask(any(),any(),any(),any(),any(),any(),any(),anyBoolean())).thenAnswer(inv->{
             java.util.Map<String, com.fasterxml.jackson.databind.JsonNode> submitted = inv.getArgument(6);
             assertEquals("BTC和ETH", submitted.get("base").asText());
             AskService.AskStreamListener listener=inv.getArgument(5);
@@ -116,7 +116,7 @@ class RoutedAskServiceTest {
                 "reason":"confirm","message":"请选择两家交易所","options":["币安","OKX"],"minSelections":2,"maxSelections":2,"value":["币安","OKX"]}]}
                 """);
         var response=new AskResponse("c","trace","请选择两家",null,0,0,1,"turn",false,1,0,0,0,0,0,"query",payload,1);
-        when(ask.ask(any(),any(),any(),any(),any(),any(),any())).thenAnswer(inv->{
+        when(ask.ask(any(),any(),any(),any(),any(),any(),any(),anyBoolean())).thenAnswer(inv->{
             java.util.Map<String, com.fasterxml.jackson.databind.JsonNode> submitted=inv.getArgument(6);
             assertTrue(submitted.get("exchange").isArray());
             assertEquals("OKX",submitted.get("exchange").get(1).asText());
@@ -140,7 +140,7 @@ class RoutedAskServiceTest {
         var ask=mock(AskService.class);
         var planning=json.createObjectNode().put("status","PLANNED").put("execution_status","NOT_CREATED");
         var response=new AskResponse("c","trace","仅规划",null,0,0,1,"turn",false,1,0,0,0,0,0,"monitor",planning,1);
-        when(ask.ask(any(),any(),any(),any(),any(),any())).thenAnswer(inv->{
+        when(ask.ask(any(),any(),any(),any(),any(),any(),any(),anyBoolean())).thenAnswer(inv->{
             AskService.AskStreamListener listener=inv.getArgument(5);
             listener.onMeta("c","trace","turn"); listener.onDelta("仅规划"); listener.onTurnFinished("turn"); listener.onDone(response);
             return response;

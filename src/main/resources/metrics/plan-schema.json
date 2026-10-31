@@ -45,7 +45,11 @@
                 "additionalProperties": false,
                 "properties": {
                   "market_type": {
-                    "type": "string"
+                    "type": "string",
+                    "enum": [
+                      "perpetual",
+                      "spot"
+                    ]
                   },
                   "base": {
                     "type": "string"

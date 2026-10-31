@@ -98,4 +98,18 @@ class MetricCatalogTest {
         return rendered.lines().filter(line -> line.startsWith("- " + metric + ":"))
                 .findFirst().orElseThrow();
     }
+    @Test void marketSpecificBindingsNeverBroadenOtherMarketsAndAreImmutable() {
+        var catalog = new MetricCatalog(new DefaultResourceLoader());
+        var turnover = catalog.metricDefinition("trade.turnover_24h");
+        assertFalse(turnover.bindings("perpetual").get(QueryShape.OFFICIAL_24H).supportsExchange("okx"));
+        assertTrue(turnover.bindings("spot").get(QueryShape.OFFICIAL_24H).supportsExchange("okx"));
+        assertTrue(catalog.metricDefinition("funding.rate_settled").bindings("spot").isEmpty());
+        assertFalse(catalog.metricDefinition("taker.buy_volume").bindings("spot").get(QueryShape.RANGE_STATISTIC).supportsExchange("okx"));
+        assertThrows(UnsupportedOperationException.class, () -> turnover.marketBindings().clear());
+        assertThrows(UnsupportedOperationException.class, () -> turnover.bindings("spot").clear());
+        String line = metricLine(catalog.describeMetrics(), "trade.turnover_24h");
+        assertTrue(line.contains("market_type=perpetual{；query_shape=official_24h（exchanges=[\"binance\"]）}"), line);
+        assertTrue(line.contains("market_type=spot{；query_shape=official_24h}"), line);
+    }
+
 }

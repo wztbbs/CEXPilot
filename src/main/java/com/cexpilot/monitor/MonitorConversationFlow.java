@@ -101,6 +101,10 @@ public class MonitorConversationFlow {
         var card=JsonNodeFactory.instance.objectNode().put("ruleId",id).put("version",number).put("specHash",saved.specHash())
                 .put("mailMode",mail.isDryRun()?"DRY_RUN":"RESEND").put("status",current).put("requiredHits",definition.path("requiredHits").asInt())
                 .put("timezone",definition.path("timezone").asText()).put("relation","AND").put("checkIntervalSeconds",300);
+        card.put("sourceConversationId",rule.sourceConversationId()).put("createdAt",rule.createdAt().toString())
+                .put("updatedAt",rule.updatedAt().toString());
+        if(rule.nextCheckAt()!=null) card.put("nextCheckAt",rule.nextCheckAt().toString());
+        card.set("latestEvaluation",repository.latestEvaluation(id));
         card.set("candidate",definition.path("candidate")); card.set("rules",definition.path("rules")); card.set("profile",profile(visitor));
         String unavailable=unavailable(definition);
         card.put("executionAvailable",unavailable==null);

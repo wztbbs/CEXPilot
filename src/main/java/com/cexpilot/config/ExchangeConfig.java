@@ -26,6 +26,11 @@ public class ExchangeConfig {
     public static class Binance {
         /** USDⓈ-M 永续合约公共行情入口，资金费率 / OI / 标记价格都在这里。 */
         private String baseUrl = "http://43.160.213.63:18080";
+        /** 现货公共行情独立代理，不能发往合约上游。 */
+        private String spotBaseUrl = "http://43.160.213.63:18082";
+
+        public String getSpotBaseUrl() { return spotBaseUrl; }
+        public void setSpotBaseUrl(String spotBaseUrl) { this.spotBaseUrl = spotBaseUrl; }
         private String apiKey = "";
         private String secretKey = "";
 

@@ -10,7 +10,10 @@ public record TimeRangeQuery(MetricBinding binding, TimeSpec time, String interv
     public TimeRangeQuery {
         Objects.requireNonNull(binding, "binding");
         Objects.requireNonNull(time, "time");
-        InstrumentRules.requirePerpetualUsdt(binding);
+        InstrumentRules.requireSupportedUsdt(binding);
+    }
+    public com.cexpilot.market.MarketType marketType() {
+        return com.cexpilot.market.MarketType.parse(binding.instrument().path("market_type").asText());
     }
     public Exchange exchange() { return InstrumentRules.exchange(binding); }
     public String base() { return InstrumentRules.base(binding); }

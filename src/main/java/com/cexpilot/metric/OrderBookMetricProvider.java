@@ -29,10 +29,17 @@ public class OrderBookMetricProvider implements MetricProvider {
         if (snapshot.depth() == null) {
             throw new IllegalArgumentException("盘口查询缺少档位数 depth");
         }
-        OrderBook book = market.orderBook(snapshot.exchange(), snapshot.base(), snapshot.depth());
+        OrderBook book = snapshot.marketType() == com.cexpilot.market.MarketType.SPOT
+                ? market.orderBook(snapshot.exchange(), snapshot.base(), snapshot.depth(), snapshot.marketType())
+                : market.orderBook(snapshot.exchange(), snapshot.base(), snapshot.depth());
         if (book == null) throw new IllegalArgumentException("交易所未返回盘口快照");
-        if (book.timestamp() <= 0) throw new IllegalArgumentException("盘口快照缺少数据时间，不能标注 as_of");
-        var metadata = new MetricResult.SnapshotMetadata(Instant.ofEpochMilli(book.timestamp()), context.userZone());
+        MetricResult.Metadata metadata;
+        if (book.timestamp() > 0) {
+            metadata = new MetricResult.SnapshotMetadata(Instant.ofEpochMilli(book.timestamp()), context.userZone());
+        } else if (snapshot.marketType() == com.cexpilot.market.MarketType.SPOT
+                && snapshot.exchange() == com.cexpilot.market.Exchange.BINANCE && book.collectedAt() > 0) {
+            metadata = new MetricResult.CollectedSnapshotMetadata(Instant.ofEpochMilli(book.collectedAt()), context.userZone());
+        } else throw new IllegalArgumentException("盘口快照缺少数据时间，不能标注 as_of");
         OrderBookSnapshot selector = (OrderBookSnapshot) query.binding().selector();
         BigDecimal value = selector.value(book);
         if (value == null) {

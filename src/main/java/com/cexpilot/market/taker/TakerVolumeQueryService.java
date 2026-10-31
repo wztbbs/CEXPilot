@@ -28,13 +28,15 @@ import java.util.Set;
 @Service
 public class TakerVolumeQueryService {
 
-    private final Map<Exchange, TakerVolumeSource> sources;
+    private record SourceKey(Exchange exchange, com.cexpilot.market.MarketType market) {}
+    private final Map<SourceKey, TakerVolumeSource> sources;
     private final TimeRangeResolver timeRangeResolver;
 
     public TakerVolumeQueryService(List<TakerVolumeSource> sources, TimeRangeResolver timeRangeResolver) {
-        Map<Exchange, TakerVolumeSource> map = new EnumMap<>(Exchange.class);
+        Map<SourceKey, TakerVolumeSource> map = new java.util.HashMap<>();
         for (TakerVolumeSource source : sources) {
-            map.put(source.exchange(), source);
+            if (map.put(new SourceKey(source.exchange(), source.marketType()), source) != null)
+                throw new IllegalArgumentException("重复 taker 数据源");
         }
         this.sources = map;
         this.timeRangeResolver = timeRangeResolver;
@@ -47,10 +49,15 @@ public class TakerVolumeQueryService {
      */
     public TakerVolumeQueryResult query(ZoneId userZone, TimeSpec spec, Instant requestTime,
                                         Exchange exchange, String base) {
+        return query(userZone, spec, requestTime, exchange, base, com.cexpilot.market.MarketType.PERPETUAL);
+    }
+
+    public TakerVolumeQueryResult query(ZoneId userZone, TimeSpec spec, Instant requestTime,
+                                        Exchange exchange, String base, com.cexpilot.market.MarketType market) {
         TimeRange range = timeRangeResolver.resolve(userZone, spec, requestTime);
-        TakerVolumeSource source = sources.get(exchange);
+        TakerVolumeSource source = sources.get(new SourceKey(exchange, market));
         if (source == null) {
-            throw new IllegalArgumentException("交易所暂无 taker 成交量统计数据源: " + exchange.displayName());
+            throw new IllegalArgumentException("交易所/市场暂无 taker 成交量统计数据源: " + exchange.displayName() + "/" + market.code());
         }
 
         TimeRange effectiveRange = SeriesQueryPolicy.check(

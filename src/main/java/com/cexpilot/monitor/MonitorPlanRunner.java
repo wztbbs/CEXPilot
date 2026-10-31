@@ -149,7 +149,11 @@ public class MonitorPlanRunner {
                     :data.at("/source/provider").asText().equals("oi")?requested.path("end_exclusive").asText():data.at("/coverage/covered_until").asText();
             if(!expected.equals(end)) throw new IllegalArgumentException("数据没有覆盖共同截止点");
         } else {
-            var time=LocalDateTime.parse(data.path("as_of").asText(),DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")).toInstant(ZoneOffset.UTC);
+            boolean collectionTime = "spot".equals(node.metric().instrument().path("market_type").asText())
+                    && "binance".equals(node.metric().exchange()) && "orderbook".equals(node.metric().provider())
+                    && "local_collection".equals(data.path("timestamp_source").asText()) && !data.hasNonNull("as_of");
+            var time=LocalDateTime.parse(data.path(collectionTime ? "collected_at" : "as_of").asText(),
+                    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")).toInstant(ZoneOffset.UTC);
             if(time.isAfter(now.plusSeconds(5)) || time.isBefore(now.minusSeconds(300))) throw new IllegalArgumentException("快照已过期");
         }
         if(!now.isBefore(slot.plusSeconds(300))) throw new IllegalArgumentException("检查周期已过期");

@@ -127,6 +127,7 @@ CREATE TABLE IF NOT EXISTS ask_trace (
     question          TEXT          NOT NULL,
     intent            VARCHAR(64)   NULL, -- 历史意图标签，仅兼容旧数据；当前流程不再写入
     visitor_id        VARCHAR(64)   NULL, -- 访客标识（cexpilot_uid cookie）
+    is_real_user      BOOLEAN       NULL DEFAULT TRUE, -- true=用户流量，false=脚本标记，NULL=历史来源未知
     status            VARCHAR(16)   NOT NULL DEFAULT 'RUNNING',
     answer            MEDIUMTEXT    NULL,
     model             VARCHAR(64)   NULL,

@@ -32,14 +32,20 @@ public class BinanceKlineSource implements KlineSource {
     }
 
     private final PageFetcher fetcher;
+    private final PageFetcher spotFetcher;
 
     @Autowired
     public BinanceKlineSource(BinanceClient client) {
-        this(client::klines);
+        this(client::klines, client::spotKlines);
     }
 
     BinanceKlineSource(PageFetcher fetcher) {
+        this(fetcher, fetcher);
+    }
+
+    BinanceKlineSource(PageFetcher fetcher, PageFetcher spotFetcher) {
         this.fetcher = fetcher;
+        this.spotFetcher = spotFetcher;
     }
 
     @Override
@@ -53,7 +59,16 @@ public class BinanceKlineSource implements KlineSource {
     }
 
     @Override
+    public SeriesCapability capability(com.cexpilot.market.MarketType market) {
+        return new SeriesCapability(Set.of(CandleInterval.values()),
+                market == com.cexpilot.market.MarketType.SPOT ? 1000 : PAGE_LIMIT, MAX_PAGES);
+    }
+
+    @Override
     public FetchResult fetch(KlineQueryRequest effective) {
+        boolean spot = effective.marketType() == com.cexpilot.market.MarketType.SPOT;
+        PageFetcher selected = spot ? spotFetcher : fetcher;
+        int pageLimit = spot ? 1000 : PAGE_LIMIT;
         String symbol = SymbolMapper.binanceSymbol(effective.base());
         String interval = effective.interval().code();
         long intervalMs = effective.interval().duration().toMillis();
@@ -64,7 +79,7 @@ public class BinanceKlineSource implements KlineSource {
         String abortReason = null;
         long cursor = startMs;
         for (int page = 0; page < MAX_PAGES; page++) {
-            List<Candle> candles = fetcher.page(symbol, interval, cursor, endMs - 1, PAGE_LIMIT);
+            List<Candle> candles = selected.page(symbol, interval, cursor, endMs - 1, pageLimit);
             if (candles.isEmpty()) {
                 break;
             }
@@ -75,7 +90,7 @@ public class BinanceKlineSource implements KlineSource {
                 }
                 lastOpenTime = Math.max(lastOpenTime, candle.openTime());
             }
-            if (candles.size() < PAGE_LIMIT) {
+            if (candles.size() < pageLimit) {
                 break; // 本页未满：交易所已没有更多数据
             }
             long next = lastOpenTime + intervalMs;

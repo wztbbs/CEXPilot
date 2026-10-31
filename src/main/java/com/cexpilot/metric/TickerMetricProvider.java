@@ -28,7 +28,9 @@ public class TickerMetricProvider implements MetricProvider {
         if (!(query instanceof SnapshotQuery snapshot)) {
             throw new IllegalArgumentException("ticker Provider 仅支持快照与官方 24h 查询: " + query.getClass().getSimpleName());
         }
-        Ticker ticker = market.ticker(snapshot.exchange(), snapshot.base());
+        Ticker ticker = snapshot.marketType() == com.cexpilot.market.MarketType.SPOT
+                ? market.ticker(snapshot.exchange(), snapshot.base(), snapshot.marketType())
+                : market.ticker(snapshot.exchange(), snapshot.base());
         if (ticker == null) throw new IllegalArgumentException("交易所未返回 24h 行情快照");
         if (ticker.timestamp() <= 0) throw new IllegalArgumentException("快照缺少数据时间，不能标注 as_of");
         var metadata = new MetricResult.SnapshotMetadata(Instant.ofEpochMilli(ticker.timestamp()), context.userZone());
