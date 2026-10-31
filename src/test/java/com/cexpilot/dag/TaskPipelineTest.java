@@ -19,6 +19,14 @@ import static org.mockito.Mockito.mock;
 /** 全部 LLM/Provider 都是本地桩；真实编排、编译、DAG、事实与任务状态流转。 */
 class TaskPipelineTest {
     private static final Instant NOW = Instant.parse("2026-10-13T01:00:00Z");
+    private static InMemoryTaskRepository pipelineRepository() {
+        return new InMemoryTaskRepository() {
+            @Override public boolean conversationExists(String id) { return true; }
+            @Override public boolean ownedBy(String id, String visitor) { return "c1".equals(id) && "v".equals(visitor); }
+            @Override public void initializeTitle(String id, String title) {}
+            @Override public void saveAgentOutcome(String turnId, String agent, com.fasterxml.jackson.databind.JsonNode payload) {}
+        };
+    }
     private static String price(String action, String base, String exchange, String task, String state) {
         var metric = MetricTestSupport.metric("m1", "price.last", "snapshot", exchange);
         metric.remove("time"); metric.remove("interval");
@@ -31,14 +39,16 @@ class TaskPipelineTest {
         return env.toString();
     }
     private static String clarify(String action, String question) {
-        return JSON.createObjectNode().put("in_domain", true).put("task_action", action)
-                .put("needs_clarification", true).put("clarify", question).putNull("plan").toString();
+        var response = JSON.createObjectNode().put("in_domain", true).put("task_action", action)
+                .put("needs_clarification", true).putNull("reply").putNull("plan");
+        response.putArray("clarify").addObject().put("key", question.contains("交易所") ? "exchange" : "base")
+                .put("label", question.contains("交易所") ? "交易所" : "币种")
+                .put("reason", "missing").put("message", question);
+        return response.toString();
     }
 
     @Test void 连续澄清失败重试及跨话题回访使用同一任务版本链() {
-        var repo = new InMemoryTaskRepository() {
-            @Override public boolean conversationExists(String id) { return true; }
-        };
+        var repo = pipelineRepository();
         var conversations = new ConversationService(repo, new ConversationConfig());
         var contexts = new ConversationContextService(repo);
         var store = new com.cexpilot.evidence.EvidenceStore(new com.cexpilot.evidence.InMemoryEvidenceRepository());
@@ -111,9 +121,7 @@ class TaskPipelineTest {
     }
 
     @Test void 自动粒度追问重新选择而用户后来指定的固定粒度继续沿用() {
-        var repo = new InMemoryTaskRepository() {
-            @Override public boolean conversationExists(String id) { return true; }
-        };
+        var repo = pipelineRepository();
         var conversations = new ConversationService(repo, new ConversationConfig());
         var contexts = new ConversationContextService(repo);
         var store = new com.cexpilot.evidence.EvidenceStore(new com.cexpilot.evidence.InMemoryEvidenceRepository());
@@ -124,12 +132,15 @@ class TaskPipelineTest {
         var continued = (com.fasterxml.jackson.databind.node.ObjectNode)json(envelope(copied));
         continued.put("task_action", "CONTINUE"); continued.putArray("changes").add("time");
         var explicit = continued.deepCopy();
-        explicit.putObject("explicit_conditions").putObject("m1").put("interval", "5分钟");
+        explicit.putObject("condition_updates").putObject("m1").put("interval", "set");
         explicit.withArray("changes").add("interval");
         var omitted = (com.fasterxml.jackson.databind.node.ObjectNode)json(envelope(first));
         omitted.put("task_action", "CONTINUE"); omitted.putArray("changes").add("time");
+        var reset = omitted.deepCopy(); reset.withArray("changes").add("interval");
+        reset.putObject("condition_updates").putObject("m1").put("interval", "reset");
         var llm = new Script(envelope(first), "首答", continued.toString(), "追问答案",
-                explicit.toString(), "固定粒度答案", omitted.toString(), "沿用粒度答案");
+                explicit.toString(), "固定粒度答案", omitted.toString(), "沿用粒度答案",
+                reset.toString(), "自动粒度答案", continued.toString(), "继续自动答案");
         List<String> receivedIntervals = new ArrayList<>();
         var provider = provider((q,c) -> {
             var tq = (TimeRangeQuery)q;
@@ -162,14 +173,22 @@ class TaskPipelineTest {
             var c = ask.ask("c1", "固定用5分钟粒度", "v", "Asia/Shanghai", b.turnId(), null);
             var thirdState = repo.findActiveTask("c1");
             assertEquals(ConditionOrigin.EXPLICIT, thirdState.frame().targets().get(0).intervalOrigin());
-            ask.ask("c1", "再换回昨天", "v", "Asia/Shanghai", c.turnId(), null);
+            var d = ask.ask("c1", "再换回昨天", "v", "Asia/Shanghai", c.turnId(), null);
             var finalTarget = repo.findActiveTask("c1").frame().targets().get(0);
             assertEquals("5m", finalTarget.interval());
             assertEquals(ConditionOrigin.INHERITED, finalTarget.intervalOrigin());
             assertEquals(c.turnId(), finalTarget.conditionSources().get("interval").sourceTurnId());
             assertEquals(3L, finalTarget.conditionSources().get("interval").sourceVersion());
-            assertEquals(Arrays.asList(null, null, "5m", "5m"), receivedIntervals);
-            assertEquals(8, llm.calls.size()); // 每轮一次 Planner + 一次 Answer，未因来源补齐而增加 LLM 调用。
+            var e = ask.ask("c1", "改回自动粒度", "v", "Asia/Shanghai", d.turnId(), null);
+            var resetTarget = repo.findActiveTask("c1").frame().targets().get(0);
+            assertNull(resetTarget.interval());
+            assertEquals(ConditionOrigin.DEFAULT, resetTarget.conditionSources().get("interval").requirementOrigin());
+            ask.ask("c1", "再换成最近30天", "v", "Asia/Shanghai", e.turnId(), null);
+            var automatic = repo.findActiveTask("c1").frame().targets().get(0);
+            assertNull(automatic.interval());
+            assertEquals("1h", automatic.executionMetadata().path("candle_interval").asText());
+            assertEquals(Arrays.asList(null, null, "5m", "5m", null, null), receivedIntervals);
+            assertEquals(12, llm.calls.size()); // 六轮各一次 Planner + Answer，无参数来源修复轮。
         } finally { executor.shutdown(); }
     }
 }

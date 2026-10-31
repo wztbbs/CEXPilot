@@ -308,53 +308,45 @@
       ],
       "description": "RESUME 可选：任务索引提供的 state_ref；明确回到某轮时必填，不填选择该任务最新候选版本"
     },
-    "explicit_conditions": {
+    "condition_updates": {
       "type": [
         "object",
         "null"
       ],
-      "description": "指标组 ID -> 条件字段 -> 当前用户问题的原文片段；仅用户本轮明确提出的条件填写，继承/默认条件省略。服务端生成来源轮次与任务版本。",
+      "description": "仅声明用户本轮明确设置或恢复默认的可选参数；指标组 ID -> 参数 -> set/reset。不复制继承值，不登记来源原文，普通查询省略。set 时计划提供值，reset 时计划省略值。",
       "additionalProperties": {
         "type": "object",
+        "additionalProperties": false,
         "properties": {
-          "exchange": {
-            "type": "string"
-          },
-          "metric": {
-            "type": "string"
-          },
-          "query_shape": {
-            "type": "string"
-          },
-          "market_type": {
-            "type": "string"
-          },
-          "base": {
-            "type": "string"
-          },
-          "quote": {
-            "type": "string"
-          },
-          "settle": {
-            "type": "string"
-          },
-          "time": {
-            "type": "string"
-          },
           "interval": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "set",
+              "reset"
+            ]
           },
           "include_unclosed": {
-            "type": "string"
-          },
-          "count": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "set",
+              "reset"
+            ]
           },
           "depth": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "set",
+              "reset"
+            ]
+          },
+          "settle": {
+            "type": "string",
+            "enum": [
+              "set",
+              "reset"
+            ]
           }
-        },
-        "additionalProperties": false
+        }
       }
     }
   },

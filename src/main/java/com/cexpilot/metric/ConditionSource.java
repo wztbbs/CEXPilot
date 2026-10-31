@@ -1,6 +1,6 @@
 package com.cexpilot.metric;
 
-/** 字段本轮来源、原始来源性质和继承基准；标识均由服务端填充，模型只能提供用户原文。 */
+/** 字段本轮来源、原始来源性质和继承基准；轮次/版本标识由服务端填充，userText 仅兼容旧原文标注。 */
 public record ConditionSource(ConditionOrigin origin, ConditionOrigin requirementOrigin,
         String sourceTurnId, String sourceFrameId, Long sourceVersion, String userText,
         String requirementTurnId, String requirementFrameId, Long requirementVersion) {

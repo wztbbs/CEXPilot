@@ -136,13 +136,118 @@ class ConditionProvenanceResolverTest {
         assertNull(resolve(copied, null, "换昨天", autoFrame).targets().get(0).interval());
     }
 
-    @Test void 伪造旧问题原文或未知字段来源被拒绝() {
-        assertThrows(IllegalArgumentException.class, () -> resolve(scalarPlan(),
-                "{\"m1\":{\"interval\":\"1小时\"}}", "那最低价呢", null));
-        assertThrows(IllegalArgumentException.class, () -> resolve(scalarPlan(),
-                "{\"m1\":{\"source_turn_id\":\"那\"}}", "那最低价呢", null));
-        assertThrows(IllegalArgumentException.class, () -> resolve(scalarPlan(),
-                "{\"made_up\":{\"interval\":\"那\"}}", "那最低价呢", null));
+    @Test void 旧来源原文无效或字段未知时降级并记录warning不拒绝有效计划() {
+        var warnings = new java.util.ArrayList<ConditionProvenanceResolver.Warning>();
+        var result = resolver.resolve(compiler, scalarPlan(), json("""
+                {"m1":{"interval":"1小时","source_turn_id":"那"},"made_up":{"interval":"那"}}
+                """), null, "那最低价呢", null, CONTEXT, 12, warnings::add);
+        assertEquals(3, warnings.size());
+        assertEquals(ConditionOrigin.PLANNED, result.targets().get(0).intervalOrigin());
+        assertNull(result.targets().get(0).conditionSources().get("interval").userText());
+    }
+
+    private CompiledPlan update(JsonNode plan, String actions, QueryFrame base) {
+        return resolver.resolve(compiler, plan, null, json(actions), "本轮参数操作", base, CONTEXT, 12, ignored -> {});
+    }
+
+    @Test void 新协议先固定粒度后恢复自动并且后续不抄回执行粒度() {
+        var fixed = update(scalarPlan(), "{\"m1\":{\"interval\":\"set\"}}", null);
+        assertEquals(ConditionOrigin.EXPLICIT, fixed.targets().get(0).intervalOrigin());
+        assertNull(fixed.targets().get(0).conditionSources().get("interval").userText());
+        var base = saved(fixed, "turn-fixed", 1, null);
+        var next = scalarPlan(); ((ObjectNode)next.at("/metrics/0")).remove("interval");
+        var automatic = update(next, "{\"m1\":{\"interval\":\"reset\"}}", base);
+        assertNull(automatic.targets().get(0).interval());
+        assertFalse(automatic.logicalPlanJson().at("/metrics/0").has("interval"));
+        assertEquals(ConditionOrigin.DEFAULT, automatic.targets().get(0).conditionSources().get("interval").requirementOrigin());
+        var autoFrame = saved(automatic, "turn-auto", 2, "5m");
+        var copied = scalarPlan(); ((ObjectNode)copied.at("/metrics/0")).put("interval", "5m");
+        assertNull(resolve(copied, null, "换成前天", autoFrame).targets().get(0).interval());
+    }
+
+    @Test void 新协议没有操作时沿用固定参数而set同值仍算本轮要求() {
+        var automatic = scalarPlan(); ((ObjectNode)automatic.at("/metrics/0")).remove("interval");
+        var base = saved(resolve(automatic, null, "昨天价格", null), "turn-auto", 1, "5m");
+        var next = scalarPlan(); ((ObjectNode)next.at("/metrics/0")).put("interval", "5m");
+        var fixed = update(next, "{\"m1\":{\"interval\":\"set\"}}", base);
+        assertEquals("5m", fixed.targets().get(0).interval());
+        var fixedFrame = saved(fixed, "turn-fixed", 2, null);
+        ((ObjectNode)next.at("/metrics/0")).remove("interval");
+        assertEquals("5m", update(next, "{}", fixedFrame).targets().get(0).interval());
+    }
+
+    @Test void 多个可选参数可同时恢复默认且不被旧值覆盖() {
+        var p = scalarPlan();
+        ((ObjectNode)p.at("/metrics/0")).put("include_unclosed", true);
+        ((ObjectNode)p.at("/metrics/0/instrument")).put("settle", "USDT");
+        var base = saved(update(p, "{\"m1\":{\"interval\":\"set\",\"include_unclosed\":\"set\",\"settle\":\"set\"}}", null), "fixed", 1, null);
+        var next = scalarPlan();
+        ((ObjectNode)next.at("/metrics/0")).remove("interval");
+        var reset = update(next, "{\"m1\":{\"interval\":\"reset\",\"include_unclosed\":\"reset\",\"settle\":\"reset\"}}", base);
+        var target = reset.targets().get(0);
+        assertNull(target.interval()); assertFalse(target.includeUnclosed());
+        assertEquals("USDT", target.instrument().path("settle").asText());
+        for (String field : List.of("interval", "include_unclosed", "settle"))
+            assertEquals(ConditionOrigin.DEFAULT, target.conditionSources().get(field).requirementOrigin());
+        var frame = saved(reset, "reset", 2, "5m");
+        var continued = update(next, "{}", frame).targets().get(0);
+        assertNull(continued.interval()); assertFalse(continued.includeUnclosed());
+        assertEquals(ConditionOrigin.DEFAULT, continued.conditionSources().get("include_unclosed").requirementOrigin());
+    }
+
+    @Test void 盘口深度明确设置成默认数值仍固定而reset恢复目录默认() {
+        var metric = metric("m1", "orderbook.spread", "snapshot", "binance");
+        metric.remove(List.of("interval", "time"));
+        var initial = plan(metric);
+        var base = saved(resolve(initial, null, "查盘口", null), "default", 1, null);
+        metric.put("depth", 20);
+        var explicit = update(plan(metric), "{\"m1\":{\"depth\":\"set\"}}", base);
+        assertEquals(ConditionOrigin.EXPLICIT, explicit.targets().get(0).depthOrigin());
+        metric.put("depth", 50);
+        var fixed = saved(update(plan(metric), "{\"m1\":{\"depth\":\"set\"}}", base), "fixed", 2, null);
+        metric.remove("depth");
+        assertEquals(50, update(plan(metric), "{}", fixed).targets().get(0).depth());
+        var reset = update(plan(metric), "{\"m1\":{\"depth\":\"reset\"}}", fixed);
+        assertEquals(20, reset.targets().get(0).depth());
+        assertFalse(reset.logicalPlanJson().at("/metrics/0").has("depth"));
+        assertEquals(ConditionOrigin.DEFAULT, reset.targets().get(0).conditionSources().get("depth").requirementOrigin());
+    }
+
+    @Test void 旧原文无效且忽略会改变继承时一次反馈全部相关字段() {
+        var p = scalarPlan(); ((ObjectNode)p.at("/metrics/0")).put("include_unclosed", true);
+        var base = saved(update(p, "{\"m1\":{\"interval\":\"set\",\"include_unclosed\":\"set\"}}", null), "fixed", 1, null);
+        var next = scalarPlan(); ((ObjectNode)next.at("/metrics/0")).remove("interval");
+        var error = assertThrows(IllegalArgumentException.class, () -> resolver.resolve(compiler, next,
+                json("{\"m1\":{\"interval\":\"假原文1\",\"include_unclosed\":\"假原文2\"}}"), null,
+                "恢复默认", base, CONTEXT, 12, ignored -> {}));
+        assertTrue(error.getMessage().contains("explicit_conditions.m1.interval"));
+        assertTrue(error.getMessage().contains("explicit_conditions.m1.include_unclosed"));
+        assertTrue(error.getMessage().contains("condition_updates"));
+        assertDoesNotThrow(() -> resolver.resolve(compiler, next,
+                json("{\"m1\":{\"interval\":\"假原文1\",\"include_unclosed\":\"假原文2\"}}"),
+                json("{\"m1\":{\"interval\":\"reset\",\"include_unclosed\":\"reset\"}}"),
+                "恢复默认", base, CONTEXT, 12, ignored -> {}));
+    }
+
+    @Test void 操作矛盾及未知字段组一次反馈而不修改原计划() {
+        var p = scalarPlan(); var original = p.deepCopy();
+        var error = assertThrows(IllegalArgumentException.class, () -> update(p, """
+                {"m1":{"interval":"reset","depth":"set","include_unclosed":"bad","base":"set"},"made_up":{"interval":"set"}}
+                """, null));
+        for (String field : List.of("m1.interval", "m1.depth", "m1.include_unclosed", "m1.base", "made_up"))
+            assertTrue(error.getMessage().contains(field), error.getMessage());
+        assertEquals(original, p);
+    }
+
+    @Test void 不适用的操作和真正的计划错误都不能因来源降级而放行() {
+        var metric = metric("m1", "price.last", "snapshot", "binance"); metric.remove(List.of("interval", "time"));
+        var invalidActions = assertThrows(IllegalArgumentException.class, () -> update(plan(metric), """
+                {"m1":{"interval":"reset","depth":"reset","include_unclosed":"reset"}}
+                """, null));
+        for (String field : List.of("interval", "depth", "include_unclosed"))
+            assertTrue(invalidActions.getMessage().contains("m1." + field));
+        metric.putObject("time");
+        assertThrows(IllegalArgumentException.class, () -> resolve(plan(metric), "{\"m1\":{\"time\":\"现在\"}}", "现在", null));
     }
 
     @Test void 同一指标组两所固定粒度不同时要求拆组而不是拿第一条() {

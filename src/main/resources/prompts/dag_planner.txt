@@ -53,6 +53,9 @@
 - 输出前核对每个节点是否服务于本次问题；示例只展示结构，不复制示例中的指标、币种、目标金额或期数作为本次需求。
 - reply 仅为给用户的一句简短话（100字以内），不输出推理；不需要时用 null。所有结果仍由执行层产生，reply 不含行情数值、自算结果或 {{...}} 引用。
 
+示例：币安的比特币现在多少钱？（未指定市场和报价币，按默认查询；不输出条件来源或可选参数操作）
+{"in_domain":true,"needs_clarification":false,"clarify":[],"plan":{"metrics":[{"id":"m1","metric":"price.last","exchanges":["binance"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"snapshot"}],"calculations":[]},"reply":null,"changes":[],"task_action":"NEW"}
+
 示例：昨天币安 BTC 永续成交额比 OKX 高百分之多少？
 {"in_domain":true,"plan":{"metrics":[{"id":"m1","metric":"trade.turnover","exchanges":["binance","okx"],"instrument":{"market_type":"perpetual","base":"BTC","quote":"USDT"},"query_shape":"range_statistic","time":{"type":"calendar_period","unit":"day","offset":-1,"segment":"full","extent":"full_period"}}],"calculations":[{"id":"c1","operator":"relative_change","input":{"current":"{{m1.binance.value}}","baseline":"{{m1.okx.value}}"}}]},"reply":null,"needs_clarification":false,"clarify":[]}
 
@@ -98,7 +101,10 @@
   - "最新的平均值呢"或带"最新/现在/刷新"等修饰：重新获取最新集合后计算（reference_mode 缺省 latest），不绑定旧集合。
   - "比刚才/比上次涨了多少"类涨跌比较：出两个价格节点——旧值用 reference_mode="pinned_result" + evidence_ref 绑定【可引用历史事实】中匹配的旧快照，新值另建指标组本轮重新取数；仅对“现在比刚才涨了多少”这一方向，relative_change 使用 current=新值、baseline=旧值。所有比较算子的方向按用户本轮要求决定，不按数据新旧统一左右侧：旧价减现价用 left=旧、right=新；旧价是现价的几倍用 ratio(left=旧,right=新)；以现价为基准比较旧价用 relative_change(current=旧,baseline=新)。禁止把历史回答文本里的数字当字面量填进 current/baseline/left/right（用户本轮明确给出的目标常量除外），不要根据取数时间擅自交换输入槽位；用户明确给出的常量可以正常使用。
 - 信封增量字段语义：
-  - explicit_conditions：指标组 ID 到条件原文的对象，例如用户本轮说“用 5 分钟粒度”，输出 "explicit_conditions":{"m1":{"interval":"5 分钟"}}。只标当前问题明确提出的条件；不能把上一轮原文、答案或执行结果标成本轮要求。省略的来源由程序判为继承/默认/模型填写未核实，不因 JSON 有字段就当用户指定。支持 exchange/metric/query_shape/market_type/base/quote/settle/time/interval/include_unclosed/count/depth；原文片段必须逐字出现在本轮用户问题中。改回自动粒度时省略 interval，并在 explicit_conditions.interval 提供“自动”等原文。
+  - condition_updates：仅对影响继承的可选参数声明用户本轮操作，结构为 {"指标组ID":{"参数":"set或reset"}}；参数仅支持 interval/include_unclosed/depth/settle。普通查询省略或输出 {}。币种、交易所、指标、市场和时间条件由完整 plan 表达，不额外登记原文，不输出旧字段 explicit_conditions。
+  - set 表示用户本轮明确指定该参数，计划必须填对应值。例如“用5分钟粒度”时计划 interval="5m"，并输出 "condition_updates":{"m1":{"interval":"set"}}；即使指定值恰好等于上次自动选出的粒度或默认值，也用 set 表示本轮明确要求。
+  - reset 表示用户明确解除旧固定要求，恢复自动/默认；计划必须省略对应参数。例如“改回自动粒度”时省略 interval，输出 "condition_updates":{"m1":{"interval":"reset"}}。恢复默认盘口深度同理：省略 depth，输出 depth="reset"。默认值由程序补全，不复制上轮固定值，也不自己把默认数值填回计划。
+  - 用户未提上述参数时，不输出对应操作，沿用已有固定要求；只是执行层上次自动选了某粒度时，仍保持自动，不把实际执行粒度抄成固定参数。新任务的默认值、行业惯例及从历史继承的值不算 set。snapshot 不接受 interval/include_unclosed，只有目录声明了 depth 的盘口指标才使用 depth；现货不使用 settle。不适用的参数不输出操作。
   - changes：字符串数组，声明用户本轮明确改变了哪些条件键（取值如 exchange/base/metric/shape/time/interval/count/depth/include_unclosed），无改变为 []。程序会把你的计划与活动查询状态逐字段对账，漏报实际变化会被打回修复。
   - task_action：NEW / CONTINUE / RESUME。首个问题或用户明确换话题用 NEW，不继承旧任务条件；延续当前任务、回答澄清或重试失败任务用 CONTINUE；回到旧任务用 RESUME。只修改币种、交易所、指标等条件的普通追问仍是 CONTINUE，不因修改条件就新建任务。
   - new_frame：仅兼容旧协议；优先输出 task_action。旧 new_frame=true 等价 NEW，否则等价 CONTINUE。
@@ -166,3 +172,8 @@
 
 现货切换示例：上一轮为昨天币安 BTC 永续最高价，本轮说“换成现货”（保留时间和粒度，省略 settle）：
 {"in_domain":true,"changes":["market_type"],"plan":{"metrics":[{"id":"m1","metric":"price.high","exchanges":["binance"],"instrument":{"market_type":"spot","base":"BTC","quote":"USDT"},"query_shape":"range_statistic","time":{"type":"calendar_period","unit":"day","offset":-1,"segment":"full","extent":"full_period"},"interval":"1h"}],"calculations":[]},"reply":null,"needs_clarification":false,"clarify":[]}
+
+可选参数操作示例（只展示本轮明确设置/重置，其他条件仍需返回完整计划）：
+- 问题“币安 BTC 昨天的最高价，用1小时粒度”：计划的 m1 为 price.high / range_statistic、interval="1h"，condition_updates={"m1":{"interval":"set"}}。
+- 同一任务追问“换成前天”：沿用 interval="1h"，condition_updates 省略，不登记继承值。
+- 再追问“改回自动粒度”：保持同一市场、币种、指标和时间，计划省略 interval，condition_updates={"m1":{"interval":"reset"}}；不能因字段省略而继承旧固定粒度。

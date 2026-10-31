@@ -8,85 +8,94 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.util.*;
+import java.util.function.Consumer;
 
-/** 原文依据、所选任务版本和代码默认值分开处理；执行结果从来不自动升级为查询要求。 */
+/** 计划与来源分开校验；新协议只声明影响继承的可选参数操作，兼容旧原文来源。 */
 final class ConditionProvenanceResolver {
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final List<String> OPTIONAL = List.of("interval", "include_unclosed", "depth", "settle");
     private static final Set<String> FIELDS = Set.of("exchange", "metric", "query_shape", "market_type",
             "base", "quote", "settle", "time", "interval", "include_unclosed", "count", "depth");
+    record Warning(String code, String path, String message) {}
+    private record Claims(Map<String, Map<String, String>> valid, Map<String, Set<String>> unverified) {}
 
     CompiledPlan resolve(MetricPlanCompiler compiler, JsonNode planJson, JsonNode explicit,
                          String question, QueryFrame base, RequestContext context, int maxNodes) {
+        return resolve(compiler, planJson, explicit, null, question, base, context, maxNodes, ignored -> {});
+    }
+
+    CompiledPlan resolve(MetricPlanCompiler compiler, JsonNode planJson, JsonNode explicit, JsonNode updates,
+                         String question, QueryFrame base, RequestContext context, int maxNodes,
+                         Consumer<Warning> warnings) {
         JsonNode copy = planJson.deepCopy();
-        var claims = validateClaims(copy, explicit, question);
-        CompiledPlan initial = compiler.compileFull(copy, maxNodes);
-        claims.forEach((group, fields) -> fields.keySet().forEach(field -> {
+        List<String> errors = new ArrayList<>();
+        var actions = readActions(copy, updates, errors);
+        CompiledPlan initial;
+        try { initial = compiler.compileFull(copy, maxNodes); }
+        catch (IllegalArgumentException e) {
+            errors.add(e.getMessage());
+            throw new IllegalArgumentException(String.join("\n", errors));
+        }
+        actions.forEach((group, fields) -> fields.forEach((field, action) -> {
             if (initial.targets().stream().filter(t -> group.equals(t.groupId()))
-                    .noneMatch(t -> t.conditionSources().containsKey(field))) {
-                throw new IllegalArgumentException("explicit_conditions." + group + "." + field
-                        + " 不适用于该指标查询形态，不能标记没有使用的条件");
-            }
+                    .anyMatch(t -> !compiler.supportsCondition(t, field)))
+                errors.add("condition_updates." + group + "." + field + " 不适用于该指标查询形态");
         }));
+        var claims = readClaims(initial, explicit, question, compiler, warnings);
         List<EffectiveTarget> matches = InheritanceValidator.matchTargets(
                 base == null ? List.of() : base.targets(), initial.targets());
-        // 先纠正可选参数：固定要求沿用；上轮自动结果被抄回计划时恢复自动策略。
-        // 同组的多所分支有不同继承要求时，不选第一条，要求 Planner 拆组。
         Map<String, Map<String, JsonNode>> edits = new LinkedHashMap<>();
         for (int i = 0; i < initial.targets().size(); i++) {
             EffectiveTarget target = initial.targets().get(i), previous = matches.get(i);
             if (previous == null) continue;
-            for (String field : List.of("interval", "include_unclosed", "depth", "settle")) {
-                if (!target.conditionSources().containsKey(field)) continue;
+            for (String field : OPTIONAL) {
+                if (!compiler.supportsCondition(target, field)) continue;
                 if (!"settle".equals(field) && !target.queryShape().equals(previous.queryShape())) continue;
-                JsonNode value = value(target, field), oldValue = value(previous, field);
-                JsonNode replacement = value;
-                boolean userSpecified = claims.getOrDefault(target.groupId(), Map.of()).containsKey(field);
-                if (!userSpecified) {
-                    if ("interval".equals(field) && previous.interval() == null && target.interval() != null
-                            && previous.executionMetadata() != null
-                            && target.interval().equals(previous.executionMetadata().path("candle_interval").asText())) {
-                        // 用户可能在本轮要求固定粒度时，不因缺少原文元数据吞掉有效计划；保留为 PLANNED。
-                        // 这些词只是阻止自动改写的保守线索，不能据此升级为 EXPLICIT。
-                        if (question == null || !question.matches("(?is).*(粒度|颗粒|间隔|保持|固定|自动|每\\s*\\d|\\b\\d+\\s*[mhd]\\b|\\d+\\s*分钟).*")) {
-                            replacement = MAPPER.nullNode();
-                        }
-                    } else if (value.equals(oldValue) && source(previous, field).requirementOrigin() == ConditionOrigin.DEFAULT
-                            && !fieldAbsent(copy, target.groupId(), field)) {
-                        // 默认 settle/depth/include_unclosed 也不因模型补写就变成固定要求。
-                        replacement = MAPPER.nullNode();
-                    } else if (fieldAbsent(copy, target.groupId(), field) && !oldValue.isNull()
-                            && source(previous, field).requirementOrigin() != ConditionOrigin.DEFAULT) {
-                        replacement = oldValue;
-                    }
+                JsonNode current = value(target, field);
+                boolean userSpecified = actions.getOrDefault(target.groupId(), Map.of()).containsKey(field)
+                        || claims.valid().getOrDefault(target.groupId(), Map.of()).containsKey(field);
+                JsonNode replacement = userSpecified ? current : inheritedValue(copy, target, previous, question, field);
+                if (!userSpecified && !replacement.equals(current)
+                        && claims.unverified().getOrDefault(target.groupId(), Set.of()).contains(field)) {
+                    errors.add("explicit_conditions." + target.groupId() + "." + field
+                            + " 原文依据无效，忽略会影响继承；请用 condition_updates 声明 set/reset，"
+                            + "set 时在计划提供值，reset 时省略值，不编造原文");
                 }
                 Map<String, JsonNode> group = edits.computeIfAbsent(target.groupId(), ignored -> new LinkedHashMap<>());
                 if (group.containsKey(field) && !group.get(field).equals(replacement)) {
-                    throw new IllegalArgumentException("指标组 " + target.groupId() + " 的 " + field
+                    errors.add("指标组 " + target.groupId() + " 的 " + field
                             + " 在不同交易所继承要求不同，请拆成独立指标组，不能采用第一条的条件");
-                }
-                group.put(field, replacement);
+                } else group.put(field, replacement);
             }
         }
+        if (!errors.isEmpty()) throw new IllegalArgumentException(String.join("\n", new LinkedHashSet<>(errors)));
         for (JsonNode node : copy.path("metrics")) {
             for (var edit : edits.getOrDefault(node.path("id").asText(), Map.of()).entrySet()) {
-                // 没有实际修改时保留原省略字段，避免把代码默认又写成模型填写。
                 EffectiveTarget first = initial.targets().stream()
                         .filter(t -> t.groupId().equals(node.path("id").asText())).findFirst().orElseThrow();
                 if (!value(first, edit.getKey()).equals(edit.getValue())) setField((ObjectNode) node, edit.getKey(), edit.getValue());
             }
         }
         CompiledPlan plan = copy.equals(planJson) ? initial : compiler.compileFull(copy, maxNodes);
-        // 使用归一化前相同物理节点的配对；归一化不改变指标组/交易所/节点数量。
         List<EffectiveTarget> targets = new ArrayList<>();
         InheritanceValidator validator = new InheritanceValidator();
         for (int i = 0; i < plan.targets().size(); i++) {
             EffectiveTarget target = plan.targets().get(i), previous = matches.get(i);
             Map<String, ConditionSource> sources = new LinkedHashMap<>(target.conditionSources());
             for (String field : sources.keySet()) {
-                String text = claims.getOrDefault(target.groupId(), Map.of()).get(field);
-                if (text != null) {
+                String action = actions.getOrDefault(target.groupId(), Map.of()).get(field);
+                String text = claims.valid().getOrDefault(target.groupId(), Map.of()).get(field);
+                if (action != null) {
+                    // reset 是本轮明确操作，但要求已恢复 DEFAULT，之后不能被当作固定参数继承。
+                    sources.put(field, new ConditionSource(ConditionOrigin.EXPLICIT,
+                            "reset".equals(action) ? ConditionOrigin.DEFAULT : ConditionOrigin.EXPLICIT,
+                            null, null, null, null));
+                } else if (text != null) {
                     sources.put(field, new ConditionSource(ConditionOrigin.EXPLICIT, ConditionOrigin.EXPLICIT,
                             null, null, null, text));
+                } else if (claims.unverified().getOrDefault(target.groupId(), Set.of()).contains(field)) {
+                    // 未核实标注不得冒充本轮 EXPLICIT，也不把旧原文拼接成当前依据。
+                    if (!fieldAbsent(copy, target.groupId(), field)) sources.put(field, ConditionSource.of(ConditionOrigin.PLANNED));
                 } else if (previous != null && (Objects.equals(value(previous, field), value(target, field))
                         || ("time".equals(field) && context != null
                             && validator.sameTimeRequirement(base, previous, target, context)))) {
@@ -98,29 +107,101 @@ final class ConditionProvenanceResolver {
         return new CompiledPlan(plan.logicalPlan(), plan.logicalPlanJson(), plan.dagPlan(), plan.branches(), targets);
     }
 
-    private static Map<String, Map<String, String>> validateClaims(JsonNode plan, JsonNode claims, String question) {
-        if (claims == null || claims.isNull() || claims.isMissingNode()) return Map.of();
-        if (!claims.isObject()) throw new IllegalArgumentException("explicit_conditions 必须为指标组 ID 到字段原文的对象");
+    private static JsonNode inheritedValue(JsonNode copy, EffectiveTarget target, EffectiveTarget previous,
+                                            String question, String field) {
+        JsonNode current = value(target, field), old = value(previous, field);
+        if ("interval".equals(field) && previous.interval() == null && target.interval() != null
+                && previous.executionMetadata() != null
+                && target.interval().equals(previous.executionMetadata().path("candle_interval").asText())) {
+            // 仅是阻止自动改写的保守线索，不能据此升级为 EXPLICIT。
+            if (question == null || !question.matches("(?is).*(粒度|颗粒|间隔|保持|固定|自动|每\\s*\\d|\\b\\d+\\s*[mhd]\\b|\\d+\\s*分钟).*"))
+                return MAPPER.nullNode();
+        } else if (current.equals(old) && source(previous, field).requirementOrigin() == ConditionOrigin.DEFAULT
+                && !fieldAbsent(copy, target.groupId(), field)) {
+            return MAPPER.nullNode();
+        } else if (fieldAbsent(copy, target.groupId(), field) && !old.isNull()
+                && source(previous, field).requirementOrigin() != ConditionOrigin.DEFAULT) {
+            return old;
+        }
+        return current;
+    }
+
+    private static Map<String, Map<String, String>> readActions(JsonNode plan, JsonNode updates, List<String> errors) {
         Map<String, Map<String, String>> result = new LinkedHashMap<>();
-        claims.fields().forEachRemaining(group -> {
-            JsonNode metric = null;
-            for (JsonNode node : plan.path("metrics")) if (group.getKey().equals(node.path("id").asText())) metric = node;
+        if (updates == null || updates.isNull() || updates.isMissingNode()) return result;
+        if (!updates.isObject()) {
+            errors.add("condition_updates 必须为指标组 ID 到可选参数 set/reset 的对象");
+            return result;
+        }
+        updates.fields().forEachRemaining(group -> {
+            ObjectNode metric = metric(plan, group.getKey());
             if (metric == null || !group.getValue().isObject()) {
-                throw new IllegalArgumentException("explicit_conditions 指标组不存在或字段原文不是对象: " + group.getKey());
+                errors.add("condition_updates 指标组不存在或操作不是对象: " + group.getKey());
+                return;
             }
             Map<String, String> fields = new LinkedHashMap<>();
             group.getValue().fields().forEachRemaining(field -> {
-                if (!FIELDS.contains(field.getKey()) || !field.getValue().isTextual()
-                        || field.getValue().asText().isBlank() || question == null
-                        || !question.contains(field.getValue().asText())) {
-                    throw new IllegalArgumentException("explicit_conditions." + group.getKey() + "." + field.getKey()
-                            + " 必须是当前用户问题中的原文片段，继承/默认条件不能编造原文依据");
+                String path = "condition_updates." + group.getKey() + "." + field.getKey();
+                if (!OPTIONAL.contains(field.getKey()) || !field.getValue().isTextual()
+                        || !Set.of("set", "reset").contains(field.getValue().asText())) {
+                    errors.add(path + " 仅支持 interval/include_unclosed/depth/settle 的 set/reset 操作");
+                    return;
                 }
-                fields.put(field.getKey(), field.getValue().asText());
+                JsonNode raw = rawValue(metric, field.getKey());
+                if ("set".equals(field.getValue().asText()) && (raw.isMissingNode() || raw.isNull())) {
+                    errors.add(path + "=set 时必须在计划中显式提供该参数的值");
+                } else if ("reset".equals(field.getValue().asText()) && !raw.isMissingNode() && !raw.isNull()) {
+                    errors.add(path + "=reset 时必须省略计划中的该参数，不能同时指定固定值");
+                } else {
+                    fields.put(field.getKey(), field.getValue().asText());
+                    if ("reset".equals(field.getValue().asText())) setField(metric, field.getKey(), MAPPER.nullNode());
+                }
             });
             result.put(group.getKey(), fields);
         });
         return result;
+    }
+
+    private static Claims readClaims(CompiledPlan plan, JsonNode explicit, String question,
+                                      MetricPlanCompiler compiler, Consumer<Warning> warnings) {
+        Map<String, Map<String, String>> valid = new LinkedHashMap<>();
+        Map<String, Set<String>> unverified = new LinkedHashMap<>();
+        if (explicit == null || explicit.isNull() || explicit.isMissingNode()) return new Claims(valid, unverified);
+        if (!explicit.isObject()) {
+            warnings.accept(new Warning("LEGACY_FORMAT_IGNORED", "explicit_conditions", "旧来源标注不是对象，已忽略"));
+            return new Claims(valid, unverified);
+        }
+        explicit.fields().forEachRemaining(group -> {
+            String prefix = "explicit_conditions." + group.getKey();
+            var targets = plan.targets().stream().filter(t -> t.groupId().equals(group.getKey())).toList();
+            if (targets.isEmpty() || !group.getValue().isObject()) {
+                warnings.accept(new Warning("LEGACY_GROUP_IGNORED", prefix, "指标组不存在或来源标注不是对象，已忽略"));
+                return;
+            }
+            Map<String, String> fields = new LinkedHashMap<>();
+            group.getValue().fields().forEachRemaining(field -> {
+                String path = prefix + "." + field.getKey();
+                if (!FIELDS.contains(field.getKey()) || targets.stream().anyMatch(t -> !compiler.supportsCondition(t, field.getKey()))) {
+                    warnings.accept(new Warning("LEGACY_FIELD_IGNORED", path, "字段未知或不适用于该指标查询形态，已忽略"));
+                } else if (!field.getValue().isTextual() || field.getValue().asText().isBlank()
+                        || question == null || !question.contains(field.getValue().asText())) {
+                    warnings.accept(new Warning("LEGACY_SOURCE_UNVERIFIED", path, "原文依据无效，来源降级为未核实"));
+                    unverified.computeIfAbsent(group.getKey(), ignored -> new LinkedHashSet<>()).add(field.getKey());
+                } else fields.put(field.getKey(), field.getValue().asText());
+            });
+            valid.put(group.getKey(), fields);
+        });
+        return new Claims(valid, unverified);
+    }
+
+    private static ObjectNode metric(JsonNode plan, String group) {
+        for (JsonNode node : plan.path("metrics"))
+            if (node.isObject() && group.equals(node.path("id").asText())) return (ObjectNode) node;
+        return null;
+    }
+
+    private static JsonNode rawValue(ObjectNode metric, String field) {
+        return "settle".equals(field) ? metric.path("instrument").path(field) : metric.path(field);
     }
 
     /** 旧快照 EXPLICIT 只证明旧模型填了值，不能追认成用户明确要求；DEFAULT 仍可辨识。 */
@@ -147,6 +228,7 @@ final class ConditionProvenanceResolver {
     }
 
     private static void setField(ObjectNode metric, String field, JsonNode value) {
+        if ("settle".equals(field) && !(metric.path("instrument") instanceof ObjectNode)) return;
         ObjectNode owner = "settle".equals(field) ? (ObjectNode) metric.path("instrument") : metric;
         if (value.isNull()) owner.remove(field); else owner.set(field, value.deepCopy());
     }

@@ -74,4 +74,22 @@ class RoutedConversationTest {
         assertEquals("turn",jdbc.queryForObject("SELECT running_turn_id FROM conversation_state",String.class));
         assertNull(jdbc.queryForObject("SELECT agent_type FROM conversation_query",String.class));
     }
+    @Test void presetReplySavesHistoryWithoutReplacingPendingTaskOrMonitorFocus() {
+        jdbc.update("UPDATE conversation_state SET active_agent_type='monitor',pending_task_json=?,monitor_planning_json=?",
+                "{\"marker\":\"pending\"}","{\"candidate\":{\"marker\":\"monitor\"}}");
+        var before=jdbc.queryForMap("SELECT active_frame_id,active_frame_json,pending_task_json,active_agent_type,monitor_planning_json FROM conversation_state");
+        var payload=json.createObjectNode().put("source","preset").put("preset_id","capabilities");
+        var result=tx.execute(ignored->service.finishQueryTurn("c",turn,"你能实现哪些功能？","SUCCEEDED",
+                "固定能力介绍","trace",null,json.createArrayNode(),null,now,ZoneOffset.UTC,null,payload));
+        assertFalse(result.updated());
+        var after=jdbc.queryForMap("SELECT active_frame_id,active_frame_json,pending_task_json,active_agent_type,monitor_planning_json FROM conversation_state");
+        // H2 JSON 返回 byte[]，按值比较而非数组对象地址。
+        before.forEach((key,value)->assertEquals(value instanceof byte[] bytes?new String(bytes,java.nio.charset.StandardCharsets.UTF_8):value,
+                after.get(key) instanceof byte[] bytes?new String(bytes,java.nio.charset.StandardCharsets.UTF_8):after.get(key)));
+        assertNull(jdbc.queryForObject("SELECT running_turn_id FROM conversation_state",String.class));
+        var history=repository.allQueries("c").get(0);
+        assertEquals("固定能力介绍",history.answer());
+        assertEquals("preset",history.planning().path("source").asText());
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM conversation_frame",Integer.class));
+    }
 }

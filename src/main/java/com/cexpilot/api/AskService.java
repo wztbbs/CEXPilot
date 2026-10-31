@@ -34,6 +34,7 @@ public class AskService {
     private final DbTraceSink traceSink;
     private final LlmConfig llmConfig;
     private final Clock clock;
+    private final HomeSuggestions homeSuggestions;
     // 构建时打入的 git commit 指纹；IDE 直跑（无 build-info.properties）时为 null
     private final String buildCommit;
 
@@ -48,11 +49,20 @@ public class AskService {
         this(conversation,contextService,runtime,traceRepository,traceSink,llmConfig,clock,buildProperties,null);
     }
 
-    @org.springframework.beans.factory.annotation.Autowired
     public AskService(ConversationService conversation,
                       com.cexpilot.conversation.ConversationContextService contextService,DagRuntime runtime,
                       TraceRepository traceRepository,DbTraceSink traceSink,LlmConfig llmConfig,Clock clock,
                       ObjectProvider<BuildProperties> buildProperties,com.cexpilot.agent.AgentDispatcher dispatcher) {
+        this(conversation,contextService,runtime,traceRepository,traceSink,llmConfig,clock,buildProperties,dispatcher,null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public AskService(ConversationService conversation,
+                      com.cexpilot.conversation.ConversationContextService contextService,DagRuntime runtime,
+                      TraceRepository traceRepository,DbTraceSink traceSink,LlmConfig llmConfig,Clock clock,
+                      ObjectProvider<BuildProperties> buildProperties,com.cexpilot.agent.AgentDispatcher dispatcher,
+                      HomeSuggestions homeSuggestions) {
+        this.homeSuggestions = homeSuggestions;
         this.conversation = conversation;
         this.contextService = contextService;
         this.runtime = runtime;
@@ -156,6 +166,9 @@ public class AskService {
 
         // 3. 取得轮次后立即进入 try/finally（R8）：上下文读取、建 trace、SSE meta 任何一步失败
         //    都要走到轮次收尾，不留 RUNNING 行和执行占用卡死会话。
+        var fixedReply = homeSuggestions==null || !submittedAnswers.isEmpty()
+                ? java.util.Optional.<HomeSuggestions.FixedReply>empty() : homeSuggestions.fixedReply(question);
+        boolean preset=fixedReply.isPresent();
         long start = System.currentTimeMillis();
         boolean turnFinished = false;
         boolean traceStarted = false;
@@ -171,10 +184,11 @@ public class AskService {
         try {
             // 4. 渲染对话上下文：Answer 侧仍用 renderContext 纯文本（口径不变）；
             //    Planner 侧用分层结构化上下文（活动 frame + 待补任务/失败尝试 + 带时间的近期问答）。
-            String conversationContext = conversation.renderContext(resolvedConversationId);
+            String conversationContext = preset?"":conversation.renderContext(resolvedConversationId);
             com.cexpilot.conversation.PlannerInput plannerInput =
-                    contextService.buildPlannerInput(resolvedConversationId).withClarificationAnswers(submittedAnswers);
-            taskScopeRef.set(com.cexpilot.conversation.TaskScope.current(plannerInput.currentTask()));
+                    preset?new com.cexpilot.conversation.PlannerInput("",null)
+                            :contextService.buildPlannerInput(resolvedConversationId).withClarificationAnswers(submittedAnswers);
+            taskScopeRef.set(preset?null:com.cexpilot.conversation.TaskScope.current(plannerInput.currentTask()));
 
             // 5. 开启 trace：写入一条 RUNNING 记录。traceId 是本次问答的全局标识——
             //    后续每次 LLM 调用、每次工具调用都会以它为外键落 trace_event，
@@ -182,7 +196,7 @@ public class AskService {
             //    同时记录 model、promptVersion（prompt 内容的哈希）和 buildCommit（代码版本指纹），
             //    便于排查答案可复现性。
             traceRepository.startTrace(traceId, resolvedConversationId, question,
-                    llmConfig.getNormal().getModel(), dispatcher==null?runtime.promptVersion():dispatcher.promptVersion(), visitorId, buildCommit, isRealUser);
+                    preset?null:llmConfig.getNormal().getModel(), preset?homeSuggestions.version():dispatcher==null?runtime.promptVersion():dispatcher.promptVersion(), visitorId, buildCommit, isRealUser);
             traceStarted = true;
             if (listener != null) {
                 listener.onMeta(resolvedConversationId, traceId, turn.turnId());
@@ -195,7 +209,18 @@ public class AskService {
             // 6. 执行 DAG（合并规划 → 并行执行 → 生成回答），成功后收尾：trace 置为 SUCCESS，
             //    记录答案、层数、工具调用数、token 用量与成本；
             //    轮次提交 SUCCEEDED（补 answer/trace_id/finished_at、释放执行占用），成为后续追问的上下文。
-            ExecutionResult result = dispatcher==null?runtime.execute(question, conversationContext, traceId, traceSink,
+            ExecutionResult result;
+            if(preset) {
+                agentRef.set("query");
+                var fixed=fixedReply.orElseThrow();
+                var json=new com.fasterxml.jackson.databind.ObjectMapper();
+                var payload=json.createObjectNode().put("status","ANSWERED").put("source","preset").put("preset_id",fixed.id());
+                result=new ExecutionResult(fixed.answer(),json.createArrayNode(),0,0,0,0,"SUCCEEDED",null)
+                        .withLlmUsages(java.util.List.of()).withAgent("query",payload);
+                var output=payload.deepCopy().put("answer",fixed.answer());
+                traceSink.record(new com.cexpilot.runtime.TraceEvent(traceId,"STATIC_REPLY","preset_reply",null,
+                        output.toString(),null,null,null,null,null,null));
+            } else result = dispatcher==null?runtime.execute(question, conversationContext, traceId, traceSink,
                     listener == null ? null : listener::onDelta, requestContext,
                     listener == null ? null : listener::onProgress, compiledPlanRef::set, plannerInput,
                     new com.cexpilot.evidence.EvidenceSession(resolvedConversationId, turn.turnId()))
@@ -204,10 +229,12 @@ public class AskService {
                     compiledPlanRef::set,plannerInput,new com.cexpilot.evidence.EvidenceSession(resolvedConversationId,turn.turnId()),
                     conversation.routingState(resolvedConversationId),agentRef::set,visitorId);
             long durationMs = System.currentTimeMillis() - start;
-            Double cost = result.llmUsages() == null ? computeCost(result.promptTokens(), result.completionTokens())
-                    : com.cexpilot.llm.LlmUsage.totalCost(result.llmUsages());
+            Double cost;
+            if(preset) cost=0.0;
+            else if(result.llmUsages()==null) cost=computeCost(result.promptTokens(),result.completionTokens());
+            else cost=com.cexpilot.llm.LlmUsage.totalCost(result.llmUsages());
 
-            if(dispatcher!=null) traceRepository.saveRouting(traceId,agentRef.get(),result.routerLlmCalls());
+            if(dispatcher!=null || preset) traceRepository.saveRouting(traceId,agentRef.get(),result.routerLlmCalls());
             traceRepository.finishTrace(traceId, "FAILED".equals(result.turnStatus())?"FAILED":"SUCCESS", result.answer(), result.steps(),
                     result.toolCallCount(), result.promptTokens(), result.completionTokens(),
                     cost, durationMs, null, result.reusedFactCount(),
@@ -222,7 +249,7 @@ public class AskService {
                     || "FAILED".equals(turnStatus))) scope = taskScopeRef.get();
             if (scope != null) taskScopeRef.set(scope);
             var selectedContext = scope == null ? requestContext : scope.executionContext(requestContext);
-            var commit = dispatcher == null && result.agentPayload() != null
+            var commit = (preset || dispatcher == null) && result.agentPayload() != null
                     ? conversation.finishQueryTurn(resolvedConversationId, turn, question, turnStatus,
                             result.answer(), traceId, compiledPlan, result.evidence(), scope,
                             selectedContext.requestTime(), selectedContext.userZone(), result.clarify(), result.agentPayload())
@@ -247,6 +274,8 @@ public class AskService {
                     result.calculationCount(), result.httpRequestCount(), result.reusedFactCount(),agentRef.get(),result.agentPayload(),result.routerLlmCalls());
             if (listener != null) {
                 try {
+                    // 固定回复先持久化，再推送正文；断连不会污染原有任务或丢失固定答案。
+                    if(preset) listener.onDelta(result.answer());
                     listener.onDone(response);
                 } catch (Exception ex) {
                     // 答案与轮次状态已提交成功，SSE 推送失败只影响本次连接，不得把轮次改写成 FAILED（R8）
@@ -314,8 +343,10 @@ public class AskService {
                                     String failureMessage, com.fasterxml.jackson.databind.JsonNode failureEvidence,
                                     boolean traceStarted, java.util.List<String> savedFactIds,String agent) {
         try {
-            var selected = scope.executionContext(requestContext);
-            if(dispatcher==null) conversation.finishTaskTurn(conversationId, turn, question, "FAILED", null, traceId, compiledPlan,
+            var selected = scope==null?requestContext:scope.executionContext(requestContext);
+            if(scope==null) conversation.finishQueryTurn(conversationId,turn,question,"FAILED",null,traceId,null,
+                    failureEvidence,null,selected.requestTime(),selected.userZone(),failureMessage,null);
+            else if(dispatcher==null) conversation.finishTaskTurn(conversationId, turn, question, "FAILED", null, traceId, compiledPlan,
                     failureEvidence, scope, selected.requestTime(), selected.userZone(), failureMessage);
             else conversation.finishRoutedTurn(conversationId,turn,question,"FAILED",null,traceId,compiledPlan,failureEvidence,
                     scope,requestContext.requestTime(),requestContext.userZone(),failureMessage,agent,null);

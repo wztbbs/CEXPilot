@@ -45,7 +45,56 @@ class DagPlannerTest {
                 assertEquals("{{m1.binance.value}}", envelope.at("/plan/calculations/0/input/baseline").asText());
             }
         }
-        assertEquals(15, examples);
+        assertEquals(16, examples);
+    }
+
+    @ParameterizedTest @ValueSource(strings={
+            "{\"m1\":{\"exchange\":\"币安\",\"market_type\":\"永续\",\"quote\":\"USDT\",\"time\":\"现在\"}}",
+            "{\"m1\":{\"exchange\":\"币安\",\"metric\":\"现价\",\"query_shape\":\"当前\"}}",
+            "{\"m1\":{\"exchange\":\"币安\",\"metric\":\"多少钱\",\"query_shape\":\"现在\",\"time\":\"现在\"}}"})
+    void historicalSnapshotSourceMistakesCompileOnFirstAttemptWithWarnings(String claims) {
+        var query = metric("m1", "price.last", "snapshot", "binance"); query.remove(List.of("time", "interval"));
+        var output = (ObjectNode) json(envelope(plan(query)));
+        output.set("explicit_conditions", json(claims)); output.put("task_action", "NEW");
+        var llm = new Script(output.toString());
+        var config = new DagConfig(); config.setPlannerMaxRetries(0);
+        List<TraceEvent> events = new ArrayList<>();
+        var result = planner(llm, registry(), config).plan("币安的比特币现在多少钱？", "", "test", events::add);
+        assertTrue(result.plan().isPresent(), result.lastError());
+        assertEquals(1, result.llmCalls()); assertEquals(1, llm.calls.size());
+        assertTrue(events.stream().anyMatch(e -> "CONDITION_WARNING".equals(e.eventType())));
+        assertEquals("EXECUTABLE", json(events.stream().filter(e -> "PLANNER_ATTEMPT".equals(e.eventType())).findFirst().orElseThrow().outputJson()).path("result").asText());
+        var target = result.plan().orElseThrow().targets().get(0);
+        assertEquals("BTC", target.instrument().path("base").asText());
+        assertEquals("perpetual", target.instrument().path("market_type").asText());
+        assertNull(target.timeExpression());
+        assertFalse(target.conditionSources().containsKey("time"));
+    }
+
+    @Test void parameterActionErrorsAreReturnedTogetherInOneRepairMessage() {
+        var bad = (ObjectNode) json(envelope(scalarPlan()));
+        bad.set("condition_updates", json("{\"m1\":{\"interval\":\"reset\",\"include_unclosed\":\"set\",\"depth\":\"set\"}}"));
+        var llm = new Script(bad.toString(), envelope(scalarPlan()));
+        var result = planner(llm, registry(), new DagConfig()).plan("查询", "", "test", e -> {});
+        assertTrue(result.plan().isPresent(), result.lastError());
+        assertEquals(2, llm.calls.size());
+        String feedback = llm.calls.get(1).get(3).content();
+        assertTrue(feedback.contains("condition_updates.m1.interval"));
+        assertTrue(feedback.contains("condition_updates.m1.include_unclosed"));
+        assertTrue(feedback.contains("condition_updates.m1.depth"));
+    }
+
+    @Test void plannerSchemaAdvertisesOnlyOptionalParameterActionsInsteadOfLegacySources() {
+        var config = new DagConfig(); config.setPlannerResponseFormat("json_schema");
+        var llm = new Script(envelope(scalarPlan()));
+        planner(llm, registry(), config).plan("问题", "", "test", e -> {});
+        var schema = llm.format.at("/json_schema/schema");
+        assertFalse(schema.path("properties").has("explicit_conditions"));
+        var fields = schema.at("/properties/condition_updates/additionalProperties/properties");
+        assertEquals(4, fields.size());
+        for (String field : List.of("interval", "include_unclosed", "depth", "settle"))
+            assertEquals(json("[\"set\",\"reset\"]"), fields.path(field).path("enum"));
+        assertFalse(schema.path("required").toString().contains("condition_updates"));
     }
 
     @ParameterizedTest @ValueSource(strings={"", "json_object", "json_schema"})

@@ -200,6 +200,23 @@ def window_bounds(window, started_ms, absolute_date):
     raise ValueError('未知窗口 ' + window)
 
 
+def expected_unit(row):
+    """目录层 unit 是语义（base/quote/percent/ratio），证据层已由
+    MetricQueryResolver.resolveUnit 具体化为币种：base→基础币、quote→USDT。
+    判据必须贴着证据层口径，否则所有价格/成交量用例都会假 FAIL。"""
+    metric = row['metric']
+    semantic = ('percent' if metric in ('price.change_pct', 'price.change_pct_24h', 'oi.change_pct')
+                else 'ratio' if metric in ('funding.rate_settled', 'orderbook.imbalance', 'taker.buy_ratio')
+                else 'base' if metric in ('oi.quantity', 'trade.volume', 'trade.volume_24h', 'taker.buy_volume', 'taker.sell_volume')
+                else 'quote')
+    if semantic == 'base':
+        return (row['instrument'] or {}).get('base')
+    if semantic == 'quote':
+        # resolveUnit 对 quote 固定返回 USDT（第 240 行另已断言报价币为 USDT）。
+        return 'USDT'
+    return semantic
+
+
 def metric_errors(row, spec, response):
     errors, data = [], row['data']
     if not row.get('ok'):
@@ -228,12 +245,9 @@ def metric_errors(row, spec, response):
                             or data.get('sample_complete') is not True or len(samples or []) != spec['count']):
         errors.append('DATA_ERROR: 最近N期数量不匹配或未取齐')
     metric = row['metric']
-    expected_unit = ('percent' if metric in ('price.change_pct', 'price.change_pct_24h', 'oi.change_pct')
-                     else 'ratio' if metric in ('funding.rate_settled', 'orderbook.imbalance', 'taker.buy_ratio')
-                     else 'base' if metric in ('oi.quantity', 'trade.volume', 'trade.volume_24h', 'taker.buy_volume', 'taker.sell_volume')
-                     else 'quote')
-    if row['unit'] != expected_unit:
-        errors.append('指标单位不匹配，期望 ' + expected_unit)
+    expected = expected_unit(row)
+    if row['unit'] != expected:
+        errors.append('指标单位不匹配，期望 ' + expected + '，实际 ' + str(row['unit']))
     if metric == 'oi.change_pct' and (data.get('sample_selection') != 'boundary_values'
                                      or not data.get('start_sample_at') or not data.get('end_sample_at')):
         errors.append('OI变化率缺少两端采样依据')
@@ -395,7 +409,12 @@ def judge(case, response, trace):
             errors.append('缺少符合要求的指标 ' + str(spec) + ('；' + '；'.join(reason) if reason else ''))
     for row in evidence:
         if row.get('metric') and not any(metric_matches(row, spec) and not metric_errors(row, spec, response) for spec in case.metrics):
-            errors.append('额外/错误市场的指标：' + str((row['metric'], row['market'], row['exchange'])))
+            # 指标确实存在但没通过校验时，报「指标不可接受」并带上原因；否则才是市场/指标多余。
+            reason = next((e for spec in case.metrics if metric_matches(row, spec)
+                           for e in metric_errors(row, spec, response)), None)
+            errors.append(('指标存在但不满足用例要求：' if reason else '额外/错误市场的指标：')
+                          + str((row['metric'], row['market'], row['exchange']))
+                          + ('；' + reason if reason else ''))
         if row.get('reused'):
             errors.append('独立会话不应复用历史证据')
     calculations = [row for row in evidence if row.get('operator')]

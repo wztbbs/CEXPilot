@@ -34,6 +34,19 @@ public final class MetricPlanCompiler {
         return new HashSet<>(catalog.operators());
     }
 
+    /** 来源/继承操作也按实际目录约束判断，不能只因目标上有占位来源就认定参数适用。 */
+    public boolean supportsCondition(EffectiveTarget target, String field) {
+        var binding = catalog.metricDefinition(target.metric())
+                .bindings(target.instrument().path("market_type").asText())
+                .get(QueryShape.from(target.queryShape()));
+        return switch (field) {
+            case "interval", "include_unclosed" -> binding != null && binding.hasIntervalSupport();
+            case "depth" -> binding != null && binding.depth() != null;
+            case "settle" -> "perpetual".equals(target.instrument().path("market_type").asText());
+            default -> target.conditionSources().containsKey(field);
+        };
+    }
+
     /** JSON 计划 → 可执行 DagPlan；校验与错误反馈保留具体路径。 */
     public DagPlan compile(JsonNode plan, int maxNodes) {
         return compileFull(plan, maxNodes).dagPlan();

@@ -1,5 +1,6 @@
 package com.cexpilot.api;
 
+import com.cexpilot.prompt.PromptStore;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
@@ -10,11 +11,14 @@ import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.SafeConstructor;
 import java.util.*;
 
-/** 启动时读取配置快照；请求只操作副本，不监听文件、不调用模型。 */
+/** 启动时读取配置快照；固定项按配置顺序在前，其余按类别随机补足四条。 */
 @Service
 public class HomeSuggestions {
-    public record Suggestion(String id, String category, String query) {}
-    private final List<Suggestion> entries;
+    public record Suggestion(String id, String category, String query, boolean pinned) {}
+    public record FixedReply(String id, String query, String answer) {}
+    private record Entry(Suggestion suggestion, String answer) {}
+    private final List<Entry> entries;
+    private final String version;
 
     public HomeSuggestions(@Value("${home.suggestions-location:classpath:home-suggestions.yml}") Resource resource) throws java.io.IOException {
         var options = new LoaderOptions();
@@ -23,24 +27,41 @@ public class HomeSuggestions {
             Object loaded=new Yaml(new SafeConstructor(options)).load(input);
             if (!(loaded instanceof Map<?,?> root) || !(root.get("queries") instanceof List<?> items) || items.isEmpty())
                 throw new IllegalArgumentException("推荐问题配置必须包含非空 queries");
-            var result=new ArrayList<Suggestion>(); var ids=new HashSet<String>();
+            var result=new ArrayList<Entry>(); var ids=new HashSet<String>();
             for(Object item:items) {
                 if(!(item instanceof Map<?,?> values)) throw new IllegalArgumentException("推荐问题格式无效");
                 String id=required(values,"id"), category=required(values,"category"), query=required(values,"query");
                 if(!ids.add(id)) throw new IllegalArgumentException("推荐问题 id 重复："+id);
-                result.add(new Suggestion(id,category,query));
+                Object pinned=values.get("pinned");
+                if(pinned!=null && !(pinned instanceof Boolean)) throw new IllegalArgumentException("pinned 必须为布尔值");
+                String answer=values.get("answer")==null?null:required(values,"answer");
+                result.add(new Entry(new Suggestion(id,category,query,Boolean.TRUE.equals(pinned)),answer));
             }
             entries=List.copyOf(result);
+            version=PromptStore.fingerprint(entries.toString());
         }
     }
     private static String required(Map<?,?> values,String key) {
         if(!(values.get(key) instanceof String text) || text.isBlank()) throw new IllegalArgumentException("推荐问题缺少 "+key);
         return text.trim();
     }
+    public String version() { return version; }
+
+    /** 仅匹配完整配置问题；容忍末尾问号/句号，不把包含“功能”的其他问题拦截。 */
+    public Optional<FixedReply> fixedReply(String question) {
+        if(question==null) return Optional.empty();
+        String normalized=normalize(question);
+        return entries.stream().filter(e->e.answer()!=null && normalize(e.suggestion().query()).equals(normalized))
+                .map(e->new FixedReply(e.suggestion().id(),e.suggestion().query(),e.answer())).findFirst();
+    }
+    private static String normalize(String text) { return text.strip().replaceFirst("[？?。.!！]+$", "").strip(); }
+
     public List<Suggestion> select() {
-        var shuffled=new ArrayList<>(entries); Collections.shuffle(shuffled);
         var chosen=new ArrayList<Suggestion>(); var categories=new HashSet<String>();
-        for(var entry:shuffled) if(categories.add(entry.category()) && chosen.size()<4) chosen.add(entry);
+        entries.stream().map(Entry::suggestion).filter(Suggestion::pinned).limit(4).forEach(s->{chosen.add(s);categories.add(s.category());});
+        var shuffled=new ArrayList<>(entries.stream().map(Entry::suggestion).filter(s->!s.pinned()).toList());
+        Collections.shuffle(shuffled);
+        for(var entry:shuffled) if(chosen.size()<4 && categories.add(entry.category())) chosen.add(entry);
         for(var entry:shuffled) if(chosen.size()<4 && !chosen.contains(entry)) chosen.add(entry);
         return List.copyOf(chosen);
     }

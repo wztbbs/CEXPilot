@@ -9,8 +9,8 @@ const assert=require('node:assert/strict');
   let asks=[],created=0,delayMonitors=false,releaseMonitors;
   const configured=[...fs.readFileSync('src/main/resources/home-suggestions.yml','utf8').matchAll(/  - id: (.*)\n    category: (.*)\n    query: (.*)/g)]
     .map(([,id,category,query])=>({id,category,query}));
-  assert.equal(configured.length,10);
-  const suggestions=[configured[0],configured[2],configured[5],configured[9]];
+  assert.equal(configured.length,11);
+  const suggestions=[configured[0],configured[1],configured[3],configured[10]];
   const card={ruleId:'r1',version:1,specHash:'hash',status:'ACTIVE',requiredHits:1,checkIntervalSeconds:300,timezone:'Asia/Shanghai',sourceConversationId:'c-old',createdAt:'2026-10-29T10:00:00Z',nextCheckAt:'2026-10-30T02:35:00Z',recipient:'test@example.com',rules:[{description:'币安 BTC/USDT 永续最近一小时跌幅超过 2%'}],latestEvaluation:{result:'NO_MATCH',scheduledAt:'2026-10-30T02:30:00Z'}};
   const server=http.createServer((req,res)=>{
     const u=new URL(req.url,'http://localhost');
@@ -38,6 +38,7 @@ const assert=require('node:assert/strict');
   try {
     await page.goto('http://127.0.0.1:'+server.address().port);
     await page.waitForSelector('.suggestion');await page.waitForSelector('.history-item');
+    assert.match(await page.locator('.suggestion').first().innerText(),/你能实现哪些功能/);
     await page.locator('.suggestion').first().click();assert.equal(await page.locator('#question').inputValue(),suggestions[0].query);assert.equal(asks.length,0);
     await page.screenshot({path:'/tmp/cexpilot-home-implemented.png'});
     await page.locator('.history-item').click();await page.waitForSelector('#messages .msg.assistant');assert.match(await page.locator('#messages').innerText(),/历史答案/);

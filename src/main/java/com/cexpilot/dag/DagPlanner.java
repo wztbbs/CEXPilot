@@ -558,8 +558,13 @@ public class DagPlanner {
         try {
             com.cexpilot.metric.CompiledPlan compiled =
                     new ConditionProvenanceResolver().resolve(compiler, parsed.path("plan"),
-                            parsed.path("explicit_conditions"), question, activeFrame, requestContext,
-                            Math.min(dagConfig.getMaxNodes(), maxToolCalls));
+                            parsed.path("explicit_conditions"), parsed.path("condition_updates"), question, activeFrame, requestContext,
+                            Math.min(dagConfig.getMaxNodes(), maxToolCalls), warning -> {
+                                log.warn("规划条件标注降级 traceId={} path={} code={}: {}", traceId,
+                                        warning.path(), warning.code(), warning.message());
+                                sink.record(new TraceEvent(traceId, "CONDITION_WARNING", "condition_provenance",
+                                        null, MAPPER.valueToTree(warning).toString(), null, null, null, null, null, null));
+                            });
             DagPlan plan = compiled.dagPlan();
             if (plan.nodes().isEmpty() && reply != null && !reply.isBlank()) {
                 return evaluateReplyWithoutPlan(parsed, reply, traceId, sink);
