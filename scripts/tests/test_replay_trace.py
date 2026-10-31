@@ -30,6 +30,17 @@ def fixture():
 
 
 class ReplayTraceTest(unittest.TestCase):
+    def test_router_order_matches_production_without_changing_values_or_repair_feedback(self):
+        original = {"question": "现在呢？", "context": {"request_time": "精确时间", "recent_dialogue": "历史", "timezone": "Asia/Shanghai", "query_task": {}, "current_agent": "query", "monitor_context": {}, "extra": "保留"}}
+        messages = [{"role": "user", "content": json.dumps(original, ensure_ascii=False)},
+                    {"role": "user", "content": "只返回合法 JSON"}]
+        rp.order_router_messages(messages)
+        result = json.loads(messages[0]["content"])
+        self.assertEqual(original, result)
+        self.assertEqual(["context", "question"], list(result))
+        self.assertEqual(["current_agent", "timezone", "query_task", "monitor_context", "extra", "recent_dialogue", "request_time"], list(result["context"]))
+        self.assertEqual("只返回合法 JSON", messages[1]["content"])
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

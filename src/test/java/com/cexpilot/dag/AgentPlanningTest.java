@@ -67,6 +67,20 @@ class AgentPlanningTest {
         assertTrue(client.calls.get(0).get(1).content().contains("current_agent"));
         assertFalse(client.calls.get(0).get(0).content().contains("price.change_pct"));
     }
+    @Test void routerPlacesStableContextBeforeQuestionWithoutChangingAnyValues() {
+        var client=new Script("{\"route\":\"query\"}");
+        var context=JSON.createObjectNode().put("request_time","2026-10-31T05:00:00Z")
+                .put("recent_dialogue","用户原文和历史").put("current_agent","query").put("timezone","Asia/Shanghai");
+        context.putObject("query_task").put("question","原任务"); context.putObject("monitor_context");
+        context.put("future_field","不应丢失"); var original=context.deepCopy();
+        router(client).route("币安 BTC 现价？",context,"t",e->{});
+        var message=json(client.calls.get(0).get(1).content());
+        assertEquals(original,context); assertEquals(original,message.path("context"));
+        assertEquals("币安 BTC 现价？",message.path("question").asText());
+        assertEquals(List.of("context","question"),JSON.convertValue(message,java.util.LinkedHashMap.class).keySet().stream().toList());
+        var keys=new ArrayList<String>();message.path("context").fieldNames().forEachRemaining(keys::add);
+        assertEquals(List.of("current_agent","timezone","query_task","monitor_context","future_field","recent_dialogue","request_time"),keys);
+    }
     @Test void invalidRouteRepairsOnceThenClarifiesWithoutDefaultingToQueryOrMonitor() {
         var client=new Script("{\"route\":\"trade\"}","not json"); var events=new ArrayList<TraceEvent>();
         var result=router(client).route("它呢",JSON.createObjectNode(),"t",events::add);

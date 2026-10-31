@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""统一单轮 common 回归：40 条，含现货、时间窗口及九种算子。
+"""统一单轮 common 回归：55 条，含现货、时间窗口、九种算子及首页非监控候选。
 
 这是线上端到端测试，只有明确要求执行时才运行！导入模块和本地单测不发请求。
 用法：python3 scripts/run_regression.py [only:A1,E1] [group:E] [-w 2]
@@ -28,7 +28,7 @@ from pathlib import Path
 
 TZ = timezone(timedelta(hours=8))
 HERE = Path(__file__).resolve().parents[1] / 'importants' / '回归测试'
-SUITE_VERSION = 'common-v2-40'
+SUITE_VERSION = 'common-v3-55-home'
 FALLBACK = re.compile(r'无法可靠生成查询计划|没有能够可靠回答此问题的查询计划|本次未执行查询|澄清表单生成失败')
 REFERENCE = re.compile(r'^\{\{([^{}]+)\}\}$')
 
@@ -44,6 +44,8 @@ class Case:
     gaps: tuple = ()
     reject: bool = False
     no_calculations: bool = False
+    home_id: str = ''
+    preset: bool = False
 
 
 def M(metric, exchange='binance', shape='snapshot', market='perpetual', base='BTC', **extra):
@@ -136,6 +138,47 @@ def build_cases():
         Case('F7', '介绍一下亚历山大大帝。', reject=True, gaps=(('加密', '行情', '领域', '范围'),)),
         Case('F8', '帮我分析这笔以太坊交易：0x321674b0c3ade0814ebee8477505314b8ea3c606d7e87b8a7348c02fc262e108',
              reject=True, gaps=(('链上', '交易分析', '交易查询', '交易哈希', '以太坊交易'),)),
+    ] + homepage_cases()
+
+
+def homepage_cases():
+    """首页文案原样回归；离线测试对照 YAML，新增/修改候选遗漏时必须报错。"""
+    return [
+        Case('H1', '你能实现哪些功能？', home_id='capabilities', preset=True),
+        Case('H2', '币安 BTC/USDT 永续现在的最新成交价是多少？',
+             (M('price.last'),), no_calculations=True, home_id='btc-price'),
+        Case('H3', '币安 BTC/USDT 永续昨天一整天的成交额是多少？',
+             (turnover(),), no_calculations=True, home_id='yesterday-turnover'),
+        Case('H4', '币安 BTC/USDT 永续最近 6 小时内，按已完结的 1 小时 K 线计算，收盘价的等权平均是多少？',
+             (M('price.close', shape='time_series', window='rolling6h', interval='1h'),),
+             ('avg',), (('avg', 'collection', 0),), home_id='rolling-close-avg'),
+        Case('H5', '币安 BTC/USDT 永续最近 10 期已结算资金费率加起来是多少？',
+             (funding(),), ('sum',), (('sum', 'collection', 0),), home_id='funding-sum'),
+        Case('H6', '币安 BTC/USDT 永续最近 10 期已结算资金费率，最高和最低分别是多少？',
+             (funding(),), ('max', 'min'), (('max', 'collection', 0), ('min', 'collection', 0)), home_id='funding-extrema'),
+        Case('H7', '比较币安和 OKX 的 BTC/USDT 永续最近 3 期已结算资金费率均值，哪家更高？',
+             (funding(count=3), funding('okx', 3)), ('avg', 'avg', 'compare'), home_id='funding-avg-compare'),
+        Case('H8', '比较币安和 OKX 的 BTC/USDT 永续昨天一整天的涨跌幅，哪家更高？',
+             tuple(M('price.change_pct', e, 'range_statistic', window='yesterday') for e in ('binance', 'okx')),
+             ('compare',), home_id='change-compare'),
+        Case('H9', '币安与 OKX 的 BTC/USDT 永续昨天一整天的成交额相差多少？按币安减 OKX 计算。',
+             (turnover(), turnover('okx')), ('difference',),
+             (('difference', 'left', 0), ('difference', 'right', 1)), home_id='turnover-difference'),
+        Case('H10', '币安 BTC/USDT 永续昨天一整天的成交额，是 OKX 同一合约同期成交额的多少倍？',
+             (turnover(), turnover('okx')), ('ratio',), (('ratio', 'left', 0), ('ratio', 'right', 1)), home_id='turnover-ratio'),
+        Case('H11', '币安 BTC/USDT 现货现在的最新成交价是多少？',
+             (M('price.last', market='spot'),), no_calculations=True, home_id='spot-btc-price'),
+        Case('H12', 'OKX ETH/USDT 现货最近 24 小时的涨跌幅是多少？',
+             (M('price.change_pct_24h', 'okx', 'official_24h', 'spot', base='ETH'),),
+             no_calculations=True, home_id='spot-eth-change'),
+        Case('H13', '币安 BTC/USDT 现货最近 6 小时内，按已完结的 1 小时 K 线计算，收盘价的等权平均是多少？',
+             (M('price.close', shape='time_series', market='spot', window='rolling6h', interval='1h'),),
+             ('avg',), (('avg', 'collection', 0),), home_id='spot-close-avg'),
+        Case('H14', '比较币安和 OKX 的 BTC/USDT 现货昨天一整天的成交额，哪家更高？',
+             (turnover(market='spot'), turnover('okx', 'spot')), ('compare',), home_id='spot-turnover-compare'),
+        Case('H15', '币安 BTC/USDT 永续的最新成交价减去现货的最新成交价，价差是多少？',
+             (M('price.last'), M('price.last', market='spot')), ('difference',),
+             (('difference', 'left', 0), ('difference', 'right', 1)), home_id='spot-perpetual-difference'),
     ]
 
 
@@ -256,9 +299,10 @@ def metric_errors(row, spec, response):
     if 'interval' in spec:
         if data.get('candle_interval') != spec['interval']:
             errors.append('K线粒度不匹配')
-        if samples and spec['interval'] == '5m':
+        if samples and spec['interval'] in ('5m', '1h'):
             try:
-                if any((parse_time(sample['time']) + timedelta(minutes=5)).timestamp() * 1000 > response['_startedMs'] + 2000 for sample in samples):
+                duration = timedelta(minutes=5) if spec['interval'] == '5m' else timedelta(hours=1)
+                if any((parse_time(sample['time']) + duration).timestamp() * 1000 > response['_startedMs'] + 2000 for sample in samples):
                     errors.append('包含请求时尚未完结的K线')
             except (KeyError, TypeError, ValueError):
                 errors.append('无法核验K线完结时间')
@@ -386,6 +430,30 @@ def judge(case, response, trace):
     evidence = rows(response)
     plan = trace.get('final_plan')
     attempts = trace.get('planner_attempts') or []
+    if case.preset:
+        if (response.get('planning') or {}).get('source') != 'preset' or (response.get('planning') or {}).get('preset_id') != case.home_id:
+            errors.append('功能介绍未使用对应的固定回复')
+        if evidence or plan is not None or attempts or any(response.get(k) != 0 for k in
+                ('toolCalls', 'routerLlmCalls', 'plannerLlmCalls', 'answerLlmCalls')):
+            errors.append('固定回复不应产生查询、模型调用或规划重试')
+        events = trace.get('events') or []
+        if any(e.get('event_type') == 'LLM_CALL' for e in events):
+            errors.append('固定回复 trace 出现 LLM_CALL')
+        static = []
+        for event in events:
+            if event.get('event_type') != 'STATIC_REPLY':
+                continue
+            output = event.get('output_json') or {}
+            try:
+                static.append(json.loads(output) if isinstance(output, str) else output)
+            except (ValueError, TypeError):
+                errors.append('固定回复 trace 输出无法解析')
+        if not any(isinstance(item, dict) and item.get('preset_id') == case.home_id and item.get('answer') == answer for item in static):
+            errors.append('缺少与答案一致的 STATIC_REPLY 审计记录')
+        for word in ('MarketPilot', '币安', 'OKX', '现货', '永续'):
+            if word not in answer:
+                errors.append('功能介绍缺少已支持能力说明：' + word)
+        return ('FAIL' if errors else 'PASS'), errors
     if case.reject:
         if evidence or plan is not None or response.get('toolCalls', 0) != 0:
             errors.append('能力边界请求产生了计划/取数，可能静默替换要求')
@@ -433,7 +501,7 @@ def judge(case, response, trace):
             target_ids = {r['node_id'] for r in matches[index]}
             if not any(referenced_ids(input_of(r).get(slot)) == target_ids for r in calculations if r['operator'] == op):
                 errors.append(op + '.' + slot + ' 未引用要求的指标/市场/时间分支')
-        if case.id == 'C4':
+        if case.operators.count('avg') == 2 and 'compare' in case.operators:
             avgs = [r for r in calculations if r['operator'] == 'avg']
             avg_ids = set()
             for match in matches:
@@ -444,6 +512,10 @@ def judge(case, response, trace):
                 avg_ids.update(r['node_id'] for r in hit)
             if not any(referenced_ids(input_of(r)) == avg_ids and len(avg_ids) == 2 for r in calculations if r['operator'] == 'compare'):
                 errors.append('compare 未引用两家均值')
+        elif 'compare' in case.operators and len(matches) == 2:
+            targets = {row['node_id'] for match in matches for row in match}
+            if len(targets) != 2 or not any(referenced_ids(input_of(r)) == targets for r in calculations if r['operator'] == 'compare'):
+                errors.append('compare 未引用两家实际查询结果')
         if case.id == 'D1':
             metrics = {r['node_id'] for match in matches for r in match}
             sums = [r for r in calculations if r['operator'] == 'sum' and referenced_ids(input_of(r)) == metrics]
@@ -463,7 +535,9 @@ def judge(case, response, trace):
         if row.get('metric') == 'taker.buy_ratio' and row.get('ok') and row['data'].get('value') is not None:
             if not 0 <= number(row['data']['value']) <= 1:
                 errors.append('主动买入占比超出0～1')
-        if (row.get('metric') or '').startswith('trade.') and row['unit'] not in ('base', 'quote'):
+        # 证据层 unit 已具体化为币种（turnover→USDT、volume→BTC），这里只排除被错标成百分比/比率的成交类指标；
+        # 与声明口径是否一致由上面的 expected_unit 检查负责，避免重复报错。
+        if (row.get('metric') or '').startswith('trade.') and row['unit'] in ('percent', 'ratio'):
             errors.append('成交量/成交额单位错误')
     if case.id in ('A7', 'E3') and all(matches):
         try:
@@ -526,6 +600,11 @@ class Client:
             data = self.request('/api/stats/cache?' + urllib.parse.urlencode(parameters))
             if not all(key in data for key in ('promptTokens', 'cachedTokens', 'cacheHitPercent', 'measuredCalls', 'unknownCalls')):
                 raise ValueError('缓存统计接口返回字段不完整')
+            stages = data.get('stages')
+            if stages is not None and (not isinstance(stages, dict) or not all(
+                    isinstance(v, dict) and all(k in v for k in ('promptTokens', 'cachedTokens', 'cacheHitPercent', 'measuredCalls'))
+                    for v in stages.values())):
+                raise ValueError('缓存统计接口 stages 结构不完整')
             return dict(parameters=parameters, data=data)
         except Exception as exc:
             return dict(parameters=parameters, error=str(exc))
@@ -538,8 +617,13 @@ def cache_summary(cache):
     data = cache['data']
     rate = data['cacheHitPercent']
     percent = '无有效用量，比例未知' if rate is None else str(rate) + '%'
-    return ('缓存命中率：%s；cached=%s / prompt=%s；有效调用=%s，未知调用=%s；%s' %
-            (percent, data['cachedTokens'], data['promptTokens'], data['measuredCalls'], data['unknownCalls'], scope))
+    summary = ('缓存命中率：%s；cached=%s / prompt=%s；有效调用=%s，未知调用=%s；%s' %
+               (percent, data['cachedTokens'], data['promptTokens'], data['measuredCalls'], data['unknownCalls'], scope))
+    # 整体比例被 plan 的大 prompt 主导；分阶段才能看出 route/answer 是否真的没命中。
+    stages = [('%s %s%%（%s/%s，%s次）' % (name, '未知' if stage['cacheHitPercent'] is None else stage['cacheHitPercent'],
+                                           stage['cachedTokens'], stage['promptTokens'], stage['measuredCalls']))
+              for name, stage in (data.get('stages') or {}).items() if stage.get('measuredCalls')]
+    return summary + ('；分阶段：' + '，'.join(stages) if stages else '')
 
 
 def run_cases(client, cases, workers=1, clock_ms=lambda: time.time_ns() // 1_000_000):
@@ -589,8 +673,8 @@ def select_cases(cases, only=None, group=None):
     known = {c.id for c in cases}
     if ids - known:
         raise ValueError('不存在的用例：' + ','.join(sorted(ids - known)))
-    if groups - set('ABCDEF'):
-        raise ValueError('分组仅支持 A～F')
+    if groups - set('ABCDEFH'):
+        raise ValueError('分组仅支持 A～F 和 H（首页候选）')
     return [c for c in cases if (not ids or c.id in ids) and (not groups or c.id[0] in groups)]
 
 

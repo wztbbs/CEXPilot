@@ -18,8 +18,15 @@ sys.modules[spec.name] = r
 spec.loader.exec_module(r)
 
 
+UNITS = {'funding.rate_settled': 'ratio', 'orderbook.imbalance': 'ratio', 'taker.buy_ratio': 'ratio',
+         'price.change_pct': 'percent', 'price.change_pct_24h': 'percent', 'oi.change_pct': 'percent',
+         'oi.quantity': 'BTC', 'trade.volume': 'BTC', 'trade.volume_24h': 'BTC',
+         'taker.buy_volume': 'BTC', 'taker.sell_volume': 'BTC'}
+
+
 def metric(node='m', name='price.last', value=100, market='perpetual', exchange='binance', shape='snapshot', **data):
-    unit = 'ratio' if name == 'funding.rate_settled' else 'quote'
+    # 证据层 identity.unit 已由 MetricQueryResolver.resolveUnit 具体化为币种，夹具必须一致。
+    unit = UNITS.get(name, 'USDT')
     return dict(node_id=node, type='metric', ok=True,
                 identity=dict(metric=name, exchange=exchange, query_shape=shape, unit=unit,
                               instrument=dict(market_type=market, base='BTC', quote='USDT')),
@@ -46,14 +53,63 @@ class OfflineTest(unittest.TestCase):
         self.network.start()
         self.addCleanup(self.network.stop)
 
-    def test_suite_has_exactly_40_cases_with_agreed_groups_and_all_operators(self):
-        self.assertEqual(len(r.CASES), 40)
-        self.assertEqual(len({c.id for c in r.CASES}), 40)
-        self.assertEqual({g: sum(c.id.startswith(g) for c in r.CASES) for g in 'ABCDEF'},
-                         dict(A=7, B=6, C=8, D=1, E=10, F=8))
+    def test_suite_keeps_40_base_cases_and_adds_homepage_coverage(self):
+        self.assertEqual(len(r.CASES), 55)
+        self.assertEqual(len({c.id for c in r.CASES}), 55)
+        self.assertEqual({g: sum(c.id.startswith(g) for c in r.CASES) for g in 'ABCDEFH'},
+                         dict(A=7, B=6, C=8, D=1, E=10, F=8, H=15))
         self.assertEqual({op for c in r.CASES for op in c.operators},
                          {'sum', 'avg', 'min', 'max', 'compare', 'difference', 'ratio', 'relative_change', 'annualize'})
         self.assertFalse(any('监控' in c.question for c in r.CASES))
+
+    def test_homepage_queries_match_yaml_exactly_and_only_monitor_is_excluded(self):
+        # 检查配置中的完整文案；不能用“测过类似问法”代替首页原样覆盖。
+        text = (PATH.parents[1] / 'src/main/resources/home-suggestions.yml').read_text(encoding='utf-8')
+        configured = {key: query for key, query in r.re.findall(
+            r'^  - id: ([\w-]+)\n    category: [^\n]+\n    query: ([^\n]+)$', text, r.re.M)}
+        self.assertEqual(len(configured), text.count('  - id: '), 'YAML 格式变动时应同步覆盖检查，不能静默漏项')
+        self.assertEqual('监控币安 BTC/USDT 永续最近一小时跌幅超过 2%，发邮件提醒。', configured.pop('btc-monitor'))
+        homes = [c for c in r.CASES if c.home_id]
+        self.assertEqual(configured, {c.home_id: c.question for c in homes})
+        self.assertEqual(len(homes), len({c.home_id for c in homes}))
+        self.assertEqual(15, len(r.select_cases(r.CASES, group='H')))
+        self.assertTrue(all(c.metrics or c.preset for c in homes))
+
+    def test_homepage_fixed_reply_requires_preset_audit_and_zero_model_or_tool_calls(self):
+        case = next(c for c in r.CASES if c.home_id == 'capabilities')
+        answer = 'MarketPilot 可查币安、OKX 现货和永续行情。'
+        d = response(answer=answer, planning=dict(source='preset', preset_id='capabilities'),
+                     routerLlmCalls=0, plannerLlmCalls=0, answerLlmCalls=0)
+        t = dict(trace=dict(status='SUCCESS'), final_plan=None, planner_attempts=[], events=[
+            dict(event_type='STATIC_REPLY', output_json=json.dumps(dict(preset_id='capabilities', answer=answer)))])
+        self.assertEqual('PASS', r.judge(case, d, t)[0])
+        d['plannerLlmCalls'] = 1
+        self.assertEqual('FAIL', r.judge(case, d, t)[0])
+        d['plannerLlmCalls'] = 0
+        t['events'].append(dict(event_type='LLM_CALL'))
+        self.assertEqual('FAIL', r.judge(case, d, t)[0])
+
+    def test_homepage_spot_requires_correct_market_and_cross_market_difference_direction(self):
+        spot = next(c for c in r.CASES if c.home_id == 'spot-btc-price')
+        self.assertEqual('PASS', r.judge(spot, response([metric(market='spot')]), trace())[0])
+        self.assertEqual('FAIL', r.judge(spot, response([metric()]), trace())[0])
+        difference = next(c for c in r.CASES if c.home_id == 'spot-perpetual-difference')
+        values = [metric('p', value=110), metric('s', value=100, market='spot')]
+        good = calc('c', 'difference', dict(left='{{p.data.value}}', right='{{s.data.value}}'), 10)
+        wrong = calc('c', 'difference', dict(left='{{s.data.value}}', right='{{p.data.value}}'), -10)
+        self.assertEqual('PASS', r.judge(difference, response(values+[good]), trace())[0])
+        self.assertEqual('FAIL', r.judge(difference, response(values+[wrong]), trace())[0])
+
+    def test_hourly_average_rejects_unclosed_hour_even_if_interval_and_average_are_valid(self):
+        now = datetime(2026, 10, 31, 10, 30, tzinfo=r.TZ)
+        row = metric(name='price.close', shape='time_series', market='spot', value=None, candle_interval='1h',
+                     samples=[dict(time='2026-10-31 10:00:00', value=100)],
+                     requested_range=dict(start_inclusive='2026-10-31 04:30:00', end_exclusive='2026-10-31 10:30:00', timezone='Asia/Shanghai'))
+        d = response([row]);d['_startedMs'] = int(now.timestamp()*1000);d['_endedMs'] = d['_startedMs']+1000
+        spec = next(c for c in r.CASES if c.home_id == 'spot-close-avg').metrics[0]
+        self.assertIn('包含请求时尚未完结的K线', r.metric_errors(r.rows(d)[0], spec, d))
+        row['data']['samples'][0]['time'] = '2026-10-31 09:00:00'
+        self.assertEqual([], r.metric_errors(r.rows(d)[0], spec, d))
 
     def test_filter_is_exact_and_never_runs_hidden_cases(self):
         self.assertEqual([c.id for c in r.select_cases(r.CASES, 'E1')], ['E1'])
@@ -174,7 +230,7 @@ class OfflineTest(unittest.TestCase):
 
     def test_non_kline_series_need_no_candle_interval(self):
         m = metric(name='oi.quantity', value=None, shape='time_series', samples=[dict(time='2026-10-30 00:00:00', value=1)])
-        m['identity']['unit'] = 'base'
+        m['identity']['unit'] = 'BTC'
         d = response([m])
         self.assertEqual(r.metric_errors(r.rows(d)[0], r.M('oi.quantity', shape='time_series'), d), [])
 
@@ -191,7 +247,7 @@ class OfflineTest(unittest.TestCase):
         values = [metric('p', market='spot', exchange='okx', value=60000),
                   metric('v', name='trade.volume_24h', market='spot', exchange='okx', shape='official_24h', value=100),
                   metric('t', name='trade.turnover_24h', market='spot', exchange='okx', shape='official_24h', value=6000000)]
-        values[1]['identity']['unit'] = 'base'
+        values[1]['identity']['unit'] = 'BTC'
         self.assertEqual(r.judge(case, response(values), trace())[0], 'PASS')
         values[1]['data']['value'] = 6000000
         values[2]['data']['value'] = 100

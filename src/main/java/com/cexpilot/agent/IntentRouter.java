@@ -22,7 +22,8 @@ public class IntentRouter {
     public Decision route(String question,JsonNode context,String traceId,TraceSink sink) {
         var messages=new ArrayList<ChatMessage>();
         messages.add(ChatMessage.system(prompts.render(PROMPT,Map.of())));
-        var input=new ObjectMapper().createObjectNode().put("question",question); input.set("context",context);
+        var input=new ObjectMapper().createObjectNode();
+        input.set("context",orderedContext(context)); input.put("question",question);
         messages.add(ChatMessage.user(input.toString()));
         var usages=new ArrayList<LlmUsage>();
         try {
@@ -48,5 +49,20 @@ public class IntentRouter {
             sink.record(new TraceEvent(traceId,"ROUTE_DECISION","intent_router","{\"validation_fallback\":true}",fallbackJson.toString(),null,null,null,null,null,null));
             return new Decision("clarify",fallback,List.copyOf(usages));
         } catch(RuntimeException error) { throw new Failure(error,usages); }
+    }
+
+    /** 仅调整字段顺序：稳定状态在前，历史和精确请求时间在后；所有字段和值保持不变。 */
+    private JsonNode orderedContext(JsonNode context) {
+        if(context==null || !context.isObject()) return context;
+        var ordered=new ObjectMapper().createObjectNode();
+        for(String key:List.of("current_agent","timezone","query_task","monitor_context"))
+            if(context.has(key)) ordered.set(key,context.get(key));
+        context.fields().forEachRemaining(field->{
+            if(!ordered.has(field.getKey()) && !Set.of("recent_dialogue","request_time").contains(field.getKey()))
+                ordered.set(field.getKey(),field.getValue());
+        });
+        for(String key:List.of("recent_dialogue","request_time"))
+            if(context.has(key)) ordered.set(key,context.get(key));
+        return ordered;
     }
 }

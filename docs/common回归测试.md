@@ -12,8 +12,11 @@
 | D | 1 | 两所合计后计算占比，验证 sum → ratio 的真实引用 |
 | E | 10 | 两所现货快照、官方24h、滚动/自然日K线、盘口、币安现货taker、序列聚合、现货与永续差值 |
 | F | 8 | 现货不支持的资金费率/OI/标记/指数，OKX现货taker、费率时间窗口、USDC、1m、领域外、链上查询 |
+| H | 15 | 首页非监控候选的完整原文：功能介绍固定回复、永续/现货快照、窗口均价、资金费率聚合、跨所比较及现货永续价差 |
 
-共40条独立单轮问答，不包含追问、常驻任务或重复稳定性请求。E3在原设计的官方24h成交量/成交额之外增加当前价，用成交额/成交量与现价的量级交叉检查捕捉OKX现货字段解析错误。
+共55条独立单轮问答，原A～F共40条保留，新增H组15条首页原文回归；不包含追问或常驻任务。H组与基础组即使能力相同，也保留首页完整措辞，验证用户点击的真实问题。离线测试对照 home-suggestions.yml 的ID和原文，新增或修改首页候选却未同步断言时失败。唯一排除的常驻候选为“监控币安 BTC/USDT 永续最近一小时跌幅超过 2%，发邮件提醒。”，由用户手工测试。E3用成交额/成交量与现价交叉检查字段解析错误。
+
+H1 验证固定能力介绍、对应 preset 标识与 STATIC_REPLY 记录，以及零模型/工具调用；其余 H 用例检查实际指标、市场、币种、时间窗口、1h K线完结、算子及比较方向。新5条现货相关候选为 H11～H15。套件版本更新为 common-v3-55-home，旧版本报告仍保留，不与不同版本自动混比。
 
 每条使用新的 conversationId，parentTurnId为空字符串，timezone=Asia/Shanghai，isRealUser=false；不共享cookie，不自动重发POST，不隐式增加冒烟请求。筛选精确匹配ID，`only:E1` 不会顺带执行 E10，所有分组都受筛选约束。
 
@@ -36,6 +39,8 @@ B5的日期在发问前生成（当日前第3天），问题带明确年月日�
 ```bash
 python3 scripts/run_regression.py only:E1,E2
 python3 scripts/run_regression.py group:E
+python3 scripts/run_regression.py group:H --list  # 只查看首页候选，不发请求
+python3 scripts/run_regression.py group:H         # 用户明确执行时，测全部15条首页非监控候选
 python3 scripts/run_regression.py --base http://localhost:8082 only:A1
 # 默认串行；-w 2 可并发，但可能增加排队和请求耗时。
 ```

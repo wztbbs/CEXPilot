@@ -23,6 +23,19 @@ import static org.mockito.Mockito.*;
 
 /** 固定模型响应 + 真实编译器/调度器/算子，覆盖新主流程、时间上下文和流式返回。 */
 class DagRuntimeTest {
+    @Test void answerKeepsAllFixedRulesAheadOfDynamicHistoryAndTime() {
+        var store=new PromptStore(LOADER);
+        String first=store.render("agent_system",Map.of("time_context","TIME_A","conversation_context","HISTORY_A"));
+        String second=store.render("agent_system",Map.of("time_context","TIME_B","conversation_context","HISTORY_B"));
+        int dynamic=first.indexOf("<CONVERSATION_CONTEXT>");
+        assertTrue(dynamic>4000);
+        assertEquals(first.substring(0,dynamic),second.substring(0,second.indexOf("<CONVERSATION_CONTEXT>")));
+        assertTrue(first.indexOf("<TIME_CONTEXT>")>dynamic);
+        assertTrue(first.indexOf("行情所属市场以 instrument.market_type 为准")<dynamic);
+        assertTrue(first.indexOf("Binance 现货盘口结果若只有 collected_at")<dynamic);
+        assertTrue(first.contains("<CONVERSATION_CONTEXT>\nHISTORY_A\n</CONVERSATION_CONTEXT>"));
+        assertTrue(first.contains("<TIME_CONTEXT>\nTIME_A\n</TIME_CONTEXT>"));
+    }
     private final List<DagExecutor> executors=new ArrayList<>();
     @AfterEach void close() { executors.forEach(DagExecutor::shutdown); }
     private DagRuntime runtime(Script llm,ToolRegistry registry,DagConfig config,Clock clock) {

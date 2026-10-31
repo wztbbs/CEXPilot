@@ -45,3 +45,18 @@ queries:
   - id: btc-monitor
     category: 设监控
     query: 监控币安 BTC/USDT 永续最近一小时跌幅超过 2%，发邮件提醒。
+  - id: spot-btc-price
+    category: 看行情
+    query: 币安 BTC/USDT 现货现在的最新成交价是多少？
+  - id: spot-eth-change
+    category: 看行情
+    query: OKX ETH/USDT 现货最近 24 小时的涨跌幅是多少？
+  - id: spot-close-avg
+    category: 时间窗口
+    query: 币安 BTC/USDT 现货最近 6 小时内，按已完结的 1 小时 K 线计算，收盘价的等权平均是多少？
+  - id: spot-turnover-compare
+    category: 聚合比较
+    query: 比较币安和 OKX 的 BTC/USDT 现货昨天一整天的成交额，哪家更高？
+  - id: spot-perpetual-difference
+    category: 聚合比较
+    query: 币安 BTC/USDT 永续的最新成交价减去现货的最新成交价，价差是多少？

@@ -141,6 +141,26 @@ def build_request(metadata, inputs, messages, model=None):
     return body
 
 
+def order_router_messages(messages):
+    """与 IntentRouter 一致，只调整 JSON 字段顺序，不改变任何字段、值或修复反馈。"""
+    for message in messages:
+        if message.get("role") != "user":
+            continue
+        try:
+            payload = strict_json(message["content"])
+        except (ValueError, TypeError, KeyError):
+            continue
+        if not isinstance(payload, dict) or "question" not in payload or not isinstance(payload.get("context"), dict):
+            continue
+        context = payload["context"]
+        ordered = {key: context[key] for key in ("current_agent", "timezone", "query_task", "monitor_context") if key in context}
+        ordered.update({key: value for key, value in context.items() if key not in ordered and key not in ("recent_dialogue", "request_time")})
+        ordered.update({key: context[key] for key in ("recent_dialogue", "request_time") if key in context})
+        result = {"context": ordered}
+        result.update({key: value for key, value in payload.items() if key != "context"})
+        message["content"] = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+
+
 def refresh_parameter_protocol(body, stage, keep_trace_schema=False):
     """同步本地参数操作协议，保留历史指标/算子 schema，避免旧 schema 强制模型输出旧字段。"""
     response_format = body.get("response_format") or {}
@@ -227,6 +247,8 @@ def main(argv=None):
             raise EvalError("返回的 trace_id 与请求不一致，或 trace 不存在")
         metadata, event, inputs = select_call(trace, args.stage, args.attempt)
         messages, replacement = replace_prompt(metadata, inputs, args.stage, prompt=args.prompt, old_template=args.old_template)
+        if args.stage == "router":
+            order_router_messages(messages)
         body = build_request(metadata, inputs, messages, args.model)
         schema_updated = refresh_parameter_protocol(body, args.stage, args.keep_trace_schema)
         previous = json_value(event.get("output_json"), "LLM_CALL.output_json")

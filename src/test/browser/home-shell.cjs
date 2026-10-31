@@ -9,8 +9,9 @@ const assert=require('node:assert/strict');
   let asks=[],created=0,delayMonitors=false,releaseMonitors;
   const configured=[...fs.readFileSync('src/main/resources/home-suggestions.yml','utf8').matchAll(/  - id: (.*)\n    category: (.*)\n    query: (.*)/g)]
     .map(([,id,category,query])=>({id,category,query}));
-  assert.equal(configured.length,11);
-  const suggestions=[configured[0],configured[1],configured[3],configured[10]];
+  assert.equal(configured.length,16);
+  const suggestions=['capabilities','spot-btc-price','spot-close-avg','btc-monitor']
+    .map(id=>{const item=configured.find(q=>q.id===id);assert.ok(item);return item;});
   const card={ruleId:'r1',version:1,specHash:'hash',status:'ACTIVE',requiredHits:1,checkIntervalSeconds:300,timezone:'Asia/Shanghai',sourceConversationId:'c-old',createdAt:'2026-10-29T10:00:00Z',nextCheckAt:'2026-10-30T02:35:00Z',recipient:'test@example.com',rules:[{description:'币安 BTC/USDT 永续最近一小时跌幅超过 2%'}],latestEvaluation:{result:'NO_MATCH',scheduledAt:'2026-10-30T02:30:00Z'}};
   const server=http.createServer((req,res)=>{
     const u=new URL(req.url,'http://localhost');
